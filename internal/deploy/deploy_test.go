@@ -3,6 +3,8 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,10 +34,13 @@ func TestPlatformRejectsUnknown(t *testing.T) {
 	}
 }
 
-// Deploys to this machine with HOME pointed at a temporary directory.
-func TestMachineInstallsBinaryConfigAndName(t *testing.T) {
-	home, dist := t.TempDir(), t.TempDir()
-	t.Setenv("HOME", home)
+var here = config.Machine{Name: "box", Host: config.LocalHost}
+
+// distFiles makes a binary for every platform and a fleet file, and returns
+// the lookup for the binaries and the fleet file's path.
+func distFiles(t *testing.T) (func(string) (string, error), string) {
+	t.Helper()
+	dist := t.TempDir()
 	for _, p := range platforms {
 		if err := os.WriteFile(filepath.Join(dist, "shed-"+p), []byte("binary for "+p), 0o644); err != nil {
 			t.Fatal(err)
@@ -45,12 +50,19 @@ func TestMachineInstallsBinaryConfigAndName(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte("machines: []\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return func(p string) (string, error) { return filepath.Join(dist, "shed-"+p), nil }, cfgPath
+}
 
-	m := config.Machine{Name: "box", Host: config.LocalHost}
-	if err := Machine(context.Background(), probe.ShellRunner{}, m, dist, cfgPath); err != nil {
-		t.Fatal(err)
+// Deploys to this machine with HOME pointed at a temporary directory.
+func TestMachineInstallsBinaryConfigAndName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	binaryFor, cfgPath := distFiles(t)
+
+	res, err := Machine(context.Background(), probe.ShellRunner{}, here, "v1.2.3", binaryFor, cfgPath)
+	if err != nil || !res.BinaryInstalled {
+		t.Fatalf("result = %+v, %v", res, err)
 	}
-
 	info, err := os.Stat(filepath.Join(home, RemoteBinary))
 	if err != nil || info.Mode().Perm() != 0o755 {
 		t.Fatalf("binary: %v, mode %v", err, info)
@@ -63,11 +75,108 @@ func TestMachineInstallsBinaryConfigAndName(t *testing.T) {
 	}
 }
 
-func TestMachineNeedsTheDistBinary(t *testing.T) {
+// installed puts a stand-in shed that reports the given version on the machine.
+func installed(t *testing.T, home, version string) string {
+	t.Helper()
+	path := filepath.Join(home, RemoteBinary)
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho shed "+version+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func neverFetched(t *testing.T) func(string) (string, error) {
+	return func(string) (string, error) {
+		t.Fatal("the binary was fetched for a machine that already runs this version")
+		return "", nil
+	}
+}
+
+func TestMachineThatRunsThisVersionKeepsItsBinaryAndGetsTheConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	installed(t, home, "v1.2.3")
+	_, cfgPath := distFiles(t)
+
+	res, err := Machine(context.Background(), probe.ShellRunner{}, here, "v1.2.3", neverFetched(t), cfgPath)
+	if err != nil || res.BinaryInstalled {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(home, RemoteConfig)); string(got) != "machines: []\n" {
+		t.Fatalf("config = %q; the fleet file must still be sent", got)
+	}
+}
+
+func TestMachineOnAnOlderVersionGetsTheNewBinary(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := installed(t, home, "v1.2.2")
+	binaryFor, cfgPath := distFiles(t)
+
+	res, err := Machine(context.Background(), probe.ShellRunner{}, here, "v1.2.3", binaryFor, cfgPath)
+	if err != nil || !res.BinaryInstalled {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	if got, _ := os.ReadFile(path); !strings.HasPrefix(string(got), "binary for ") {
+		t.Fatalf("binary = %q", got)
+	}
+}
+
+func TestUnreleasedBuildIsAlwaysSent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	installed(t, home, "6f9c728")
+	binaryFor, cfgPath := distFiles(t)
+
+	res, err := Machine(context.Background(), probe.ShellRunner{}, here, "6f9c728", binaryFor, cfgPath)
+	if err != nil || !res.BinaryInstalled {
+		t.Fatalf("result = %+v, %v; two working-tree builds can differ under one version", res, err)
+	}
+}
+
+func TestMachineReportsAMissingBinary(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	m := config.Machine{Name: "box", Host: config.LocalHost}
-	if err := Machine(context.Background(), probe.ShellRunner{}, m, t.TempDir(), "unused"); err == nil {
-		t.Fatal("a missing dist binary must be an error")
+	_, cfgPath := distFiles(t)
+	missing := func(string) (string, error) { return "", errors.New("release v9.9.9 not found") }
+	if _, err := Machine(context.Background(), probe.ShellRunner{}, here, "v9.9.9", missing, cfgPath); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// scriptedRunner answers every command with fixed output and records it.
+type scriptedRunner struct {
+	out      string
+	err      error
+	commands []string
+}
+
+func (s *scriptedRunner) Run(_ context.Context, _ config.Machine, command string, _ io.Reader) ([]byte, error) {
+	s.commands = append(s.commands, command)
+	return []byte(s.out), s.err
+}
+
+func TestRestartAgentUsesThePlatformsServiceManager(t *testing.T) {
+	for platform, want := range map[string]string{"linux-amd64": "systemctl --user restart shed-agent", "darwin-arm64": "launchctl kickstart -k"} {
+		r := &scriptedRunner{out: "restarted\n"}
+		restarted, err := RestartAgent(context.Background(), r, box, platform)
+		if err != nil || !restarted || !strings.Contains(r.commands[0], want) {
+			t.Errorf("%s: restarted = %v, %v, command %q", platform, restarted, err, r.commands)
+		}
+	}
+}
+
+func TestRestartAgentReportsAServiceThatIsNotInstalled(t *testing.T) {
+	restarted, err := RestartAgent(context.Background(), &scriptedRunner{out: "absent\n"}, box, "linux-amd64")
+	if err != nil || restarted {
+		t.Fatalf("restarted = %v, %v", restarted, err)
+	}
+}
+
+func TestRestartAgentReportsAFailedRestart(t *testing.T) {
+	r := &scriptedRunner{err: errors.New("Failed to connect to bus")}
+	if _, err := RestartAgent(context.Background(), r, box, "linux-amd64"); err == nil || !strings.Contains(err.Error(), "restart agent") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

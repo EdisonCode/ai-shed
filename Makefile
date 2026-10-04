@@ -2,10 +2,14 @@ PLATFORMS := linux-amd64 linux-arm64 darwin-arm64 darwin-amd64
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
-.PHONY: build test lint dist clean hooks
+.PHONY: build install test lint dist clean hooks
 
 build:
 	go build $(LDFLAGS) -o shed ./cmd/shed
+
+# For work on shed itself. Everyone else installs a release; see the README.
+install:
+	go build $(LDFLAGS) -o $(HOME)/.local/bin/shed ./cmd/shed
 
 test:
 	go test ./...

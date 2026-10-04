@@ -129,7 +129,8 @@ tokens.
 2. `shed status` must show it reachable with every check `ok`. Fix a failed
    check on the machine before going on. A worker needs `tmux`, `gh` logged
    in, and the agent tool logged in.
-3. In the ai-shed checkout: `make dist`, then `shed deploy <machine>`.
+3. `shed deploy <machine>`. It installs this shed's version on the machine
+   and sends the fleet file.
 4. Have the owner start each worker's command once by hand in its directory
    and answer the tool's first-run prompts (folder trust, integrations). A
    worker stopped at one shows as `needs_owner`.
@@ -137,6 +138,12 @@ tokens.
    commands.
 6. `shed status` shows `agent ok` within a minute, and each worker under
    `supervised` within two.
+
+## Keep shed current
+
+`shed update` replaces the owner's shed with the latest release. `shed deploy`
+then brings every machine to the same version and restarts its agent. Workers
+keep running across that restart.
 
 ## Do not
 

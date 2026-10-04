@@ -226,19 +226,31 @@ An issue with an open signal is not handed to a worker.
 
 ## Setup
 
-Needs Go 1.25+ to build, and `ssh` and [`gh`](https://cli.github.com) on the
-watcher. A machine with workers needs `tmux`, `gh`, and the agent tool.
+The watcher needs `ssh` and [`gh`](https://cli.github.com), logged in. A
+machine with workers needs `tmux`, `gh`, and the agent tool. Nothing needs Go.
+
+Install the latest release into `~/.local/bin`:
 
 ```sh
-git clone https://github.com/edisoncode/ai-shed && cd ai-shed
-make build                                  # ./shed
-mkdir -p ~/.config/shed
-cp shed.example.yaml ~/.config/shed/shed.yaml   # then edit
-./shed validate
-./shed status
-./shed status -watch 1m                     # live view
-./shed status -json                         # for scripts
+platform="$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
+gh release download --repo EdisonCode/ai-shed --pattern "shed-$platform" --output ~/.local/bin/shed --clobber
+chmod +x ~/.local/bin/shed
 ```
+
+Then:
+
+```sh
+mkdir -p ~/.config/shed
+gh api repos/EdisonCode/ai-shed/contents/shed.example.yaml --jq .content | base64 -d > ~/.config/shed/shed.yaml   # then edit
+shed validate
+shed status
+shed status -watch 1m                       # live view
+shed status -json                           # for scripts
+```
+
+To update: `shed update` replaces the binary with the latest release, checked
+against the release's published checksum. Then `shed deploy` brings the
+machines to the same version.
 
 shed reads the fleet file from `-config`, then `$SHED_CONFIG`, then
 `./shed.yaml`, then `~/.config/shed/shed.yaml`. See
@@ -251,12 +263,19 @@ Use `host: local` for a machine that is also the watcher.
 Machines with `workers` or `tasks` need the agent.
 
 ```sh
-make dist                 # binaries for linux and macOS in dist/
-./shed deploy             # or: ./shed deploy linux-box
+shed deploy               # or: shed deploy linux-box
 ```
 
-`deploy` copies the right binary to `~/.local/bin/shed`, the fleet file to
-`~/.config/shed/shed.yaml`, and the machine's name to `~/.config/shed/machine`.
+For each machine, `deploy`:
+
+1. Sends the fleet file to `~/.config/shed/shed.yaml` and the machine's name
+   to `~/.config/shed/machine`.
+2. Installs this shed's own version at `~/.local/bin/shed`, unless the machine
+   already runs it. The binary for the machine's platform comes from the
+   release, checked against its checksum.
+3. Restarts the agent when it installed a new binary, so the agent runs it.
+   Workers keep running across that restart.
+
 A worker's tool usually needs more than that from your machine: agent
 definitions, skills, notes. shed does not know your tool's layout, so it runs
 a command of yours instead. `defaults.deploy_hook` runs on the watcher after
@@ -292,9 +311,9 @@ in the worker's directory. An agent tool asks first-run questions (trust this
 folder, enable these integrations) that only a person may answer. The
 supervisor reports a worker stopped at one as `needs_owner` and types nothing.
 
-After that, run `shed deploy` again whenever the fleet file changes. The agent
-loads a changed fleet file within 30 seconds; a new binary takes effect when
-the agent restarts. Workers keep running across an agent restart.
+After that, run `shed deploy` whenever the fleet file changes or after a
+`shed update`. The agent loads a changed fleet file within 30 seconds without
+a restart.
 
 Watch a worker with `tmux attach -t shed` on its machine. What the supervisor
 saw and did is in `~/.local/state/shed/checkins.jsonl`.
@@ -353,9 +372,13 @@ author's direction.
 
 ## Development
 
+Needs Go 1.25+.
+
 ```sh
 make hooks        # once per clone: the pre-push hook runs the gates below
 make lint test
+make install      # this working tree's build into ~/.local/bin
+make dist && shed deploy -dist dist   # send an unreleased build to the machines
 ```
 
 A release is a version tag. Pushing `v1.2.3` runs the gates, builds the
