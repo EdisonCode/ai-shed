@@ -191,11 +191,15 @@ type Signal struct {
 	// signal then closes when that pull request is merged or closed, so an
 	// issue that takes several pull requests comes back into the queue.
 	FollowsPR bool `yaml:"follows_pr"`
+	// SendsBack is for a signal that the owner answers with words a worker
+	// must act on. When the answer comes after the worker handed back and its
+	// pull request is still open, the issue goes back to a worker.
+	SendsBack bool `yaml:"sends_back"`
 }
 
 func DefaultSignals() []Signal {
 	return []Signal{
-		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling"},
+		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true},
 		{Name: "eyes", Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked"},
 		{Name: "review", Ask: "**PR:**", FollowsPR: true},
 	}

@@ -126,6 +126,14 @@ type workerState struct {
 	recent []runlog.Checkin
 }
 
+// lastVerdict is the verdict of the worker's latest check-in.
+func (st *workerState) lastVerdict() string {
+	if len(st.recent) == 0 {
+		return ""
+	}
+	return st.recent[len(st.recent)-1].Verdict
+}
+
 // Tick checks every worker once. A failure on one worker is recorded and
 // does not stop the others.
 func (s *Supervisor) Tick(ctx context.Context) {
@@ -201,8 +209,9 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 	}
 
 	// A fresh session was asked for. It waits for the issue in hand unless
-	// the owner said now.
-	if pending, immediately := s.recycleRequested(w.Name); pending && (immediately || st.issue == 0) {
+	// the owner said now. A worker that was last found done has handed that
+	// issue back: nothing is in progress.
+	if pending, immediately := s.recycleRequested(w.Name); pending && (immediately || st.issue == 0 || st.lastVerdict() == runlog.VerdictDone) {
 		return s.recycle(w, st, now)
 	}
 

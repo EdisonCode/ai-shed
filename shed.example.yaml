@@ -106,12 +106,15 @@ supervisor:
 # the text after it does not start with one of `clear`. It closes when a later
 # comment has the `answered_by` phrase. With `follows_pr`, the ask names a
 # pull request ("#41") and the signal closes when that pull request is merged
-# or closed.
+# or closed. With `sends_back`, your answer is something a worker must act
+# on: an answer that comes after the worker handed back sends the issue back
+# to a worker while its pull request is open.
 signals:
   - name: decision
     ask: "Decisions needed:"
     clear: ["none"]
     answered_by: "Owner ruling"
+    sends_back: true
   - name: eyes
     ask: "Needs eyes:"
     clear: ["nothing", "none"]

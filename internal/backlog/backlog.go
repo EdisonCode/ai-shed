@@ -147,29 +147,72 @@ func prProblem(mergeable string, checks []check) string {
 }
 
 // Waiting returns the names of the signals that are open on the issue: the
-// reasons it waits on the owner. A review of a pull request that cannot
-// merge is not one of them: that waits on a worker (see Rework).
+// reasons it waits on the owner. While the issue needs a worker again (see
+// Rework), what the worker asked the owner to look at or review is not among
+// them: the work will change, and the worker asks again when it hands back.
+// A question it asked the owner still is.
 func Waiting(issue Issue, signals []config.Signal) []string {
+	rework := Rework(issue, signals) != ""
 	var open []string
 	for _, s := range signals {
-		isOpen, pr := signalState(issue, s)
-		if isOpen && !(s.FollowsPR && issue.OpenPRs[pr].Problem != "") {
+		if isOpen, _ := signalState(issue, s); isOpen && !(rework && !s.SendsBack) {
 			open = append(open, s.Name)
 		}
 	}
 	return open
 }
 
-// Rework says why an issue that was handed back needs a worker again: its
-// pull request is open and cannot merge as it stands. Empty when it does not.
+// Rework says why an issue that was handed back needs a worker again while
+// its pull request is still open: the owner answered after the hand-back, or
+// the pull request cannot merge as it stands. Empty when it does not.
 func Rework(issue Issue, signals []config.Signal) string {
+	handBack, pr := lastHandBack(issue, signals)
+	open, isOpen := issue.OpenPRs[pr]
+	if handBack < 0 || !isOpen {
+		return ""
+	}
+	var reasons []string
 	for _, s := range signals {
-		isOpen, pr := signalState(issue, s)
-		if isOpen && s.FollowsPR && issue.OpenPRs[pr].Problem != "" {
-			return fmt.Sprintf("pull request #%d %s", pr, issue.OpenPRs[pr].Problem)
+		if s.SendsBack && s.AnsweredBy != "" && lastComment(issue, s.AnsweredBy) > handBack {
+			reasons = append(reasons, fmt.Sprintf("the owner answered in the issue (%s) after pull request #%d was handed back; read the answer and apply it", s.AnsweredBy, pr))
+			break
 		}
 	}
-	return ""
+	if open.Problem != "" {
+		reasons = append(reasons, fmt.Sprintf("pull request #%d %s", pr, open.Problem))
+	}
+	return strings.Join(reasons, "; ")
+}
+
+// lastHandBack returns the position of the last comment in which a worker
+// handed back a pull request, and that pull request's number; -1 for none.
+func lastHandBack(issue Issue, signals []config.Signal) (index, pr int) {
+	index = -1
+	for _, s := range signals {
+		if !s.FollowsPR {
+			continue
+		}
+		for i, c := range issue.Comments {
+			if value, found := afterPhrase(strings.ToLower(c.Body), strings.ToLower(s.Ask)); found && i >= index {
+				if n := prNumber(value); n != 0 {
+					index, pr = i, n
+				}
+			}
+		}
+	}
+	return index, pr
+}
+
+// lastComment returns the position of the last comment that has the phrase;
+// -1 for none.
+func lastComment(issue Issue, phrase string) int {
+	last := -1
+	for i, c := range issue.Comments {
+		if strings.Contains(strings.ToLower(c.Body), strings.ToLower(phrase)) {
+			last = i
+		}
+	}
+	return last
 }
 
 // signalState reports whether the signal is open on the issue, and the pull
