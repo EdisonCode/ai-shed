@@ -14,7 +14,7 @@ each machine runs that machine's scheduled tasks.
 **Goal**: One SSH round trip per machine returns load, disk, check results, tmux workers, agent state.
 **Success Criteria**: Probe output parses on Linux and macOS formats; a local machine can be probed without SSH.
 **Tests**: script generation; parsing of both `uptime` formats, checks, windows, run records; truncated output is an error.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Issue backlog
 **Goal**: List each machine's open GitHub issues (through `gh`) and detect the ones that wait on the owner.
