@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/edisoncode/ai-shed/contrib"
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/probe"
 	"github.com/edisoncode/ai-shed/internal/release"
@@ -93,12 +94,20 @@ func Machine(ctx context.Context, r probe.Runner, m config.Machine, version stri
 		res.BinaryInstalled = true
 	}
 	for _, f := range files {
-		cmd := fmt.Sprintf(`f="$HOME/%s" && mkdir -p "$(dirname "$f")" && cat > "$f.new" && chmod %s "$f.new" && mv "$f.new" "$f"`, f.path, f.mode)
-		if _, err := r.Run(ctx, m, cmd, bytes.NewReader(f.data)); err != nil {
-			return res, fmt.Errorf("write ~/%s: %w", f.path, err)
+		if err := writeRemote(ctx, r, m, f.path, f.data, f.mode); err != nil {
+			return res, err
 		}
 	}
 	return res, nil
+}
+
+// writeRemote writes a file under the machine user's home.
+func writeRemote(ctx context.Context, r probe.Runner, m config.Machine, path string, data []byte, mode string) error {
+	cmd := fmt.Sprintf(`f="$HOME/%s" && mkdir -p "$(dirname "$f")" && cat > "$f.new" && chmod %s "$f.new" && mv "$f.new" "$f"`, path, mode)
+	if _, err := r.Run(ctx, m, cmd, bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("write ~/%s: %w", path, err)
+	}
+	return nil
 }
 
 // restartCommands restart the agent service where it is installed. Each
@@ -122,6 +131,76 @@ func RestartAgent(ctx context.Context, r probe.Runner, m config.Machine, platfor
 		return false, fmt.Errorf("restart agent: %w", err)
 	}
 	return strings.TrimSpace(string(out)) == "restarted", nil
+}
+
+// Over SSH there is no session bus address; the runtime directory finds it.
+const systemdEnv = `export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; `
+
+// service is how one platform runs the agent.
+type service struct {
+	// path of the service file under the user's home.
+	path string
+	data []byte
+	// present prints "present" when the service is set up, else "absent".
+	present string
+	// load starts the service now and at every login or boot.
+	load string
+}
+
+var services = map[string]service{
+	"linux": {
+		path:    ".config/systemd/user/" + UnitName + ".service",
+		data:    contrib.SystemdUnit,
+		present: systemdEnv + `systemctl --user cat ` + UnitName + ` >/dev/null 2>&1 && echo present || echo absent`,
+		// Without lingering the agent stops when the user logs out.
+		load: systemdEnv + `systemctl --user daemon-reload && systemctl --user enable --now ` + UnitName + ` && { loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || echo "The agent will stop when you log out: run 'loginctl enable-linger' on the machine."; }`,
+	},
+	"darwin": {
+		path:    "Library/LaunchAgents/" + AgentLabel + ".plist",
+		data:    contrib.LaunchdPlist,
+		present: `launchctl print "gui/$(id -u)/` + AgentLabel + `" >/dev/null 2>&1 && echo present || echo absent`,
+		// The GUI domain is the one that can read the login keychain.
+		load: `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/` + AgentLabel + `.plist"`,
+	},
+}
+
+func serviceFor(platform string) (service, error) {
+	osName, _, _ := strings.Cut(platform, "-")
+	svc, ok := services[osName]
+	if !ok {
+		return service{}, fmt.Errorf("no agent service for %q", platform)
+	}
+	return svc, nil
+}
+
+// AgentInstalled reports whether the agent service is set up on the machine.
+func AgentInstalled(ctx context.Context, r probe.Runner, m config.Machine, platform string) (bool, error) {
+	svc, err := serviceFor(platform)
+	if err != nil {
+		return false, err
+	}
+	out, err := r.Run(ctx, m, svc.present, nil)
+	if err != nil {
+		return false, fmt.Errorf("look for the agent service: %w", err)
+	}
+	return strings.TrimSpace(string(out)) == "present", nil
+}
+
+// InstallAgent writes the agent's service file on the machine and starts it.
+// The returned note is something the owner must still do, or empty.
+func InstallAgent(ctx context.Context, r probe.Runner, m config.Machine, platform string) (note string, err error) {
+	svc, err := serviceFor(platform)
+	if err != nil {
+		return "", err
+	}
+	if err := writeRemote(ctx, r, m, svc.path, svc.data, "644"); err != nil {
+		return "", err
+	}
+	out, err := r.Run(ctx, m, svc.load, nil)
+	if err != nil {
+		return "", fmt.Errorf("start the agent service: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // Hook runs the owner's deploy hook on this machine (the watcher) for one

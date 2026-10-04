@@ -264,6 +264,7 @@ Machines with `workers` or `tasks` need the agent.
 
 ```sh
 shed deploy               # or: shed deploy linux-box
+shed deploy -install-agent linux-box    # first time on a machine
 ```
 
 For each machine, `deploy`:
@@ -275,41 +276,58 @@ For each machine, `deploy`:
    release, checked against its checksum.
 3. Restarts the agent when it installed a new binary, so the agent runs it.
    Workers keep running across that restart.
+4. Runs your deploy hook, if you set one.
+5. Runs a preflight of each worker that has no live session.
+6. With `-install-agent`, sets up and starts the agent service on a machine
+   that has none, if every worker is ready.
 
-A worker's tool usually needs more than that from your machine: agent
-definitions, skills, notes. shed does not know your tool's layout, so it runs
-a command of yours instead. `defaults.deploy_hook` runs on the watcher after
-each machine's copy succeeds, with `SHED_MACHINE` and `SHED_HOST` set:
+**The deploy hook.** A worker's tool usually needs more from your machine than
+shed sends: agent definitions, skills, notes. shed does not know your tool's
+layout, so it runs a command of yours. `defaults.deploy_hook` runs on the
+watcher after each machine's copy succeeds, with `SHED_MACHINE` and
+`SHED_HOST` set. A failing hook fails the deploy of that machine.
 
 ```yaml
 defaults:
   deploy_hook: rsync -a ~/.claude/agents ~/.claude/skills "$SHED_HOST:.claude/"
 ```
 
-A failing hook fails the deploy of that machine.
+**The preflight.** An agent tool asks first-run questions (trust this folder,
+enable these integrations) that only a person may answer, and a worker stopped
+at one does no work. So `deploy` starts each worker's command once, with no
+prompt, in a throwaway tmux window on the machine, waits for the screen to
+settle, and closes the window. It types nothing else. The reviewer reads each
+screen and `deploy` prints one line per worker:
 
-Then start the agent once on each machine:
+```
+mini: worker app: ready (clean start)
+mini: worker docs: needs you: question: asks whether to trust the folder
+    | Do you trust the files in this folder?
+    | ❯ No, exit
+```
 
-- **Linux (systemd):** copy [`contrib/shed-agent.service`](contrib/shed-agent.service)
-  to `~/.config/systemd/user/`, then
-  `systemctl --user enable --now shed-agent` and `loginctl enable-linger $USER`
-  (so it runs without a login session).
-- **macOS (launchd):** copy [`contrib/com.edisoncode.shed-agent.plist`](contrib/com.edisoncode.shed-agent.plist)
-  to `~/Library/LaunchAgents/`, then
-  `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.edisoncode.shed-agent.plist`.
+- A worker that already has a live session is left alone.
+- A worker whose directory is missing or has uncommitted changes is not started.
+- A worker that is not ready fails the deploy of its machine. Answer the
+  question on the machine (`tmux attach`, start the command, answer, exit) and
+  deploy again. `-preflight=false` skips the check.
+- The reviewer runs on the watcher, so it must work there.
+- `shed preflight` on a machine runs the same check by hand.
+
+**The agent service.** `-install-agent` writes the service file and starts it:
+a systemd user unit on Linux (with lingering, so it runs without a login
+session), a launchd agent in the GUI domain on macOS. The files are in
+[`contrib/`](contrib/) if you want to install them yourself.
 
 **macOS and the keychain.** An agent tool that keeps its login in the keychain
-cannot read it from an SSH session. Two things follow. Load the agent into the
-GUI domain, as the command above does, so the reviewer it runs can log in.
-And the tmux server that holds the workers must have been started from the GUI
-domain too. The agent uses the default tmux server: if one is already running
-(for example from your own launchd job), the workers join it; if none is, the
-agent starts it, from the GUI domain. Do not start that server over SSH.
-
-**Before the first unattended run**, start the worker's command once by hand
-in the worker's directory. An agent tool asks first-run questions (trust this
-folder, enable these integrations) that only a person may answer. The
-supervisor reports a worker stopped at one as `needs_owner` and types nothing.
+cannot read it from an SSH session. The agent service runs in the GUI domain,
+which can. The tmux server that holds the workers must have been started from
+the GUI domain too. The agent uses the default tmux server: if one is already
+running (for example from your own launchd job), the workers join it; if none
+is, the agent starts it, from the GUI domain. Do not start that server over
+SSH. For the same reason, a preflight on a Mac with no tmux server running
+reports a login problem that the agent itself will not have: start the server
+from the GUI domain first, or pass `-preflight=false`.
 
 After that, run `shed deploy` whenever the fleet file changes or after a
 `shed update`. The agent loads a changed fleet file within 30 seconds without

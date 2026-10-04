@@ -205,3 +205,43 @@ func TestNoHookDoesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAgentInstalled(t *testing.T) {
+	for out, want := range map[string]bool{"present\n": true, "absent\n": false} {
+		got, err := AgentInstalled(context.Background(), &scriptedRunner{out: out}, box, "darwin-arm64")
+		if err != nil || got != want {
+			t.Errorf("output %q: installed = %v, %v; want %v", out, got, err, want)
+		}
+	}
+}
+
+func TestInstallAgentWritesTheServiceFileAndStartsIt(t *testing.T) {
+	cases := map[string][2]string{
+		"linux-amd64":  {".config/systemd/user/shed-agent.service", "systemctl --user enable --now shed-agent"},
+		"darwin-arm64": {"Library/LaunchAgents/com.edisoncode.shed-agent.plist", "launchctl bootstrap"},
+	}
+	for platform, want := range cases {
+		r := &scriptedRunner{}
+		if _, err := InstallAgent(context.Background(), r, box, platform); err != nil {
+			t.Fatal(err)
+		}
+		if len(r.commands) != 2 || !strings.Contains(r.commands[0], want[0]) || !strings.Contains(r.commands[1], want[1]) {
+			t.Errorf("%s: commands = %q", platform, r.commands)
+		}
+	}
+}
+
+func TestInstallAgentPassesOnWhatTheOwnerMustStillDo(t *testing.T) {
+	r := &scriptedRunner{out: "The agent will stop when you log out: run 'loginctl enable-linger' on the machine.\n"}
+	note, err := InstallAgent(context.Background(), r, box, "linux-amd64")
+	if err != nil || !strings.Contains(note, "enable-linger") {
+		t.Fatalf("note = %q, %v", note, err)
+	}
+}
+
+func TestInstallAgentReportsAServiceThatDidNotStart(t *testing.T) {
+	r := &scriptedRunner{err: errors.New("Bootstrap failed: 5: Input/output error")}
+	if _, err := InstallAgent(context.Background(), r, box, "darwin-arm64"); err == nil {
+		t.Fatal("a failed start must be an error")
+	}
+}

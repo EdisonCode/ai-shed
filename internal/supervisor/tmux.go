@@ -32,6 +32,8 @@ type Terminal interface {
 	Open(window, dir string) error
 	// Send types one line of text into the window and presses Enter.
 	Send(window, text string) error
+	// Close ends the window and whatever runs in it.
+	Close(window string) error
 }
 
 // Tmux is the real Terminal. Socket names a private tmux server (tests);
@@ -163,5 +165,10 @@ func (t Tmux) Send(window, text string) error {
 	// A terminal program needs a moment to take pasted text before Enter.
 	time.Sleep(300 * time.Millisecond)
 	_, err := t.run("send-keys", "-t", target(window), "Enter")
+	return err
+}
+
+func (t Tmux) Close(window string) error {
+	_, err := t.run("kill-window", "-t", target(window))
 	return err
 }

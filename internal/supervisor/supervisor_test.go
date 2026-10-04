@@ -22,7 +22,10 @@ type fakeTerminal struct {
 	screen string
 	opened []string
 	sent   []string
+	closed []string
 }
+
+func (f *fakeTerminal) Close(window string) error { f.closed = append(f.closed, window); return nil }
 
 func (f *fakeTerminal) Observe(string) (Observation, error) { return f.obs, nil }
 func (f *fakeTerminal) Capture(string, int) (string, error) { return f.screen, nil }
