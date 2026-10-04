@@ -72,7 +72,8 @@ supervisor:
   # What to type into a worker to empty its context and to switch its model.
   clear_command: /clear
   model_command: "/model {model}"
-  # The model for an issue, from its labels.
+  # The model for an issue, from its labels. This switches the worker's own
+  # session. Leave it out when the worker orchestrates sub-agents.
   models:
     default: sonnet
     labels:

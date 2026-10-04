@@ -136,6 +136,12 @@ the issue for this reason): the new model starts from the brief, not from a re-r
 the old conversation. Two issues in a row on the same model keep the warm
 context. With no `models` block the agent never touches the model.
 
+This switches the model of the worker's own session. **Leave `models` out when
+the worker is an orchestrator** that hands work to sub-agents on models of its
+own choosing: a switch would change the orchestrator, not the sub-agents. Set
+the orchestrator's model in the worker's `command`, and put the rule for
+choosing a sub-agent's model, by label or otherwise, in the standing orders.
+
 ### Standing orders
 
 `defaults.standing_orders` is text that goes into every worker's brief on
@@ -243,6 +249,14 @@ Then start the agent once on each machine:
 - **macOS (launchd):** copy [`contrib/com.edisoncode.shed-agent.plist`](contrib/com.edisoncode.shed-agent.plist)
   to `~/Library/LaunchAgents/`, then
   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.edisoncode.shed-agent.plist`.
+
+**macOS and the keychain.** An agent tool that keeps its login in the keychain
+cannot read it from an SSH session. Two things follow. Load the agent into the
+GUI domain, as the command above does, so the reviewer it runs can log in.
+And the tmux server that holds the workers must have been started from the GUI
+domain too. The agent uses the default tmux server: if one is already running
+(for example from your own launchd job), the workers join it; if none is, the
+agent starts it, from the GUI domain. Do not start that server over SSH.
 
 **Before the first unattended run**, start the worker's command once by hand
 in the worker's directory. An agent tool asks first-run questions (trust this

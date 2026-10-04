@@ -46,7 +46,9 @@ machine in the fleet file (a label, an assignee, or both).
 2. **Machine label.** Take it from the fleet file.
    `gh issue edit <n> --repo <owner/repo> --add-label "<machine label>"`
    If the label does not exist: `gh label create "<label>" --repo <owner/repo>`.
-3. **Model label**, only when the fleet file has `supervisor.models`. The
+3. **Model label**, only when the fleet file has `supervisor.models`. (With
+   no `models` block shed switches nothing; a model label is then only what
+   the standing orders say it is.) The
    labels under `supervisor.models.labels` are the choices; an issue with none
    of them gets `supervisor.models.default`. Pick the cheapest model that can
    do the work, by the owner's own rule if they gave one. When the rule does
