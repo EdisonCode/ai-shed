@@ -17,7 +17,8 @@ const usage = `shed watches the worker machines in your shed.
 Usage:
   shed status [-json] [-watch 1m]   report every machine; exit 1 when something needs you
   shed validate                     check the fleet file
-  shed deploy [machine...]          copy the binary and the fleet file to machines
+  shed deploy [machine...]          send this version and the fleet file to machines
+  shed update                       replace this shed with the latest release
   shed agent [-machine name]        on a machine: supervise its workers and run its tasks
   shed version                      print the version
 
@@ -47,6 +48,8 @@ func main() {
 		code = cmdDeploy(args)
 	case "validate":
 		code = cmdValidate(args)
+	case "update":
+		code = cmdUpdate(args)
 	case "version":
 		fmt.Println("shed", version)
 	case "help", "-h", "--help":
