@@ -108,12 +108,24 @@ A worker's queue is the open issues of the machine's `issues` sources, or of
 the worker's own `issues` when it has them. The supervisor hands them out one
 at a time, in this order:
 
-1. **Rework.** An issue that was handed back with a pull request that can no
-   longer merge: it conflicts with its base branch, or a check failed.
-   Finishing started work comes before starting more. The worker is told what
-   is wrong and to fix only that. An issue is sent back at most twice in six
-   hours; after that it is yours, and `shed status` says so. A check that
-   fails for a reason no worker can fix must not keep one busy all night.
+1. **Rework.** An issue that was handed back and needs a worker again while
+   its pull request is still open. Finishing started work comes before
+   starting more. There are two causes:
+   - *You answered.* A comment with the answering phrase of a `sends_back`
+     signal (by default `Owner ruling`) came after the hand-back. The worker
+     is told to read your answer and apply it. So "yes, and also fix X" needs
+     no typing on the machine.
+   - *The pull request went stale.* It conflicts with its base branch, or a
+     check failed. The worker is told what is wrong and to fix only that.
+
+   The worker hands back again when it is done, which ends the rework. An
+   issue is sent back at most twice in six hours; after that it is yours, and
+   `shed status` says so. A check that fails for a reason no worker can fix
+   must not keep one busy all night.
+
+   While an issue is due back to a worker, its `eyes` and `review` signals do
+   not count as waiting on you: the work is about to change. An open
+   `decision` still does.
 2. **Priority.** The labels in the source's `priority` list, first to last.
 3. **Age.** Oldest first.
 
@@ -253,7 +265,7 @@ for these phrases in issue comments (configurable under `signals`):
 
 | Signal | Opens when a comment has | Stays closed when followed by | Closes when a later comment has |
 | --- | --- | --- | --- |
-| decision | `Decisions needed:` | `none` | `Owner ruling` |
+| decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker) |
 | eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked` |
 | review | `**PR:** #41` | | that pull request is merged or closed |
 

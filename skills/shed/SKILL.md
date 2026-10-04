@@ -102,8 +102,10 @@ Run this as a checklist and report each line.
    - `issue waits on you (decision)`: read the worker's comment
      (`gh issue view <n> --repo <r> --comments`), put the question to the
      owner, and post their answer as a comment that contains the
-     `answered_by` phrase of the `decision` signal. That reopens the issue
-     for a worker.
+     `answered_by` phrase of the `decision` signal. If the issue's pull
+     request is still open, that sends the issue back to a worker, who reads
+     the answer and applies it; nobody types on the machine. Write the answer
+     so that a worker with no other context can act on it.
    - `issue waits on you (eyes)`: do the check the worker described, then
      post a comment that clears the signal: the `answered_by` phrase of the
      `eyes` signal if the fleet file has one, otherwise the ask phrase

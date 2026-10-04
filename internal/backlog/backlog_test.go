@@ -128,3 +128,46 @@ func TestParsePRs(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnersAnswerAfterAHandBackSendsTheIssueBack(t *testing.T) {
+	const sentBack = "the owner answered in the issue (Owner ruling) after pull request #41 was handed back; read the answer and apply it"
+	laterHandBack := "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** nothing\n**Decisions needed:** none\nApplied Owner ruling 1."
+	cases := []struct {
+		name        string
+		comments    []string
+		openPRs     map[int]PR
+		wantWaiting []string
+		wantRework  string
+	}{
+		{"asked, not yet answered", []string{handBackAsking}, map[int]PR{41: {}}, []string{"decision", "review"}, ""},
+		{"answered: back to a worker, and not waiting for review", []string{handBackAsking, ruling}, map[int]PR{41: {}}, nil, sentBack},
+		{"the worker applied the answer and handed back again", []string{handBackAsking, ruling, laterHandBack}, map[int]PR{41: {}}, []string{"review"}, ""},
+		{"a second answer after that sends it back again", []string{handBackAsking, ruling, laterHandBack, ruling}, map[int]PR{41: {}}, nil, sentBack},
+		{"an answer given before any hand-back is planning, not rework", []string{ruling, handBackClean}, map[int]PR{41: {}}, []string{"review"}, ""},
+		{"an answer with no pull request open is not rework", []string{handBackAsking, ruling}, map[int]PR{}, nil, ""},
+		{"an eyes check that passed does not send it back", []string{handBackClean, "Eyes checked: looks right."}, map[int]PR{41: {}}, []string{"review"}, ""},
+		{"answered and conflicting: both reasons", []string{handBackAsking, ruling}, map[int]PR{41: {Problem: "conflicts with the base branch"}}, nil, sentBack + "; pull request #41 conflicts with the base branch"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issue := Issue{OpenPRs: tc.openPRs}
+			for _, body := range tc.comments {
+				issue.Comments = append(issue.Comments, Comment{Body: body})
+			}
+			if got := Waiting(issue, config.DefaultSignals()); !slices.Equal(got, tc.wantWaiting) {
+				t.Errorf("waiting = %v, want %v", got, tc.wantWaiting)
+			}
+			if got := Rework(issue, config.DefaultSignals()); got != tc.wantRework {
+				t.Errorf("rework = %q, want %q", got, tc.wantRework)
+			}
+		})
+	}
+}
+
+func TestWhileAWorkerIsDueBackOnlyAQuestionWaitsOnTheOwner(t *testing.T) {
+	needsEyes := "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders and check the total\n**Decisions needed:**\n1. Keep the column?"
+	issue := Issue{OpenPRs: map[int]PR{41: {Problem: "conflicts with the base branch"}}, Comments: []Comment{{Body: needsEyes}}}
+	if got := Waiting(issue, config.DefaultSignals()); !slices.Equal(got, []string{"decision"}) {
+		t.Fatalf("waiting = %v; the look and the review can wait for the rebased work, the question cannot", got)
+	}
+}

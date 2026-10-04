@@ -1075,3 +1075,15 @@ func TestOwnerIsNotifiedWhenAWorkerIsStuck(t *testing.T) {
 		t.Fatalf("notifications = %q", notes)
 	}
 }
+
+func TestRecycleOfAWorkerThatHandedBackDoesNotWaitForMoreWork(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), Verdict{Verdict: runlog.VerdictDone, Reason: "handed back; nothing else is workable"})
+	f.tick(2 * time.Minute)
+	f.handOver() // it finished #12 and rests, with #12 still its last issue
+	f.requestRecycle(t, "")
+	f.tick(30 * time.Second)
+
+	if !slices.Equal(f.term.closed, []string{"app"}) {
+		t.Fatalf("closed = %v; a resting worker has nothing in progress, so the fresh session must not wait", f.term.closed)
+	}
+}
