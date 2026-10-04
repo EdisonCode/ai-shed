@@ -1,0 +1,55 @@
+# Copy to ~/.config/shed/shed.yaml (or ./shed.yaml) and edit.
+
+defaults:
+  # Checks that every machine must pass. A check passes when it exits 0.
+  checks:
+    - name: gh auth
+      run: gh auth status
+    - name: git identity
+      run: git config --global user.email
+    - name: claude
+      run: command -v claude
+
+machines:
+  - name: linux-box
+    host: me@linux-box            # any ssh target; "local" means this machine
+    # Prepended to every check and task. Non-interactive shells get a short PATH.
+    init: export PATH="$HOME/.local/bin:$PATH"
+    checks:
+      - name: docker
+        run: docker info
+    issues:
+      # Open issues with this label are this machine's backlog.
+      - repo: my-org/my-app
+        label: "machine:linux-box"
+    tasks:
+      - name: nightly-deps
+        schedule: "0 3 * * *"
+        run: cd ~/Projects/my-app && ./scripts/update-deps.sh
+        timeout: 30m
+
+  - name: mac-mini
+    host: me@mac-mini
+    init: export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+    issues:
+      - repo: my-org/my-app
+        label: "machine:mac-mini"
+    tasks:
+      - name: prune-worktrees
+        schedule: "@every 6h"
+        run: cd ~/work/my-app && git worktree prune
+
+# Optional. These are the defaults: phrases in issue comments that mean the
+# issue waits on you. A signal opens when a comment has the `ask` phrase and
+# the text after it does not start with one of `clear`. It closes when a later
+# comment has the `answered_by` phrase.
+signals:
+  - name: decision
+    ask: "Decisions needed:"
+    clear: ["none"]
+    answered_by: "Owner ruling"
+  - name: eyes
+    ask: "Needs eyes:"
+    clear: ["nothing", "none"]
+  - name: review
+    ask: "**PR:**"

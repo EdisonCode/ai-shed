@@ -1,0 +1,4 @@
+/dist/
+/shed
+# Your real fleet file names your hosts; keep it out of the public repo.
+/shed.yaml
