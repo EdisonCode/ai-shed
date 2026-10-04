@@ -154,6 +154,15 @@ type CommandReviewer struct {
 }
 
 func (r CommandReviewer) Review(ctx context.Context, prompt string) (Verdict, error) {
+	answer, err := r.Ask(ctx, prompt)
+	if err != nil {
+		return Verdict{}, err
+	}
+	return ParseVerdict(answer)
+}
+
+// Ask runs the command with the prompt on stdin and returns what it printed.
+func (r CommandReviewer) Ask(ctx context.Context, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, reviewTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", r.Command)
@@ -163,7 +172,7 @@ func (r CommandReviewer) Review(ctx context.Context, prompt string) (Verdict, er
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return Verdict{}, fmt.Errorf("reviewer command: %w: %s", err, clip(strings.TrimSpace(stderr.String()+" "+string(out)), 300))
+		return "", fmt.Errorf("reviewer command: %w: %s", err, clip(strings.TrimSpace(stderr.String()+" "+string(out)), 300))
 	}
-	return ParseVerdict(string(out))
+	return string(out), nil
 }

@@ -134,3 +134,20 @@ func TestTmuxKeepsUnicodeWithoutALocale(t *testing.T) {
 	}
 	t.Fatalf("screen never showed the text as it was sent:\n%s", screen)
 }
+
+func TestTmuxCloseEndsTheWindow(t *testing.T) {
+	tm := privateTmux(t)
+	for _, window := range []string{"keep", "preflight-app"} {
+		if err := tm.Open(window, t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tm.Close("preflight-app"); err != nil {
+		t.Fatal(err)
+	}
+	gone, _ := tm.Observe("preflight-app")
+	kept, _ := tm.Observe("keep")
+	if gone.Exists || !kept.Exists {
+		t.Fatalf("closed window exists = %v, other window exists = %v", gone.Exists, kept.Exists)
+	}
+}
