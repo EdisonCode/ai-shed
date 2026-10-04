@@ -64,29 +64,64 @@ func target(window string) string {
 	return "=" + Session + ":=" + window
 }
 
-func (t Tmux) Observe(window string) (Observation, error) {
+// fieldSep separates the fields of a window line. It must be a printable
+// character: a tmux client with no UTF-8 locale, which is what a service
+// manager gives the agent, prints "_" in place of a tab.
+const fieldSep = "|"
+
+// windows lists the windows of the session; nil when there is no session. A
+// line that cannot be read is an error and never a missing window: acting on
+// "the worker is gone" when it is not opens a second one.
+func (t Tmux) windows() ([]Observation, []string, error) {
 	if _, err := exec.LookPath("tmux"); err != nil {
-		return Observation{}, fmt.Errorf("tmux is not on PATH: %w", err)
+		return nil, nil, fmt.Errorf("tmux is not on PATH: %w", err)
 	}
 	if !t.hasSession() {
-		return Observation{}, nil
+		return nil, nil, nil
 	}
-	out, err := t.run("list-windows", "-t", "="+Session, "-F", "#{window_activity}\t#{pane_current_command}\t#{window_name}")
+	// The name comes before the command: shed's window names have no
+	// separator in them, and a command may.
+	format := strings.Join([]string{"#{window_activity}", "#{window_name}", "#{pane_current_command}"}, fieldSep)
+	out, err := t.run("list-windows", "-t", "="+Session, "-F", format)
 	if err != nil {
-		return Observation{}, err
+		return nil, nil, err
 	}
-	for _, line := range strings.Split(out, "\n") {
-		f := strings.SplitN(line, "\t", 3)
-		if len(f) != 3 || f[2] != window {
-			continue
+	var found []Observation
+	var names []string
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		f := strings.SplitN(line, fieldSep, 3)
+		if len(f) != 3 {
+			return nil, nil, fmt.Errorf("tmux printed a window line that shed cannot read: %q", line)
 		}
 		epoch, err := strconv.ParseInt(f[0], 10, 64)
 		if err != nil {
-			return Observation{}, fmt.Errorf("tmux activity time %q: %w", f[0], err)
+			return nil, nil, fmt.Errorf("tmux printed a window line that shed cannot read: %q", line)
 		}
-		return Observation{Exists: true, Command: f[1], LastActivity: time.Unix(epoch, 0)}, nil
+		found = append(found, Observation{Exists: true, Command: f[2], LastActivity: time.Unix(epoch, 0)})
+		names = append(names, f[1])
 	}
-	return Observation{}, nil
+	return found, names, nil
+}
+
+func (t Tmux) Observe(window string) (Observation, error) {
+	found, names, err := t.windows()
+	if err != nil {
+		return Observation{}, err
+	}
+	var match Observation
+	count := 0
+	for i, name := range names {
+		if name == window {
+			match = found[i]
+			count++
+		}
+	}
+	// Two windows with one name cannot be told apart: typing into "the"
+	// worker could reach either.
+	if count > 1 {
+		return Observation{}, fmt.Errorf("%d windows named %s in tmux session %s: close the extra one", count, window, Session)
+	}
+	return match, nil
 }
 
 func (t Tmux) Capture(window string, lines int) (string, error) {
@@ -102,11 +137,20 @@ func (t Tmux) Capture(window string, lines int) (string, error) {
 }
 
 func (t Tmux) Open(window, dir string) error {
+	_, names, err := t.windows()
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if name == window {
+			return fmt.Errorf("window %s already exists in tmux session %s", window, Session)
+		}
+	}
 	if !t.hasSession() {
 		_, err := t.run("new-session", "-d", "-s", Session, "-n", window, "-c", dir)
 		return err
 	}
-	_, err := t.run("new-window", "-d", "-n", window, "-c", dir, "-t", "="+Session+":")
+	_, err = t.run("new-window", "-d", "-n", window, "-c", dir, "-t", "="+Session+":")
 	return err
 }
 

@@ -49,7 +49,9 @@ echo "@@load $(uptime)"
 echo "@@disk $(df -Pk "$HOME" | tail -n 1)"
 `
 
-const footer = `tmux list-windows -a -F '@@win	#{window_activity}	#{session_name}	#{pane_current_command}	#{window_name}' 2>/dev/null
+// The window line uses a printable separator: a tmux client with no UTF-8
+// locale prints "_" in place of a tab.
+const footer = `tmux list-windows -a -F '@@win|#{window_activity}|#{session_name}|#{pane_current_command}|#{window_name}' 2>/dev/null
 s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.HeartbeatFile + `" ] && echo "@@heartbeat $(cat "$s/` + runlog.HeartbeatFile + `")"
 [ -f "$s/` + runlog.RunsFile + `" ] && tail -n 200 "$s/` + runlog.RunsFile + `" | sed 's/^/@@run /'
@@ -142,7 +144,7 @@ func Parse(out string, checks []config.Check) (Result, error) {
 }
 
 func parseWindow(line string) (Window, bool) {
-	f := strings.SplitN(line, "\t", 5)
+	f := strings.SplitN(line, "|", 5)
 	if len(f) != 5 || f[0] != "@@win" {
 		return Window{}, false
 	}
