@@ -21,6 +21,20 @@ type Issue struct {
 	URL       string    `json:"url"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	Comments  []Comment `json:"comments"`
+	Labels    []Label   `json:"labels"`
+}
+
+type Label struct {
+	Name string `json:"name"`
+}
+
+// LabelNames returns the issue's labels as plain names.
+func (i Issue) LabelNames() []string {
+	names := make([]string, len(i.Labels))
+	for n, l := range i.Labels {
+		names[n] = l.Name
+	}
+	return names
 }
 
 type Comment struct {
@@ -38,7 +52,7 @@ type GH struct{}
 
 func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 	args := []string{"issue", "list", "--repo", src.Repo, "--state", "open", "--limit", "200",
-		"--json", "number,title,url,updatedAt,comments"}
+		"--json", "number,title,url,updatedAt,comments,labels"}
 	if src.Label != "" {
 		args = append(args, "--label", src.Label)
 	}

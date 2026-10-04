@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -21,22 +22,94 @@ const LocalHost = "local"
 const DefaultTaskTimeout = time.Hour
 
 type Config struct {
-	Defaults Defaults  `yaml:"defaults"`
-	Machines []Machine `yaml:"machines"`
-	Signals  []Signal  `yaml:"signals"`
+	Defaults   Defaults   `yaml:"defaults"`
+	Machines   []Machine  `yaml:"machines"`
+	Signals    []Signal   `yaml:"signals"`
+	Supervisor Supervisor `yaml:"supervisor"`
 }
+
+// Supervisor sets how the agent checks in on a machine's workers.
+type Supervisor struct {
+	// Command reads a prompt on stdin and prints the reviewer's answer.
+	Command string `yaml:"command"`
+	// CacheTTL is how long a worker's prompt cache stays warm after its last
+	// request. shed cannot see the cache; this is what the owner's plan gives.
+	CacheTTL string `yaml:"cache_ttl"`
+	// ScopeEvery is how often a busy worker is checked against its brief.
+	ScopeEvery string `yaml:"scope_every"`
+	// WhenCold says what a nudge does to a worker whose cache has expired.
+	WhenCold string `yaml:"when_cold"`
+	// ClearCommand, typed into a worker, empties its context.
+	ClearCommand string `yaml:"clear_command"`
+	// ModelCommand, typed into a worker, switches its model. {model} is
+	// replaced with the model's name.
+	ModelCommand string `yaml:"model_command"`
+	Models       Models `yaml:"models"`
+}
+
+// Models picks the model for an issue from its labels, so the cost of the
+// model matches the difficulty of the work.
+type Models struct {
+	// Default is the model for an issue with no model label.
+	Default string `yaml:"default"`
+	// Labels maps an issue label to a model.
+	Labels map[string]string `yaml:"labels"`
+}
+
+// For returns the model for an issue with these labels, or "" when no model
+// is configured.
+func (m Models) For(labels []string) string {
+	for _, label := range labels {
+		if model, ok := m.Labels[label]; ok {
+			return model
+		}
+	}
+	return m.Default
+}
+
+// Values of Supervisor.WhenCold.
+const (
+	ColdClear  = "clear"  // start from an empty context and re-read the brief
+	ColdResume = "resume" // keep the context and pay to read it again
+)
+
+const (
+	DefaultReviewCommand = "claude -p --model sonnet"
+	DefaultCacheTTL      = 5 * time.Minute
+	DefaultScopeEvery    = 30 * time.Minute
+	DefaultWorkerCommand = "claude"
+	DefaultClearCommand  = "/clear"
+	DefaultModelCommand  = "/model {model}"
+	modelPlaceholder     = "{model}"
+)
 
 type Defaults struct {
 	Checks []Check `yaml:"checks"`
+	// StandingOrders are the owner's rules for every worker on every machine:
+	// how to build, what never to do. They are added to each worker's brief.
+	StandingOrders string `yaml:"standing_orders"`
 }
 
 type Machine struct {
-	Name   string        `yaml:"name"`
-	Host   string        `yaml:"host"`
-	Init   string        `yaml:"init"`
-	Checks []Check       `yaml:"checks"`
-	Issues []IssueSource `yaml:"issues"`
-	Tasks  []Task        `yaml:"tasks"`
+	Name    string        `yaml:"name"`
+	Host    string        `yaml:"host"`
+	Init    string        `yaml:"init"`
+	Checks  []Check       `yaml:"checks"`
+	Issues  []IssueSource `yaml:"issues"`
+	Tasks   []Task        `yaml:"tasks"`
+	Workers []Worker      `yaml:"workers"`
+}
+
+// Worker is a long-running agent session that the machine's agent keeps
+// alive and supervises. It runs in tmux window shed:<name>.
+type Worker struct {
+	Name string `yaml:"name"`
+	// Dir is the working directory; a leading ~/ is the user's home.
+	Dir string `yaml:"dir"`
+	// Command starts the session. The first prompt is appended as one argument.
+	Command string `yaml:"command"`
+	// Brief is the worker's scope: what to work on and what to leave alone.
+	Brief string `yaml:"brief"`
 }
 
 // Check is a command that must exit 0 for the machine to be ready for work.
@@ -188,6 +261,41 @@ func (c *Config) validate() error {
 				}
 			}
 		}
+		workers := map[string]bool{}
+		for _, w := range m.Workers {
+			if !nameRE.MatchString(w.Name) {
+				fail("%s: worker name %q must match %s", where, w.Name, nameRE)
+			}
+			if workers[w.Name] {
+				fail("%s: duplicate worker %q", where, w.Name)
+			}
+			workers[w.Name] = true
+			if w.Dir == "" {
+				fail("%s: worker %q has no dir", where, w.Name)
+			}
+			if strings.TrimSpace(w.Brief) == "" {
+				fail("%s: worker %q has no brief", where, w.Name)
+			}
+		}
+	}
+	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery} {
+		if value == "" {
+			continue
+		}
+		if d, err := time.ParseDuration(value); err != nil || d <= 0 {
+			fail("supervisor: %s %q is not a positive duration such as 1h", name, value)
+		}
+	}
+	if w := c.Supervisor.WhenCold; w != "" && w != ColdClear && w != ColdResume {
+		fail("supervisor: when_cold %q must be %s or %s", w, ColdClear, ColdResume)
+	}
+	if mc := c.Supervisor.ModelCommand; mc != "" && !strings.Contains(mc, modelPlaceholder) {
+		fail("supervisor: model_command %q must contain %s", mc, modelPlaceholder)
+	}
+	for label, model := range c.Supervisor.Models.Labels {
+		if label == "" || model == "" {
+			fail("supervisor: models.labels needs a label and a model in every entry")
+		}
 	}
 	for _, s := range c.Signals {
 		if s.Name == "" || s.Ask == "" {
@@ -227,11 +335,60 @@ func (m Machine) Command(run string) string {
 	return m.Init + "\n" + run
 }
 
+// CommandOrDefault returns the command that starts the worker's session.
+func (w Worker) CommandOrDefault() string {
+	if w.Command == "" {
+		return DefaultWorkerCommand
+	}
+	return w.Command
+}
+
+func (s Supervisor) CommandOrDefault() string {
+	if s.Command == "" {
+		return DefaultReviewCommand
+	}
+	return s.Command
+}
+
+func (s Supervisor) CacheTTLOrDefault() time.Duration {
+	return durationOr(s.CacheTTL, DefaultCacheTTL)
+}
+
+func (s Supervisor) ScopeEveryOrDefault() time.Duration {
+	return durationOr(s.ScopeEvery, DefaultScopeEvery)
+}
+
+// ClearWhenCold reports whether a nudge to a cold worker clears its context.
+func (s Supervisor) ClearWhenCold() bool {
+	return s.WhenCold != ColdResume
+}
+
+func (s Supervisor) ClearCommandOrDefault() string {
+	if s.ClearCommand == "" {
+		return DefaultClearCommand
+	}
+	return s.ClearCommand
+}
+
+// ModelCommandFor returns the line that switches a worker to the model.
+func (s Supervisor) ModelCommandFor(model string) string {
+	command := s.ModelCommand
+	if command == "" {
+		command = DefaultModelCommand
+	}
+	return strings.ReplaceAll(command, modelPlaceholder, model)
+}
+
+// durationOr parses a duration that validation has already accepted.
+func durationOr(value string, fallback time.Duration) time.Duration {
+	if d, err := time.ParseDuration(value); err == nil {
+		return d
+	}
+	return fallback
+}
+
 // TimeoutOrDefault returns the task's timeout. Validation has already
 // rejected a value that does not parse.
 func (t Task) TimeoutOrDefault() time.Duration {
-	if d, err := time.ParseDuration(t.Timeout); err == nil {
-		return d
-	}
-	return DefaultTaskTimeout
+	return durationOr(t.Timeout, DefaultTaskTimeout)
 }

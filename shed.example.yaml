@@ -9,6 +9,13 @@ defaults:
       run: git config --global user.email
     - name: claude
       run: command -v claude
+    - name: tmux
+      run: command -v tmux
+  # Optional. Rules for every worker on every machine. They go into each
+  # worker's brief, and the supervisor judges scope against them.
+  standing_orders: |
+    Open a pull request for every change. Never merge it yourself.
+    Never deploy. Never weaken a test to make it pass.
 
 machines:
   - name: linux-box
@@ -22,6 +29,15 @@ machines:
       # Open issues with this label are this machine's backlog.
       - repo: my-org/my-app
         label: "machine:linux-box"
+    workers:
+      # A long-running agent session that the machine's agent starts, keeps
+      # alive and checks in on. It runs in tmux window shed:app.
+      - name: app
+        dir: ~/Projects/my-app
+        command: claude --permission-mode auto
+        brief: |
+          Work the issues in your queue. Stay inside the audit log and export
+          features. Do not change the billing module.
     tasks:
       - name: nightly-deps
         schedule: "0 3 * * *"
@@ -38,6 +54,28 @@ machines:
       - name: prune-worktrees
         schedule: "@every 6h"
         run: cd ~/work/my-app && git worktree prune
+
+# Optional. How the agent supervises workers. These are the defaults, except
+# `models`, which is off unless you set it.
+supervisor:
+  # The reviewer: any command that reads a prompt on stdin and prints an answer.
+  command: claude -p --model sonnet
+  # How long a worker's prompt cache stays warm on your plan. shed cannot see
+  # the cache; a worker that has been silent longer than this is "cold".
+  cache_ttl: 5m
+  # How often a busy worker is checked against its brief.
+  scope_every: 30m
+  # A nudge to a cold worker clears its context first ("clear"), or keeps it
+  # and pays to read it again ("resume").
+  when_cold: clear
+  # What to type into a worker to empty its context and to switch its model.
+  clear_command: /clear
+  model_command: "/model {model}"
+  # The model for an issue, from its labels.
+  models:
+    default: sonnet
+    labels:
+      "model:opus": opus
 
 # Optional. These are the defaults: phrases in issue comments that mean the
 # issue waits on you. A signal opens when a comment has the `ask` phrase and

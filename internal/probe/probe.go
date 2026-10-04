@@ -25,6 +25,8 @@ type Result struct {
 	// Heartbeat is zero when no agent has ever run on the machine.
 	Heartbeat time.Time       `json:"heartbeat,omitzero"`
 	Runs      []runlog.Record `json:"-"`
+	// Checkins are the supervisor's recent check-ins, oldest first.
+	Checkins []runlog.Checkin `json:"-"`
 }
 
 type CheckResult struct {
@@ -51,6 +53,7 @@ const footer = `tmux list-windows -a -F '@@win	#{window_activity}	#{session_name
 s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.HeartbeatFile + `" ] && echo "@@heartbeat $(cat "$s/` + runlog.HeartbeatFile + `")"
 [ -f "$s/` + runlog.RunsFile + `" ] && tail -n 200 "$s/` + runlog.RunsFile + `" | sed 's/^/@@run /'
+[ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 100 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
 echo "@@end"
 `
 
@@ -119,6 +122,10 @@ func Parse(out string, checks []config.Check) (Result, error) {
 			// A line the agent was still writing is skipped, not fatal.
 			if r, err := runlog.ParseLine(rest); err == nil {
 				res.Runs = append(res.Runs, r)
+			}
+		case "@@checkin":
+			if c, err := runlog.ParseCheckin(rest); err == nil {
+				res.Checkins = append(res.Checkins, c)
 			}
 		case "@@end":
 			complete = true

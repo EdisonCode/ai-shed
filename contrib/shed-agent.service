@@ -1,10 +1,13 @@
 [Unit]
-Description=shed agent: runs this machine's scheduled tasks
+Description=shed agent: supervises this machine's workers and runs its scheduled tasks
 After=network-online.target
 
 [Service]
 ExecStart=%h/.local/bin/shed agent
 Restart=always
+# The agent may start the tmux server that holds the workers. Stopping or
+# restarting the agent must not take the workers down with it.
+KillMode=process
 RestartSec=10
 
 [Install]

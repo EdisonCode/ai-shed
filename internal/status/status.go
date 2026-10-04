@@ -48,6 +48,8 @@ type MachineReport struct {
 	Probe  *probe.Result `json:"probe,omitempty"`
 	Issues []IssueStatus `json:"issues"`
 	Tasks  []TaskStatus  `json:"tasks"`
+	// Workers are the supervised workers from the fleet file.
+	Workers []WorkerStatus `json:"workers"`
 	// Attention lists what needs the owner. Empty means the machine is on track.
 	Attention []string `json:"attention"`
 }
@@ -68,6 +70,12 @@ type TaskStatus struct {
 	State    string         `json:"state"`
 	Missed   bool           `json:"missed,omitempty"`
 	Last     *runlog.Record `json:"last,omitempty"`
+}
+
+type WorkerStatus struct {
+	Name string `json:"name"`
+	// Last is the supervisor's latest check-in; nil before the first one.
+	Last *runlog.Checkin `json:"last,omitempty"`
 }
 
 type Collector struct {
@@ -140,7 +148,9 @@ func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues
 		if res.DiskUsedPct >= diskFullPct {
 			attend("disk is %d%% full", res.DiskUsedPct)
 		}
-		assessTasks(m, *res, &report, attend)
+		agentUp := assessAgent(m, *res, attend)
+		assessTasks(m, *res, agentUp, &report, attend)
+		assessWorkers(m, *res, &report, attend)
 	}
 
 	queued, working := 0, 0
@@ -171,20 +181,45 @@ func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues
 	return report
 }
 
-func assessTasks(m config.Machine, res probe.Result, report *MachineReport, attend func(string, ...any)) {
-	if len(m.Tasks) == 0 {
-		return
+// assessAgent reports whether the agent is alive. A machine with no tasks
+// and no workers needs no agent.
+func assessAgent(m config.Machine, res probe.Result, attend func(string, ...any)) bool {
+	if len(m.Tasks)+len(m.Workers) == 0 {
+		return true
 	}
-	agentUp := true
+	idle := fmt.Sprintf("%d task(s) will not run and %d worker(s) are not supervised", len(m.Tasks), len(m.Workers))
 	switch age := res.Now.Sub(res.Heartbeat); {
 	case res.Heartbeat.IsZero():
-		agentUp = false
-		attend("agent is not running: %d scheduled task(s) will not run", len(m.Tasks))
+		attend("agent is not running: %s", idle)
+		return false
 	case age > heartbeatStale:
-		agentUp = false
-		attend("agent stopped %s ago: %d scheduled task(s) will not run", Short(age), len(m.Tasks))
+		attend("agent stopped %s ago: %s", Short(age), idle)
+		return false
 	}
+	return true
+}
 
+// assessWorkers reports the supervisor's latest word on each worker.
+func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, attend func(string, ...any)) {
+	latest := runlog.LatestCheckins(res.Checkins)
+	for _, w := range m.Workers {
+		st := WorkerStatus{Name: w.Name}
+		if c, ok := latest[w.Name]; ok {
+			st.Last = &c
+			switch c.Verdict {
+			case runlog.VerdictNeedsOwner:
+				attend("worker %s needs you: %s", w.Name, c.Reason)
+			case runlog.VerdictStuck:
+				attend("worker %s is stuck: %s", w.Name, c.Reason)
+			case runlog.VerdictError:
+				attend("worker %s could not be checked: %s", w.Name, c.Reason)
+			}
+		}
+		report.Workers = append(report.Workers, st)
+	}
+}
+
+func assessTasks(m config.Machine, res probe.Result, agentUp bool, report *MachineReport, attend func(string, ...any)) {
 	latest := runlog.Latest(res.Runs)
 	for _, t := range m.Tasks {
 		st := TaskStatus{Name: t.Name, Schedule: t.Schedule, State: TaskNever}
