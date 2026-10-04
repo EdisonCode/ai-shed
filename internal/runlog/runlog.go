@@ -100,6 +100,11 @@ type Checkin struct {
 	// Issue and Model are set when the message gave the worker an issue.
 	Issue int    `json:"issue,omitempty"`
 	Model string `json:"model,omitempty"`
+	// Activity and Queue record what a review saw: the time of the window's
+	// last output, and a digest of the queue. A restarted agent reads them
+	// back, so it does not review again what it has already reviewed.
+	Activity time.Time `json:"activity,omitzero"`
+	Queue    string    `json:"queue,omitempty"`
 }
 
 func AppendCheckin(dir string, c Checkin) error {

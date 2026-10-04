@@ -6,6 +6,8 @@ package supervisor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -43,11 +45,12 @@ const (
 	// needs no permission.
 	BriefFile = ".shed/BRIEF.md"
 
-	startPrompt   = "You are an unattended worker. Read " + BriefFile + " in full and carry it out."
-	briefChanged  = "Your brief changed. Read " + BriefFile + " again and follow it."
-	reorient      = "Your context was cleared. Read " + BriefFile + " first, then check git status, git log and the issue comments to see where the work stands. Then: "
-	modelTold     = " The model for this issue is %s."
-	clearSettling = 2 * time.Second
+	startPrompt      = "You are an unattended worker. Read " + BriefFile + " in full and carry it out."
+	briefChanged     = "Your brief changed. Read " + BriefFile + " again and follow it."
+	briefChangedThen = "Your brief changed. Read " + BriefFile + " again. Then: "
+	reorient         = "Your context was cleared. Read " + BriefFile + " first, then check git status, git log and the issue comments to see where the work stands. Then: "
+	modelTold        = " The model for this issue is %s."
+	clearSettling    = 2 * time.Second
 )
 
 // Check-in kinds: why the supervisor looked.
@@ -81,11 +84,15 @@ type Supervisor struct {
 	workers map[string]*workerState
 }
 
-// workerState is what the supervisor remembers between ticks. It is lost on
-// an agent restart; the cost is one extra check-in per worker.
+// workerState is what the supervisor remembers between ticks. A new agent
+// rebuilds it from the check-in log, so a restart or a reloaded fleet file
+// costs a working worker nothing: no extra review and no repeated message.
 type workerState struct {
 	briefChecked bool
-	lastReview   time.Time
+	// briefStale is set when the brief changed while the worker had an issue
+	// in hand. It is told with the next message, not in the middle of work.
+	briefStale bool
+	lastReview time.Time
 	// reviewedActivity is the window's activity time at the last review. An
 	// idle worker is reviewed once per silence, not once per tick.
 	reviewedActivity time.Time
@@ -113,7 +120,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 	for _, w := range s.Machine.Workers {
 		st := s.workers[w.Name]
 		if st == nil {
-			st = &workerState{issue: s.lastIssue(w.Name)}
+			st = s.recover(w.Name)
 			s.workers[w.Name] = st
 		}
 		now := s.Now()
@@ -124,6 +131,11 @@ func (s *Supervisor) Tick(ctx context.Context) {
 		if err == nil {
 			st.lastError = ""
 			continue
+		}
+		// The agent is stopping or reloading. A check it cut short is not a
+		// failure of the worker.
+		if ctx.Err() != nil {
+			return
 		}
 		st.notBefore = now.Add(retryAfter)
 		// The same failure is recorded once, not every retry.
@@ -150,7 +162,13 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 			return err
 		}
 		st.briefChecked = true
-		if changed {
+		switch {
+		case !changed:
+		case st.issue != 0:
+			st.briefStale = true
+			s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindBrief, Verdict: runlog.VerdictOnTrack,
+				Reason: fmt.Sprintf("the brief was edited; it is on #%d and will be told with its next message", st.issue)})
+		default:
 			if err := s.Terminal.Send(w.Name, briefChanged); err != nil {
 				return err
 			}
@@ -239,7 +257,8 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	st.lastReview, st.reviewedActivity = now, obs.LastActivity
 	st.lastQueueCheck, st.queueSeen = now, fingerprint(queue)
 
-	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: verdict.Verdict, Reason: verdict.Reason}
+	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: verdict.Verdict, Reason: verdict.Reason,
+		Activity: obs.LastActivity, Queue: st.queueSeen}
 	if verdict.Verdict == runlog.VerdictNudge {
 		st.nudges = within(st.nudges, now)
 		if len(st.nudges) >= maxNudges {
@@ -263,12 +282,18 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 			// The first issue of a session lands on a context that is
 			// already empty.
 			fresh := newIssue && w.FreshPerIssue && st.issue != 0
-			if switchModel || fresh || (c.Cold && s.Settings.ClearWhenCold()) {
+			cleared := switchModel || fresh || (c.Cold && s.Settings.ClearWhenCold())
+			switch {
+			case cleared:
 				if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
 					return err
 				}
+				// This message already sends the worker back to its brief.
 				c.Message = reorient + verdict.Message
+			case st.briefStale:
+				c.Message = briefChangedThen + verdict.Message
 			}
+			st.briefStale = false
 			if switchModel {
 				if err := s.command(w, s.Settings.ModelCommandFor(model)); err != nil {
 					return err
@@ -303,16 +328,47 @@ func (s *Supervisor) command(w config.Worker, line string) error {
 	return nil
 }
 
-// lastIssue finds, in the check-in log, the issue the worker was handed
-// since its session last started. It lets an agent restart tell a nudge
-// about the issue in hand from a hand-over.
-func (s *Supervisor) lastIssue(worker string) int {
+// recover rebuilds a worker's state from the check-in log.
+func (s *Supervisor) recover(worker string) *workerState {
+	st := &workerState{}
 	checkins, err := runlog.ReadCheckins(s.StateDir)
 	if err != nil {
 		s.Logf("worker %s: %v", worker, err)
-		return 0
+		return st
 	}
-	return runlog.IssueInHand(checkins, worker)
+	for _, c := range checkins {
+		if c.Worker != worker {
+			continue
+		}
+		st.recent = append(st.recent, c)
+		switch {
+		case c.Verdict == runlog.VerdictStarted:
+			// A new session: nothing in hand, the model its command gave it.
+			st.issue, st.model, st.briefStale = 0, "", false
+			st.starts = append(st.starts, c.Time)
+			st.lastReview = c.Time
+		case c.Kind == KindBrief:
+			st.briefStale = !c.Sent
+		case c.Kind == KindIdle || c.Kind == KindScope || c.Kind == KindQueue:
+			st.lastReview, st.lastQueueCheck = c.Time, c.Time
+			st.reviewedActivity, st.queueSeen = c.Activity, c.Queue
+			if !c.Sent {
+				continue
+			}
+			st.nudges = append(st.nudges, c.Time)
+			st.briefStale = false
+			if c.Issue != 0 {
+				st.issue = c.Issue
+			}
+			if c.Model != "" {
+				st.model = c.Model
+			}
+		}
+	}
+	if len(st.recent) > recentKept {
+		st.recent = st.recent[len(st.recent)-recentKept:]
+	}
+	return st
 }
 
 // modelOf returns the model of the queue item with this number.
@@ -347,14 +403,15 @@ func (s *Supervisor) queue(ctx context.Context) ([]QueueItem, error) {
 	return items, nil
 }
 
-// fingerprint changes when an issue joins or leaves the queue, or when what
-// an issue waits on changes (for example the owner answered).
+// fingerprint is a digest of the queue. It changes when an issue joins or
+// leaves, or when what an issue waits on changes (for example the owner
+// answered).
 func fingerprint(queue []QueueItem) string {
-	var b strings.Builder
+	h := sha256.New()
 	for _, q := range queue {
-		fmt.Fprintf(&b, "%s#%d:%s;", q.Repo, q.Number, strings.Join(q.Waiting, ","))
+		fmt.Fprintf(h, "%s#%d:%s;", q.Repo, q.Number, strings.Join(q.Waiting, ","))
 	}
-	return b.String()
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 func (s *Supervisor) record(st *workerState, c runlog.Checkin) {

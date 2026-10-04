@@ -298,6 +298,8 @@ func lastLine(s string) string {
 
 // Short formats a duration for a status line: 45s, 12m, 3h, 5d.
 func Short(d time.Duration) string {
+	// Two clocks a second apart must not print a negative age.
+	d = max(d, 0)
 	switch {
 	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()))

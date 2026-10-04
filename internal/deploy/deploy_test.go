@@ -157,7 +157,7 @@ func (s *scriptedRunner) Run(_ context.Context, _ config.Machine, command string
 }
 
 func TestRestartAgentUsesThePlatformsServiceManager(t *testing.T) {
-	for platform, want := range map[string]string{"linux-amd64": "systemctl --user restart shed-agent", "darwin-arm64": "launchctl kickstart -k"} {
+	for platform, want := range map[string]string{"linux-amd64": "systemctl --user restart shed-agent", "darwin-arm64": "launchctl kill SIGTERM"} {
 		r := &scriptedRunner{out: "restarted\n"}
 		restarted, err := RestartAgent(context.Background(), r, box, platform)
 		if err != nil || !restarted || !strings.Contains(r.commands[0], want) {

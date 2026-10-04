@@ -70,6 +70,8 @@ type fixture struct {
 	lister   *fakeLister
 	now      time.Time
 	dir      string
+
+	reviewsBefore int
 }
 
 // tick moves the clock forward and runs one supervisor tick.
@@ -550,7 +552,7 @@ func TestNudgeAboutTheIssueInHandKeepsTheContext(t *testing.T) {
 func TestIssueInHandIsRememberedAcrossAnAgentRestart(t *testing.T) {
 	f := freshWorker(t, config.Supervisor{CacheTTL: "1h"}, assign(12), assign(12), assign(13))
 	f.tick(2 * time.Minute)
-	f.Supervisor.workers = nil // the agent restarted; the worker did not
+	f.restartAgent() // the agent restarted; the worker did not
 
 	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
 		t.Fatalf("after restart, same issue: sent = %q, want no clear", sent)
@@ -590,5 +592,137 @@ func TestWorkerThatKeepsItsContextIsNotClearedBetweenIssues(t *testing.T) {
 	f.tick(2 * time.Minute)
 	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
 		t.Fatalf("sent = %q", sent)
+	}
+}
+
+// restartAgent stands for a new agent process, or a reloaded fleet file: the
+// supervisor's memory is gone and only the check-in log is left.
+func (f *fixture) restartAgent() {
+	f.Supervisor.workers = nil
+	f.reviewsBefore = len(f.reviewer.prompts)
+	f.term.sent = nil
+}
+
+// reviews is how many times the reviewer was asked since the last restart.
+func (f *fixture) reviews() int {
+	return len(f.reviewer.prompts) - f.reviewsBefore
+}
+
+func TestRestartCostsARestingWorkerNothing(t *testing.T) {
+	f := started(t, config.Supervisor{}, Verdict{Verdict: runlog.VerdictDone, Reason: "queue is empty"})
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	f.tick(time.Minute)
+	f.tick(10 * time.Minute)
+
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("after a restart: %d review(s), sent %q; want none, the worker was already reviewed", f.reviews(), f.term.sent)
+	}
+}
+
+func TestRestartCostsABusyWorkerNothing(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	f.tick(2 * time.Minute) // handed #12
+	f.restartAgent()
+	f.term.running(f.now.Add(5 * time.Minute)) // working on it
+	f.tick(5 * time.Minute)
+
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("after a restart: %d review(s), sent %q; want none until the scope check is due", f.reviews(), f.term.sent)
+	}
+}
+
+func TestRestartDoesNotResetTheNudgeLimit(t *testing.T) {
+	f := started(t, config.Supervisor{}, nudge("Continue with #12."))
+	for range maxNudges {
+		f.term.running(f.now)
+		f.tick(2 * time.Minute)
+	}
+	f.restartAgent()
+	f.term.running(f.now)
+	f.tick(2 * time.Minute)
+
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; a restart must not buy a stuck worker three more nudges", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictStuck {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestRestartRemembersTheModel(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h", Models: models}, assign(12), assign(13))
+	f.lister.issues = append(f.lister.issues, backlog.Issue{Repo: "org/app", Number: 13, Title: "Another sonnet job"})
+	f.tick(2 * time.Minute) // switched to sonnet for #12
+	f.restartAgent()
+
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; #13 is on the same model, so nothing should be cleared or switched", sent)
+	}
+}
+
+func TestBriefEditDoesNotInterruptAWorkerMidIssue(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), nudge("Run the failing test again with -v."))
+	f.tick(2 * time.Minute) // handed #12
+	f.restartAgent()        // a deploy brought an edited brief
+	f.Machine.Workers[0].Brief = "Fix export bugs only."
+	f.term.running(f.now.Add(5 * time.Minute))
+	f.tick(5 * time.Minute)
+
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; a worker in the middle of an issue must not be interrupted", f.term.sent)
+	}
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	if !strings.Contains(string(brief), "Fix export bugs only.") {
+		t.Fatal("the brief file was not rewritten")
+	}
+
+	f.tick(2 * time.Minute) // it goes quiet; the next message carries the notice
+	want := "Your brief changed. Read .shed/BRIEF.md again. Then: Run the failing test again with -v."
+	if !slices.Equal(f.term.sent, []string{want}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+}
+
+func TestPendingBriefNoticeSurvivesASecondRestart(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), nudge("Carry on."))
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	f.Machine.Workers[0].Brief = "Fix export bugs only."
+	f.term.running(f.now.Add(5 * time.Minute))
+	f.tick(5 * time.Minute)
+	f.restartAgent() // and another deploy before the worker went quiet
+	f.tick(2 * time.Minute)
+
+	if len(f.term.sent) != 1 || !strings.HasPrefix(f.term.sent[0], "Your brief changed.") {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+}
+
+// cancelledReviewer behaves as a reviewer command killed by a stopping agent.
+type cancelledReviewer struct{ cancel context.CancelFunc }
+
+func (c cancelledReviewer) Review(ctx context.Context, _ string) (Verdict, error) {
+	c.cancel()
+	return Verdict{}, ctx.Err()
+}
+
+func TestCheckCutShortByAStoppingAgentIsNotAFailure(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	before := len(f.checkins(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	f.Reviewer = cancelledReviewer{cancel}
+	f.now = f.now.Add(2 * time.Minute)
+	f.Tick(ctx)
+
+	if got := len(f.checkins(t)); got != before {
+		t.Fatalf("%d check-in(s) recorded for a check the agent itself cut short: %+v", got-before, f.lastCheckin(t))
+	}
+	// The next agent reviews the worker at once: nothing was backed off.
+	f.Reviewer = f.reviewer
+	f.restartAgent()
+	f.tick(30 * time.Second)
+	if f.reviews() != 1 {
+		t.Fatalf("reviews after the restart = %d, want 1", f.reviews())
 	}
 }

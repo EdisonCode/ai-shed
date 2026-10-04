@@ -110,12 +110,15 @@ func writeRemote(ctx context.Context, r probe.Runner, m config.Machine, path str
 	return nil
 }
 
-// restartCommands restart the agent service where it is installed. Each
-// prints "restarted", or "absent" when the service was never set up.
+// restartCommands restart the agent service where it is installed, by asking
+// it to stop: the agent finishes a message it is typing to a worker before it
+// exits. Each prints "restarted", or "absent" when the service was never set up.
 var restartCommands = map[string]string{
 	// Over SSH there is no session bus address; the runtime directory finds it.
-	"linux":  `export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; systemctl --user cat ` + UnitName + ` >/dev/null 2>&1 || { echo absent; exit 0; }; systemctl --user restart ` + UnitName + ` && echo restarted`,
-	"darwin": `s="gui/$(id -u)/` + AgentLabel + `"; launchctl print "$s" >/dev/null 2>&1 || { echo absent; exit 0; }; launchctl kickstart -k "$s" && echo restarted`,
+	"linux": `export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; systemctl --user cat ` + UnitName + ` >/dev/null 2>&1 || { echo absent; exit 0; }; systemctl --user restart ` + UnitName + ` && echo restarted`,
+	// A TERM lets the agent finish what it is typing; launchd then starts it
+	// again (KeepAlive). kickstart -k would kill it outright.
+	"darwin": `s="gui/$(id -u)/` + AgentLabel + `"; launchctl print "$s" >/dev/null 2>&1 || { echo absent; exit 0; }; launchctl kill SIGTERM "$s" && echo restarted`,
 }
 
 // RestartAgent restarts the machine's agent so it runs a newly installed
