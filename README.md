@@ -260,6 +260,14 @@ brief, deploy, and pick up the results. It is plain markdown.
 - **Claude Code:** `cp -r skills/shed ~/.claude/skills/`
 - **Other tools:** give the file to the agent, or include it from your `AGENTS.md`.
 
+## The repository matters more than the supervisor
+
+shed keeps workers moving; it does not make their work safe to accept.
+[`docs/REPO-RECIPE.md`](docs/REPO-RECIPE.md) is the author's recipe for a
+repository that unattended workers can work in: a protected main branch, pull
+requests only, exhaustive CI, staging with browser smoke tests, and owner
+sign-off before production.
+
 ## About this project
 
 ai-shed is built with AI and built for working with AI. Its author is a solo

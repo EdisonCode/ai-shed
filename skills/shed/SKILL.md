@@ -105,6 +105,10 @@ Run this as a checklist and report each line.
 Do this with the owner, not for them: it starts sessions that spend their
 tokens.
 
+0. Check each repository the machine will work in against
+   `docs/REPO-RECIPE.md` in the ai-shed repo: protected main branch, required
+   CI, no production credentials on the machine. Tell the owner what is
+   missing before a worker starts there.
 1. Add the machine to the fleet file. `shed validate`.
 2. `shed status` must show it reachable with every check `ok`. Fix a failed
    check on the machine before going on. A worker needs `tmux`, `gh` logged
