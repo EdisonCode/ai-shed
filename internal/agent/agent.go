@@ -1,5 +1,5 @@
 // Package agent runs on a worker machine. It runs the machine's scheduled
-// tasks and records each run for the watcher to read.
+// tasks, supervises its workers, and records both for the watcher to read.
 package agent
 
 import (
@@ -10,17 +10,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/runlog"
+	"github.com/edisoncode/ai-shed/internal/supervisor"
 )
 
 const (
 	heartbeatEvery = 30 * time.Second
+	superviseEvery = 30 * time.Second
 	// outputTail is how much of a task's output a run record keeps.
 	outputTail = 2000
 	// exitNotRun is the exit code of a run that timed out or could not start.
@@ -34,14 +38,15 @@ type Agent struct {
 	Logf       func(format string, args ...any)
 }
 
-// Run schedules the machine's tasks until ctx is cancelled. A config file
-// that changes on disk is loaded again; a broken edit keeps the old schedule.
+// Run schedules the machine's tasks and supervises its workers until ctx is
+// cancelled. A config file that changes on disk is loaded again; a broken
+// edit keeps the old schedule.
 func (a Agent) Run(ctx context.Context) error {
-	scheduler, modified, err := a.load(ctx)
+	current, modified, err := a.load(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { <-scheduler.Stop().Done() }()
+	defer func() { <-current.stop().Done() }()
 
 	ticker := time.NewTicker(heartbeatEvery)
 	defer ticker.Stop()
@@ -65,31 +70,45 @@ func (a Agent) Run(ctx context.Context) error {
 			continue
 		}
 		// Runs in progress finish under the old scheduler.
-		scheduler.Stop()
-		scheduler = next
+		current.stop()
+		current = next
 	}
 }
 
-// load reads the config and starts a scheduler for this machine's tasks.
-func (a Agent) load(ctx context.Context) (*cron.Cron, time.Time, error) {
+// loaded is what one version of the config started.
+type loaded struct {
+	scheduler      *cron.Cron
+	stopSupervisor context.CancelFunc
+}
+
+func (l loaded) stop() context.Context {
+	l.stopSupervisor()
+	return l.scheduler.Stop()
+}
+
+// load reads the config, starts a scheduler for this machine's tasks and a
+// supervisor for its workers.
+func (a Agent) load(ctx context.Context) (loaded, time.Time, error) {
 	info, err := os.Stat(a.ConfigPath)
 	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("read config: %w", err)
+		return loaded{}, time.Time{}, fmt.Errorf("read config: %w", err)
 	}
 	cfg, err := config.Load(a.ConfigPath)
 	if err != nil {
-		return nil, time.Time{}, err
+		return loaded{}, time.Time{}, err
 	}
 	m, ok := cfg.Machine(a.Machine)
 	if !ok {
-		return nil, time.Time{}, fmt.Errorf("machine %q is not in %s", a.Machine, a.ConfigPath)
+		return loaded{}, time.Time{}, fmt.Errorf("machine %q is not in %s", a.Machine, a.ConfigPath)
 	}
+	adoptPath(m)
+
 	// A task that is still running when its next time comes is skipped.
 	scheduler := cron.New(cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)))
 	for _, t := range m.Tasks {
 		schedule, err := config.ParseSchedule(t.Schedule)
 		if err != nil {
-			return nil, time.Time{}, fmt.Errorf("task %q: %w", t.Name, err)
+			return loaded{}, time.Time{}, fmt.Errorf("task %q: %w", t.Name, err)
 		}
 		scheduler.Schedule(schedule, cron.FuncJob(func() {
 			start := time.Now()
@@ -99,8 +118,58 @@ func (a Agent) load(ctx context.Context) (*cron.Cron, time.Time, error) {
 		}))
 	}
 	scheduler.Start()
-	a.Logf("machine %s: %d task(s) scheduled", m.Name, len(m.Tasks))
-	return scheduler, info.ModTime(), nil
+
+	supCtx, stopSupervisor := context.WithCancel(ctx)
+	if len(m.Workers) > 0 {
+		go a.supervise(supCtx, cfg, m)
+	}
+	a.Logf("machine %s: %d task(s) scheduled, %d worker(s) supervised", m.Name, len(m.Tasks), len(m.Workers))
+	return loaded{scheduler: scheduler, stopSupervisor: stopSupervisor}, info.ModTime(), nil
+}
+
+// supervise checks in on the machine's workers until ctx is cancelled. It
+// has its own loop so a slow review never delays the heartbeat.
+func (a Agent) supervise(ctx context.Context, cfg *config.Config, m config.Machine) {
+	sup := &supervisor.Supervisor{
+		Machine:        m,
+		Settings:       cfg.Supervisor,
+		Signals:        cfg.Signals,
+		StandingOrders: cfg.Defaults.StandingOrders,
+		Terminal:       supervisor.Tmux{},
+		Reviewer:       supervisor.CommandReviewer{Command: m.Command(cfg.Supervisor.CommandOrDefault()), Dir: a.StateDir},
+		Lister:         backlog.GH{},
+		StateDir:       a.StateDir,
+		Now:            time.Now,
+		Sleep:          time.Sleep,
+		Logf:           a.Logf,
+	}
+	ticker := time.NewTicker(superviseEvery)
+	defer ticker.Stop()
+	for {
+		sup.Tick(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// adoptPath gives the agent the PATH that the machine's init line sets, so
+// tmux, gh and the reviewer resolve as they do in checks and tasks. A service
+// manager starts the agent with a much shorter PATH.
+func adoptPath(m config.Machine) {
+	if m.Init == "" {
+		return
+	}
+	out, err := exec.Command("sh", "-c", m.Init+"\nprintf '\\n%s' \"$PATH\"").Output()
+	if err != nil {
+		return
+	}
+	lines := strings.Split(string(out), "\n")
+	if path := lines[len(lines)-1]; path != "" {
+		os.Setenv("PATH", path)
+	}
 }
 
 func (a Agent) beat() error {

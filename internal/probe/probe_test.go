@@ -25,6 +25,7 @@ const linuxOutput = `Welcome banner from the init line
 @@heartbeat 1789999990
 @@run {"task":"nightly","start":"2026-09-21T03:00:00Z","end":"2026-09-21T03:00:02Z","exit_code":0}
 @@run {"task":"nigh
+@@checkin {"time":"2026-09-21T03:10:00Z","worker":"app","kind":"idle","verdict":"nudge","reason":"it stopped","message":"Take #12.","sent":true}
 @@end
 `
 
@@ -117,5 +118,15 @@ func TestRunAgainstLocalShell(t *testing.T) {
 	}
 	if res.Cores < 1 || res.DiskUsedPct < 1 || time.Since(res.Now).Abs() > time.Minute {
 		t.Fatalf("basics = %+v", res)
+	}
+}
+
+func TestParseReadsCheckins(t *testing.T) {
+	res, err := Parse(linuxOutput, twoChecks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Checkins) != 1 || res.Checkins[0].Worker != "app" || !res.Checkins[0].Sent {
+		t.Fatalf("check-ins = %+v", res.Checkins)
 	}
 }

@@ -128,7 +128,7 @@ func TestStaleHeartbeatNeedsOwner(t *testing.T) {
 	res.Heartbeat = now.Add(-2 * time.Hour)
 	res.Runs = []runlog.Record{ran(0, 30*time.Hour)}
 	r := Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, res, nil)
-	wantAttention(t, r, "agent stopped 2h ago")
+	wantAttention(t, r, "agent stopped 2h ago: 1 task(s) will not run")
 	if !r.Tasks[0].Missed {
 		t.Fatal("the task is late and must be marked missed")
 	}
@@ -222,5 +222,42 @@ func TestRenderSaysWhenAllIsWell(t *testing.T) {
 	Render(&out, []MachineReport{Assess(config.Machine{Name: "box"}, signals, healthy(), nil)})
 	if !strings.Contains(out.String(), "All machines are on track.") {
 		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+var appWorker = config.Machine{Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}
+
+func checkin(verdict, reason string) runlog.Checkin {
+	return runlog.Checkin{Time: now.Add(-5 * time.Minute), Worker: "app", Kind: "idle", Verdict: verdict, Reason: reason}
+}
+
+func TestWorkersWithoutAgentNeedOwner(t *testing.T) {
+	res := healthy()
+	res.Heartbeat = time.Time{}
+	wantAttention(t, Assess(appWorker, signals, res, nil), "agent is not running: 0 task(s) will not run and 1 worker(s) are not supervised")
+}
+
+func TestWorkerVerdictsThatNeedOwner(t *testing.T) {
+	cases := map[string]string{
+		runlog.VerdictNeedsOwner: "worker app needs you: a permission prompt is open",
+		runlog.VerdictStuck:      "worker app is stuck: a permission prompt is open",
+		runlog.VerdictError:      "worker app could not be checked: a permission prompt is open",
+	}
+	for verdict, want := range cases {
+		res := healthy()
+		res.Checkins = []runlog.Checkin{checkin(runlog.VerdictNudge, "older"), checkin(verdict, "a permission prompt is open")}
+		wantAttention(t, Assess(appWorker, signals, res, nil), want)
+	}
+}
+
+func TestWorkerThatIsOnTrackNeedsNothing(t *testing.T) {
+	for _, verdict := range []string{runlog.VerdictOnTrack, runlog.VerdictNudge, runlog.VerdictDone, runlog.VerdictStarted} {
+		res := healthy()
+		res.Checkins = []runlog.Checkin{checkin(runlog.VerdictNeedsOwner, "older"), checkin(verdict, "fine")}
+		r := Assess(appWorker, signals, res, nil)
+		wantAttention(t, r)
+		if r.Workers[0].Last == nil || r.Workers[0].Last.Verdict != verdict {
+			t.Fatalf("worker = %+v", r.Workers[0])
+		}
 	}
 }

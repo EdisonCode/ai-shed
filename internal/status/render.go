@@ -42,9 +42,20 @@ func renderMachine(w io.Writer, r MachineReport) {
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if r.Probe != nil && len(r.Probe.Windows) > 0 {
-		fmt.Fprintln(w, "  workers")
+		fmt.Fprintln(w, "  windows")
 		for _, win := range r.Probe.Windows {
 			fmt.Fprintf(tw, "    %s:%s\t%s\tactive %s ago\n", win.Session, win.Name, win.Command, Short(r.Probe.Now.Sub(win.LastActivity)))
+		}
+		tw.Flush()
+	}
+	if len(r.Workers) > 0 && r.Probe != nil {
+		fmt.Fprintln(w, "  supervised")
+		for _, wk := range r.Workers {
+			if wk.Last == nil {
+				fmt.Fprintf(tw, "    %s\tno check-in yet\n", wk.Name)
+				continue
+			}
+			fmt.Fprintf(tw, "    %s\t%s\t%s ago\t%s\n", wk.Name, wk.Last.Verdict, Short(r.Probe.Now.Sub(wk.Last.Time)), wk.Last.Reason)
 		}
 		tw.Flush()
 	}

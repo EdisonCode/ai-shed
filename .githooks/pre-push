@@ -1,0 +1,5 @@
+#!/bin/sh
+# The same gates as CI, so a commit that fails here never costs a CI run.
+set -e
+make lint test
+make dist

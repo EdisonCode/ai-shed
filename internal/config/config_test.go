@@ -48,6 +48,12 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"bad repo", minimal + "    issues:\n      - {repo: app, label: x}\n", "owner/name"},
 		{"issue source without filter", minimal + "    issues:\n      - {repo: org/app}\n", "label or an assignee"},
 		{"check without run", minimal + "    checks:\n      - {name: c}\n", "name and run"},
+		{"worker without dir", minimal + "    workers:\n      - {name: w, brief: do it}\n", "has no dir"},
+		{"worker without brief", minimal + "    workers:\n      - {name: w, dir: /tmp}\n", "has no brief"},
+		{"duplicate worker", minimal + "    workers:\n      - {name: w, dir: /tmp, brief: a}\n      - {name: w, dir: /tmp, brief: b}\n", "duplicate worker"},
+		{"bad cache ttl", minimal + "supervisor: {cache_ttl: long}\n", "cache_ttl"},
+		{"model command without placeholder", minimal + "supervisor: {model_command: /model}\n", "must contain {model}"},
+		{"bad when_cold", minimal + "supervisor: {when_cold: maybe}\n", "when_cold"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,5 +103,53 @@ func TestTimeoutOrDefault(t *testing.T) {
 	}
 	if got := (Task{}).TimeoutOrDefault(); got != DefaultTaskTimeout {
 		t.Fatalf("default timeout = %v", got)
+	}
+}
+
+func TestSupervisorDefaults(t *testing.T) {
+	var s Supervisor
+	if s.CacheTTLOrDefault() != DefaultCacheTTL || s.ScopeEveryOrDefault() != DefaultScopeEvery || !s.ClearWhenCold() {
+		t.Fatalf("defaults = %v, %v, clear %v", s.CacheTTLOrDefault(), s.ScopeEveryOrDefault(), s.ClearWhenCold())
+	}
+}
+
+func TestSupervisorSettingsAreRead(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + "supervisor: {cache_ttl: 1h, scope_every: 10m, when_cold: resume}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Supervisor
+	if s.CacheTTLOrDefault() != time.Hour || s.ScopeEveryOrDefault() != 10*time.Minute || s.ClearWhenCold() {
+		t.Fatalf("settings = %v, %v, clear %v", s.CacheTTLOrDefault(), s.ScopeEveryOrDefault(), s.ClearWhenCold())
+	}
+}
+
+func TestModelIsPickedFromIssueLabels(t *testing.T) {
+	m := Models{Default: "sonnet", Labels: map[string]string{"model:opus": "opus", "model:fable": "fable"}}
+	cases := []struct {
+		labels []string
+		want   string
+	}{
+		{nil, "sonnet"},
+		{[]string{"bug", "machine:pc"}, "sonnet"},
+		{[]string{"bug", "model:opus"}, "opus"},
+		{[]string{"model:fable"}, "fable"},
+	}
+	for _, tc := range cases {
+		if got := m.For(tc.labels); got != tc.want {
+			t.Errorf("For(%v) = %q, want %q", tc.labels, got, tc.want)
+		}
+	}
+	if got := (Models{}).For([]string{"model:opus"}); got != "" {
+		t.Errorf("with no models configured For = %q, want none", got)
+	}
+}
+
+func TestModelCommand(t *testing.T) {
+	if got := (Supervisor{}).ModelCommandFor("opus"); got != "/model opus" {
+		t.Fatalf("default command = %q", got)
+	}
+	if got := (Supervisor{ModelCommand: "use {model} now"}).ModelCommandFor("opus"); got != "use opus now" {
+		t.Fatalf("custom command = %q", got)
 	}
 }

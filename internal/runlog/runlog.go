@@ -14,6 +14,7 @@ import (
 const (
 	StateDir      = ".local/state/shed"
 	RunsFile      = "runs.jsonl"
+	CheckinsFile  = "checkins.jsonl"
 	HeartbeatFile = "heartbeat"
 )
 
@@ -32,20 +33,24 @@ type Record struct {
 func (r Record) Running() bool { return r.End.IsZero() }
 
 func Append(dir string, r Record) error {
+	return appendJSON(dir, RunsFile, r)
+}
+
+func appendJSON(dir, file string, v any) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
-	line, err := json.Marshal(r)
+	line, err := json.Marshal(v)
 	if err != nil {
-		return fmt.Errorf("encode run record: %w", err)
+		return fmt.Errorf("encode %s line: %w", file, err)
 	}
-	f, err := os.OpenFile(filepath.Join(dir, RunsFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, file), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return fmt.Errorf("open run log: %w", err)
+		return fmt.Errorf("open %s: %w", file, err)
 	}
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		f.Close()
-		return fmt.Errorf("write run log: %w", err)
+		return fmt.Errorf("write %s: %w", file, err)
 	}
 	return f.Close()
 }
@@ -63,6 +68,55 @@ func Latest(records []Record) map[string]Record {
 	latest := make(map[string]Record)
 	for _, r := range records {
 		latest[r.Task] = r
+	}
+	return latest
+}
+
+// Verdicts of a check-in on a worker.
+const (
+	VerdictOnTrack    = "on_track"    // working inside its brief; nothing was said
+	VerdictNudge      = "nudge"       // the supervisor sent it a message
+	VerdictNeedsOwner = "needs_owner" // nothing can move without the owner
+	VerdictDone       = "done"        // nothing left that it can act on
+	VerdictStuck      = "stuck"       // nudges or restarts did not get it moving
+	VerdictStarted    = "started"     // the supervisor started its session
+	VerdictError      = "error"       // the check-in itself failed
+)
+
+// Checkin is one line of checkins.jsonl: what the supervisor saw and did.
+type Checkin struct {
+	Time    time.Time `json:"time"`
+	Worker  string    `json:"worker"`
+	Kind    string    `json:"kind"`
+	Verdict string    `json:"verdict"`
+	Reason  string    `json:"reason,omitempty"`
+	// Message is what the supervisor typed into the worker, when Sent.
+	Message string `json:"message,omitempty"`
+	Sent    bool   `json:"sent,omitempty"`
+	// Cold is set when the worker's prompt cache had expired.
+	Cold bool `json:"cold,omitempty"`
+	// Issue and Model are set when the message gave the worker an issue.
+	Issue int    `json:"issue,omitempty"`
+	Model string `json:"model,omitempty"`
+}
+
+func AppendCheckin(dir string, c Checkin) error {
+	return appendJSON(dir, CheckinsFile, c)
+}
+
+func ParseCheckin(line string) (Checkin, error) {
+	var c Checkin
+	if err := json.Unmarshal([]byte(line), &c); err != nil {
+		return Checkin{}, fmt.Errorf("parse check-in: %w", err)
+	}
+	return c, nil
+}
+
+// LatestCheckins returns the last check-in of each worker.
+func LatestCheckins(checkins []Checkin) map[string]Checkin {
+	latest := make(map[string]Checkin)
+	for _, c := range checkins {
+		latest[c.Worker] = c
 	}
 	return latest
 }
