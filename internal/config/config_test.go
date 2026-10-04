@@ -53,6 +53,7 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"duplicate worker", minimal + "    workers:\n      - {name: w, dir: /tmp, brief: a}\n      - {name: w, dir: /tmp, brief: b}\n", "duplicate worker"},
 		{"bad cache ttl", minimal + "supervisor: {cache_ttl: long}\n", "cache_ttl"},
 		{"model command without placeholder", minimal + "supervisor: {model_command: /model}\n", "must contain {model}"},
+		{"bad models.apply", minimal + "supervisor: {models: {apply: maybe}}\n", "models.apply"},
 		{"bad when_cold", minimal + "supervisor: {when_cold: maybe}\n", "when_cold"},
 	}
 	for _, tc := range cases {

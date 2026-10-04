@@ -131,9 +131,18 @@ supervisor:
 ```
 
 A model switch empties the prompt cache, so the agent clears the context at
-the same moment: the new model starts from the brief, not from a re-read of
+the same moment. The brief tells the worker to keep its plan and progress in
+the issue for this reason, and the reviewer asks for it when a worker stops
+partway through an item: the new model starts from the brief, not from a re-read of
 the old conversation. Two issues in a row on the same model keep the warm
 context. With no `models` block the agent never touches the model.
+
+This switches the model of the worker's own session. For a worker that is
+an orchestrator and hands work to sub-agents on models it chooses itself, set
+`apply: tell`: the agent leaves the session and its context alone, and adds
+"The model for this issue is opus." to the message that hands over the issue.
+Say in the standing orders what the worker does with that. Set the
+orchestrator's own model in the worker's `command`.
 
 ### Standing orders
 
@@ -187,12 +196,14 @@ for these phrases in issue comments (configurable under `signals`):
 | Signal | Opens when a comment has | Stays closed when followed by | Closes when a later comment has |
 | --- | --- | --- | --- |
 | decision | `Decisions needed:` | `none` | `Owner ruling` |
-| eyes | `Needs eyes:` | `nothing`, `none` | |
-| review | `**PR:**` | | |
+| eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked` |
+| review | `**PR:** #41` | | that pull request is merged or closed |
 
-A signal with no closing phrase stays open until the issue closes or a later
-comment has the opening phrase with a clear value. An issue with an open
-signal is not handed to a worker.
+The review signal follows its pull request (`follows_pr`). An issue that takes
+several pull requests comes back into the queue each time one is merged, and
+the worker picks up the rest from what the issue says.
+
+An issue with an open signal is not handed to a worker.
 
 ## Setup
 
@@ -236,6 +247,19 @@ Then start the agent once on each machine:
 - **macOS (launchd):** copy [`contrib/com.edisoncode.shed-agent.plist`](contrib/com.edisoncode.shed-agent.plist)
   to `~/Library/LaunchAgents/`, then
   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.edisoncode.shed-agent.plist`.
+
+**macOS and the keychain.** An agent tool that keeps its login in the keychain
+cannot read it from an SSH session. Two things follow. Load the agent into the
+GUI domain, as the command above does, so the reviewer it runs can log in.
+And the tmux server that holds the workers must have been started from the GUI
+domain too. The agent uses the default tmux server: if one is already running
+(for example from your own launchd job), the workers join it; if none is, the
+agent starts it, from the GUI domain. Do not start that server over SSH.
+
+**Before the first unattended run**, start the worker's command once by hand
+in the worker's directory. An agent tool asks first-run questions (trust this
+folder, enable these integrations) that only a person may answer. The
+supervisor reports a worker stopped at one as `needs_owner` and types nothing.
 
 After that, run `shed deploy` again whenever the fleet file changes. The agent
 loads a changed fleet file within 30 seconds; a new binary takes effect when

@@ -46,6 +46,7 @@ const (
 	startPrompt   = "You are an unattended worker. Read " + BriefFile + " in full and carry it out."
 	briefChanged  = "Your brief changed. Read " + BriefFile + " again and follow it."
 	reorient      = "Your context was cleared. Read " + BriefFile + " first, then check git status, git log and the issue comments to see where the work stands. Then: "
+	modelTold     = " The model for this issue is %s."
 	clearSettling = 2 * time.Second
 )
 
@@ -248,7 +249,8 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 			c.Cold = idle > s.Settings.CacheTTLOrDefault()
 			c.Message, c.Issue = verdict.Message, verdict.Issue
 			model := modelOf(queue, verdict.Issue)
-			switchModel := model != "" && model != st.model
+			tellOnly := s.Settings.Models.TellOnly()
+			switchModel := !tellOnly && model != "" && model != st.model
 			if switchModel || (c.Cold && s.Settings.ClearWhenCold()) {
 				if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
 					return err
@@ -260,6 +262,10 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 					return err
 				}
 				st.model, c.Model = model, model
+			}
+			if tellOnly && model != "" {
+				c.Model = model
+				c.Message += fmt.Sprintf(modelTold, model)
 			}
 			if err := s.Terminal.Send(w.Name, c.Message); err != nil {
 				return err
@@ -385,6 +391,7 @@ new brief.
 		fmt.Fprintf(&b, " after the words `%s`", phrase)
 	}
 	b.WriteString(`, then take the next item.
+- Before you stop for any reason, write your plan and your progress in the issue. Your context may be cleared between items. What is not in the issue, the branch or a pull request is lost.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
 `)
 	return b.String()

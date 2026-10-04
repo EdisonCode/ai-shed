@@ -15,6 +15,10 @@
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
+	<!-- The agent may start the tmux server that holds the workers. Stopping
+	     the agent must not take the workers down with it. -->
+	<key>AbandonProcessGroup</key>
+	<true/>
 	<key>StandardErrorPath</key>
 	<string>/tmp/shed-agent.log</string>
 </dict>

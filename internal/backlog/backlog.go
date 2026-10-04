@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +24,9 @@ type Issue struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	Comments  []Comment `json:"comments"`
 	Labels    []Label   `json:"labels"`
+	// OpenPRs holds the numbers of the repo's open pull requests. It is nil
+	// when the lister did not look them up.
+	OpenPRs map[int]bool `json:"-"`
 }
 
 type Label struct {
@@ -70,10 +75,35 @@ func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 	if err := json.Unmarshal(out, &issues); err != nil {
 		return nil, fmt.Errorf("gh issue list %s: parse output: %w", src.Repo, err)
 	}
+	openPRs, err := openPRs(ctx, src.Repo)
+	if err != nil {
+		return nil, err
+	}
 	for i := range issues {
-		issues[i].Repo = src.Repo
+		issues[i].Repo, issues[i].OpenPRs = src.Repo, openPRs
 	}
 	return issues, nil
+}
+
+func openPRs(ctx context.Context, repo string) (map[int]bool, error) {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh pr list %s: %w: %s", repo, err, strings.TrimSpace(stderr.String()))
+	}
+	var prs []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return nil, fmt.Errorf("gh pr list %s: parse output: %w", repo, err)
+	}
+	open := make(map[int]bool, len(prs))
+	for _, pr := range prs {
+		open[pr.Number] = true
+	}
+	return open, nil
 }
 
 // Waiting returns the names of the signals that are open on the issue: the
@@ -81,16 +111,16 @@ func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 func Waiting(issue Issue, signals []config.Signal) []string {
 	var open []string
 	for _, s := range signals {
-		if signalOpen(issue.Comments, s) {
+		if signalOpen(issue, s) {
 			open = append(open, s.Name)
 		}
 	}
 	return open
 }
 
-func signalOpen(comments []Comment, s config.Signal) bool {
-	open := false
-	for _, c := range comments {
+func signalOpen(issue Issue, s config.Signal) bool {
+	open, pr := false, 0
+	for _, c := range issue.Comments {
 		body := strings.ToLower(c.Body)
 		// The answer is tested first: a comment that both cites an earlier
 		// answer and asks again leaves the signal open.
@@ -98,10 +128,28 @@ func signalOpen(comments []Comment, s config.Signal) bool {
 			open = false
 		}
 		if value, found := afterPhrase(body, strings.ToLower(s.Ask)); found {
-			open = !isClear(value, s.Clear)
+			open, pr = !isClear(value, s.Clear), prNumber(value)
 		}
 	}
+	// A signal that follows a pull request is over once that pull request is
+	// merged or closed.
+	if open && s.FollowsPR && pr != 0 && issue.OpenPRs != nil && !issue.OpenPRs[pr] {
+		return false
+	}
 	return open
+}
+
+var prRE = regexp.MustCompile(`#(\d+)`)
+
+// prNumber returns the pull request named on the first line of the text, or 0.
+func prNumber(value string) int {
+	line, _, _ := strings.Cut(value, "\n")
+	m := prRE.FindStringSubmatch(line)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
 }
 
 // afterPhrase returns the text that follows the phrase, without leading

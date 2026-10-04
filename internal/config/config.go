@@ -54,6 +54,22 @@ type Models struct {
 	Default string `yaml:"default"`
 	// Labels maps an issue label to a model.
 	Labels map[string]string `yaml:"labels"`
+	// Apply says what the agent does with an issue's model.
+	Apply string `yaml:"apply"`
+}
+
+// Values of Models.Apply.
+const (
+	// ModelSwitch switches the worker's own session to the model.
+	ModelSwitch = "switch"
+	// ModelTell leaves the session alone and tells the worker the model, for
+	// a worker that orchestrates sub-agents and picks their models itself.
+	ModelTell = "tell"
+)
+
+// TellOnly reports whether the worker is told the model and not switched.
+func (m Models) TellOnly() bool {
+	return m.Apply == ModelTell
 }
 
 // For returns the model for an issue with these labels, or "" when no model
@@ -140,13 +156,17 @@ type Signal struct {
 	Ask        string   `yaml:"ask"`
 	Clear      []string `yaml:"clear"`
 	AnsweredBy string   `yaml:"answered_by"`
+	// FollowsPR is for a signal whose ask names a pull request ("#41"). The
+	// signal then closes when that pull request is merged or closed, so an
+	// issue that takes several pull requests comes back into the queue.
+	FollowsPR bool `yaml:"follows_pr"`
 }
 
 func DefaultSignals() []Signal {
 	return []Signal{
 		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling"},
-		{Name: "eyes", Ask: "Needs eyes:", Clear: []string{"nothing", "none"}},
-		{Name: "review", Ask: "**PR:**"},
+		{Name: "eyes", Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked"},
+		{Name: "review", Ask: "**PR:**", FollowsPR: true},
 	}
 }
 
@@ -291,6 +311,9 @@ func (c *Config) validate() error {
 	}
 	if mc := c.Supervisor.ModelCommand; mc != "" && !strings.Contains(mc, modelPlaceholder) {
 		fail("supervisor: model_command %q must contain %s", mc, modelPlaceholder)
+	}
+	if a := c.Supervisor.Models.Apply; a != "" && a != ModelSwitch && a != ModelTell {
+		fail("supervisor: models.apply %q must be %s or %s", a, ModelSwitch, ModelTell)
 	}
 	for label, model := range c.Supervisor.Models.Labels {
 		if label == "" || model == "" {

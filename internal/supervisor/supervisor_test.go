@@ -159,7 +159,7 @@ func TestMissingWorkerIsStartedWithItsBrief(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []string{"Fix audit log bugs only.", "org/app with label `machine:box`", "after the words `Decisions needed:`"} {
+	for _, part := range []string{"Fix audit log bugs only.", "org/app with label `machine:box`", "after the words `Decisions needed:`", "write your plan and your progress in the issue"} {
 		if !strings.Contains(string(brief), part) {
 			t.Fatalf("brief lacks %q:\n%s", part, brief)
 		}
@@ -487,5 +487,18 @@ func TestStandingOrdersReachTheWorkerAndTheReviewer(t *testing.T) {
 	}
 	if !strings.Contains(f.reviewer.prompts[0], "State changes only through domain events.") {
 		t.Fatal("the reviewer was not shown the standing orders")
+	}
+}
+
+func TestOrchestratorIsToldTheModelAndNotSwitched(t *testing.T) {
+	tell := config.Models{Default: "sonnet", Labels: models.Labels, Apply: config.ModelTell}
+	f := started(t, config.Supervisor{Models: tell}, assign(12))
+	f.tick(2 * time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{"Take the next issue. The model for this issue is sonnet."}) {
+		t.Fatalf("sent = %q, want one message and no clear or model command", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Issue != 12 || c.Model != "sonnet" {
+		t.Fatalf("check-in = %+v", c)
 	}
 }

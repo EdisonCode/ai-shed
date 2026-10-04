@@ -22,6 +22,9 @@ Your brief is `.shed/BRIEF.md`. It is the whole of your scope.
 
 - Work one issue at a time. The supervisor names it. When you finish, or
   cannot go further, report in the issue, say so in the terminal, and stop.
+- Before you stop, write your plan and progress in the issue. Your context may
+  be cleared before your next item; the issue, the branch and the pull request
+  are all that survive.
 - A decision that belongs to the owner: write the question and your
   recommendation in an issue comment using the phrase the brief gives, then
   stop on that issue. Do not guess and do not wait.
@@ -45,9 +48,11 @@ machine in the fleet file (a label, an assignee, or both).
    If the label does not exist: `gh label create "<label>" --repo <owner/repo>`.
 3. **Model label**, only when the fleet file has `supervisor.models`. The
    labels under `supervisor.models.labels` are the choices; an issue with none
-   of them gets `supervisor.models.default`. Pick the cheapest model that can
-   do the work, by the owner's own rule if they gave one. When the rule does
-   not settle it, ask the owner; do not default upward.
+   of them gets `supervisor.models.default`. With `apply: switch` the worker's
+   session moves to that model; with `apply: tell` the worker is told it and
+   the standing orders say what it does with it. Pick the cheapest model that
+   can do the work, by the owner's own rule if they gave one. When the rule
+   does not settle it, ask the owner; do not default upward.
 4. An issue is handed out oldest first, and never while it waits on the owner.
    To hold an issue back, remove its machine label.
 
@@ -88,7 +93,12 @@ Run this as a checklist and report each line.
      owner, and post their answer as a comment that contains the
      `answered_by` phrase of the `decision` signal. That reopens the issue
      for a worker.
-   - `issue waits on you (review)`: a pull request is open. Read the diff and
+   - `issue waits on you (eyes)`: do the check the worker described, then
+     post a comment that clears the signal: the `answered_by` phrase of the
+     `eyes` signal if the fleet file has one, otherwise the ask phrase
+     followed by a `clear` word.
+   - `issue waits on you (review)`: a pull request is open. The signal closes
+     by itself when it is merged or closed. Read the diff and
      the checks yourself before you say it is good. A worker's report is a
      claim. Merging is the owner's call.
    - `worker needs you` / `is stuck`: look at the terminal
@@ -114,9 +124,12 @@ tokens.
    check on the machine before going on. A worker needs `tmux`, `gh` logged
    in, and the agent tool logged in.
 3. In the ai-shed checkout: `make dist`, then `shed deploy <machine>`.
-4. Start the agent once on the machine. The README has the systemd and launchd
+4. Have the owner start each worker's command once by hand in its directory
+   and answer the tool's first-run prompts (folder trust, integrations). A
+   worker stopped at one shows as `needs_owner`.
+5. Start the agent once on the machine. The README has the systemd and launchd
    commands.
-5. `shed status` shows `agent ok` within a minute, and each worker under
+6. `shed status` shows `agent ok` within a minute, and each worker under
    `supervised` within two.
 
 ## Do not
