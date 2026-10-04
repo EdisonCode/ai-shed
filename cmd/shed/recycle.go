@@ -40,7 +40,7 @@ func cmdRecycle(args []string) int {
 	if *now {
 		fmt.Printf("%s: worker %s gets a fresh session within a minute\n", m.Name, worker)
 	} else {
-		fmt.Printf("%s: worker %s gets a fresh session when it finishes the issue it has in hand\n", m.Name, worker)
+		fmt.Printf("%s: worker %s gets a fresh session as soon as it has no issue in progress\n", m.Name, worker)
 	}
 	return exitOK
 }

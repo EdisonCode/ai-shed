@@ -71,7 +71,7 @@ Choose one verdict:
 
 - on_track: the worker is doing work that its brief covers, or it waits on a command, a background task or a timer that it started itself. Say nothing.
 - nudge: one short message from you would get useful work moving. Use it when the worker has finished an item or waits for its first one and the queue has an item it can act on (give it the first workable item of the queue, which is in the order to work it, and put that number in "issue"; an item is workable when it is marked rework, or when it does not wait on the owner), when it asked a question that the brief already answers, when its work has left the brief, when it repeats an approach that keeps failing, or when it waits for something that will not come.
-- needs_owner: nothing useful can move until the owner acts. Also use it when the terminal shows a permission prompt, a menu or any dialog: you must never type into one.
+- needs_owner: nothing useful can move until the owner acts. Also use it when the terminal shows a permission prompt, a menu or any dialog: you must never type into one. A one-line survey from the tool itself (for example "How is this session going? 1: Bad 2: Fine 3: Good 0: Dismiss") is not a dialog and does not block the worker: ignore it.
 - done: the queue has no item the worker can act on and the worker has reported its work. Leave it idle; an idle worker costs nothing.
 - limited: the terminal shows that the worker reached a usage limit or a rate limit and must wait for it to reset. Nothing you type can help before then, and a message would be wasted. Set "resume_in_minutes" to the minutes from the current time until the reset the terminal names; 0 if it names none.
 
@@ -147,6 +147,12 @@ func ParseVerdict(answer string) (Verdict, error) {
 	}
 	// A message is typed as one line: a newline would send it in pieces.
 	v.Message = clip(strings.Join(strings.Fields(v.Message), " "), maxMessage)
+	// A tool may show a one-key prompt on its screen, such as a "rate this
+	// session: 1 2 3 0" survey, that takes a digit typed into an empty input
+	// as its answer. A message never starts with one.
+	if v.Message != "" && v.Message[0] >= '0' && v.Message[0] <= '9' {
+		v.Message = "Next: " + v.Message
+	}
 	switch v.Verdict {
 	case runlog.VerdictOnTrack, runlog.VerdictNeedsOwner, runlog.VerdictDone, runlog.VerdictLimited:
 		v.Message, v.Issue = "", 0
