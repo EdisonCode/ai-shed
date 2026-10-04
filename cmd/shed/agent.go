@@ -80,19 +80,35 @@ func cmdDeploy(args []string) int {
 	}
 	binaryFor, err := binarySource(*dist)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "Deploy FAILED: nothing was sent to any machine.")
 		return fail(err)
 	}
 
 	ctx := context.Background()
 	runner := probe.ShellRunner{}
-	code := exitOK
+	var ok, failed []string
 	for _, m := range machines {
 		if err := deployOne(ctx, runner, cfg, path, m, binaryFor, *preflight, *installAgent); err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", m.Name, err)
-			code = exitError
+			failed = append(failed, m.Name)
+			continue
 		}
+		ok = append(ok, m.Name)
 	}
-	return code
+	// The last line says the outcome in full, for output that is cut or piped.
+	if len(failed) > 0 {
+		fmt.Fprintf(os.Stderr, "Deploy FAILED for: %s. Deployed and ready: %s.\n", strings.Join(failed, ", "), orNone(ok))
+		return exitError
+	}
+	fmt.Printf("Deployed and ready: %s.\n", strings.Join(ok, ", "))
+	return exitOK
+}
+
+func orNone(names []string) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	return strings.Join(names, ", ")
 }
 
 // binarySource says where deploy gets a machine's binary: a local directory
@@ -102,7 +118,7 @@ func binarySource(dist string) (func(platform string) (string, error), error) {
 		return func(platform string) (string, error) { return filepath.Join(dist, "shed-"+platform), nil }, nil
 	}
 	if !release.IsRelease(version) {
-		return nil, fmt.Errorf("nothing was deployed: this shed is an unreleased build (%s). Run `shed update` to get a release, or `make dist` and pass -dist dist", version)
+		return nil, fmt.Errorf("this shed is an unreleased build (%s). Run `shed update` to get a release, or `make dist` and pass -dist dist", version)
 	}
 	cache, err := release.CacheDir()
 	if err != nil {

@@ -312,17 +312,7 @@ func (s *Supervisor) lastIssue(worker string) int {
 		s.Logf("worker %s: %v", worker, err)
 		return 0
 	}
-	issue := 0
-	for _, c := range checkins {
-		switch {
-		case c.Worker != worker:
-		case c.Kind == KindStart || c.Kind == KindRestart:
-			issue = 0
-		case c.Sent && c.Issue != 0:
-			issue = c.Issue
-		}
-	}
-	return issue
+	return runlog.IssueInHand(checkins, worker)
 }
 
 // modelOf returns the model of the queue item with this number.

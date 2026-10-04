@@ -141,3 +141,19 @@ func ReadCheckins(dir string) ([]Checkin, error) {
 	}
 	return checkins, nil
 }
+
+// IssueInHand returns the issue the worker was last handed since its session
+// last started, or 0. Check-ins are in log order.
+func IssueInHand(checkins []Checkin, worker string) int {
+	issue := 0
+	for _, c := range checkins {
+		switch {
+		case c.Worker != worker:
+		case c.Verdict == VerdictStarted:
+			issue = 0
+		case c.Sent && c.Issue != 0:
+			issue = c.Issue
+		}
+	}
+	return issue
+}

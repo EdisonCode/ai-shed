@@ -261,3 +261,49 @@ func TestWorkerThatIsOnTrackNeedsNothing(t *testing.T) {
 		}
 	}
 }
+
+func handedOver(issue int) runlog.Checkin {
+	return runlog.Checkin{Time: now.Add(-20 * time.Minute), Worker: "app", Kind: "idle", Verdict: runlog.VerdictNudge, Sent: true, Issue: issue, Reason: "next in the queue"}
+}
+
+func TestIssueInHandOfASupervisedWorkerIsWorking(t *testing.T) {
+	res := healthy()
+	res.Windows = []probe.Window{{Session: "shed", Name: "app", Command: "2.1.289", LastActivity: now.Add(-2 * time.Hour)}}
+	res.Checkins = []runlog.Checkin{handedOver(7)}
+	r := Assess(appWorker, signals, res, []backlog.Issue{issue(7), issue(8)})
+
+	wantAttention(t, r) // no "queued and no worker", and no "quiet" alarm: the supervisor owns both
+	if r.Issues[0].State != Working || r.Issues[0].Worker != "app" || r.Issues[1].State != Queued {
+		t.Fatalf("issues = %+v", r.Issues)
+	}
+}
+
+func TestQueueBehindAnIdleSupervisedWorkerIsNotAnAlarm(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{checkin(runlog.VerdictOnTrack, "waiting for its first issue")}
+	wantAttention(t, Assess(appWorker, signals, res, []backlog.Issue{issue(7), issue(8)}))
+}
+
+func TestHandedBackIssueWaitsOnOwnerEvenWhileInHand(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{handedOver(7)}
+	r := Assess(appWorker, signals, res, []backlog.Issue{issue(7, "**PR:** #41 (ready)")})
+	wantAttention(t, r, "#7 waits on you (review)")
+}
+
+func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
+	res := healthy()
+	res.Windows = []probe.Window{
+		{Session: "shed", Name: "app", Command: "2.1.289", LastActivity: now},
+		{Session: "work", Name: "notes", Command: "2.1.289", LastActivity: now},
+	}
+	res.Checkins = []runlog.Checkin{handedOver(7)}
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b", Command: "claude --permission-mode auto"}}}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{Assess(m, signals, res, nil)})
+	for _, want := range []string{"shed:app    claude", "work:notes  2.1.289", "app  #7  nudge  20m ago"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}

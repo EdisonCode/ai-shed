@@ -44,3 +44,28 @@ func TestLatestKeepsLastRecordPerTask(t *testing.T) {
 		t.Fatalf("latest = %+v", got)
 	}
 }
+
+func TestIssueInHand(t *testing.T) {
+	handed := func(worker string, issue int) Checkin {
+		return Checkin{Worker: worker, Verdict: VerdictNudge, Sent: true, Issue: issue}
+	}
+	started := Checkin{Worker: "app", Verdict: VerdictStarted, Sent: true}
+	cases := []struct {
+		name     string
+		checkins []Checkin
+		want     int
+	}{
+		{"no check-ins", nil, 0},
+		{"handed an issue", []Checkin{started, handed("app", 12)}, 12},
+		{"handed a second issue", []Checkin{started, handed("app", 12), handed("app", 13)}, 13},
+		{"a nudge that names no issue changes nothing", []Checkin{handed("app", 12), {Worker: "app", Verdict: VerdictNudge, Sent: true}}, 12},
+		{"a message that was not sent hands nothing over", []Checkin{{Worker: "app", Verdict: VerdictStuck, Issue: 12}}, 0},
+		{"a new session has no issue in hand", []Checkin{handed("app", 12), started}, 0},
+		{"another worker's issue is not this worker's", []Checkin{handed("docs", 12)}, 0},
+	}
+	for _, tc := range cases {
+		if got := IssueInHand(tc.checkins, "app"); got != tc.want {
+			t.Errorf("%s: issue in hand = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
