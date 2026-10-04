@@ -69,7 +69,9 @@ a vague brief gives vague supervision.
   each brief.
 - Never put a secret, customer data or a person's name in the fleet file.
 
-After an edit: `shed validate`, then `shed deploy`. The agent picks the file up
+After an edit: `shed validate`, then `shed deploy`. If the fleet file has
+`defaults.deploy_hook`, deploy also runs it for each machine; that is how the
+tool's own files (agent definitions, skills, notes) reach the machines. The agent picks the file up
 within 30 seconds and tells a running worker to read its brief again.
 
 ## Before the owner leaves

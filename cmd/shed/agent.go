@@ -73,6 +73,11 @@ func cmdDeploy(args []string) int {
 			continue
 		}
 		fmt.Printf("%s: installed ~/%s and ~/%s\n", m.Name, deploy.RemoteBinary, deploy.RemoteConfig)
+		// The hook runs only after a good copy: it adds to a deployed machine.
+		if err := deploy.Hook(context.Background(), cfg.Defaults.DeployHook, m, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", m.Name, err)
+			code = exitError
+		}
 	}
 	return code
 }

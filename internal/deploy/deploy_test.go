@@ -1,9 +1,11 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/edisoncode/ai-shed/internal/config"
@@ -66,5 +68,31 @@ func TestMachineNeedsTheDistBinary(t *testing.T) {
 	m := config.Machine{Name: "box", Host: config.LocalHost}
 	if err := Machine(context.Background(), probe.ShellRunner{}, m, t.TempDir(), "unused"); err == nil {
 		t.Fatal("a missing dist binary must be an error")
+	}
+}
+
+var box = config.Machine{Name: "box", Host: "me@box"}
+
+func TestHookIsToldWhichMachine(t *testing.T) {
+	var out bytes.Buffer
+	if err := Hook(context.Background(), `echo "$SHED_MACHINE at $SHED_HOST"`, box, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "box at me@box\n" {
+		t.Fatalf("hook output = %q", out.String())
+	}
+}
+
+func TestFailingHookIsAnError(t *testing.T) {
+	var out bytes.Buffer
+	err := Hook(context.Background(), "echo sync failed >&2; exit 4", box, &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "deploy hook") || !strings.Contains(out.String(), "sync failed") {
+		t.Fatalf("error = %v, output = %q", err, out.String())
+	}
+}
+
+func TestNoHookDoesNothing(t *testing.T) {
+	if err := Hook(context.Background(), "", box, nil, nil); err != nil {
+		t.Fatal(err)
 	}
 }

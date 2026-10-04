@@ -18,6 +18,11 @@ defaults:
     Never deploy. Never weaken a test to make it pass.
     Never push with --no-verify.
 
+  # Optional. Runs on this machine after `shed deploy` copies to each worker
+  # machine, with SHED_MACHINE and SHED_HOST set. Use it to send what your
+  # agent tool needs and shed does not know about.
+  deploy_hook: rsync -a ~/.claude/agents ~/.claude/skills "$SHED_HOST:.claude/"
+
 machines:
   - name: linux-box
     host: me@linux-box            # any ssh target; "local" means this machine

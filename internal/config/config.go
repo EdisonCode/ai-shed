@@ -104,6 +104,10 @@ type Defaults struct {
 	// StandingOrders are the owner's rules for every worker on every machine:
 	// how to build, what never to do. They are added to each worker's brief.
 	StandingOrders string `yaml:"standing_orders"`
+	// DeployHook is a command that `shed deploy` runs on the watcher after
+	// each machine it deploys to. It carries what shed does not know about:
+	// the files a worker's tool needs, such as agent definitions and skills.
+	DeployHook string `yaml:"deploy_hook"`
 }
 
 type Machine struct {
