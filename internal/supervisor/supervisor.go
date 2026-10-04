@@ -38,6 +38,13 @@ const (
 	// broken reviewer is not hit every tick.
 	retryAfter = 10 * time.Minute
 
+	// A limited worker is looked at again a little after its limit resets.
+	// When the screen names no reset time, or the reviewer itself is
+	// limited, it is looked at again after limitRecheck.
+	limitRecheck = 15 * time.Minute
+	limitSlack   = time.Minute
+	limitLongest = 6 * time.Hour
+
 	terminalLines = 80
 	recentKept    = 3
 
@@ -61,6 +68,7 @@ const (
 	KindScope   = "scope"   // it has worked a while; is it still in its brief?
 	KindQueue   = "queue"   // it was resting and its queue changed
 	KindBrief   = "brief"   // its brief was edited
+	KindLimit   = "limit"   // its usage limit was due to reset
 	KindError   = "error"
 )
 
@@ -89,6 +97,9 @@ type Supervisor struct {
 // costs a working worker nothing: no extra review and no repeated message.
 type workerState struct {
 	briefChecked bool
+	// limitedUntil is set while the worker is at a usage limit. Nothing is
+	// reviewed or typed before then.
+	limitedUntil time.Time
 	// briefStale is set when the brief changed while the worker had an issue
 	// in hand. It is told with the next message, not in the middle of work.
 	briefStale bool
@@ -137,11 +148,19 @@ func (s *Supervisor) Tick(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		c := runlog.Checkin{Time: now, Worker: w.Name, Kind: KindError, Verdict: runlog.VerdictError, Reason: err.Error()}
 		st.notBefore = now.Add(retryAfter)
+		// A reviewer at its usage limit is not a fault and needs nobody: the
+		// worker is simply not looked at until the limit may have reset.
+		if isLimit(err) {
+			st.notBefore = now.Add(limitRecheck)
+			c.Kind, c.Verdict, c.Until = KindLimit, runlog.VerdictLimited, st.notBefore
+			c.Reason = "the reviewer is at its usage limit: " + err.Error()
+		}
 		// The same failure is recorded once, not every retry.
 		if err.Error() != st.lastError {
 			st.lastError = err.Error()
-			s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindError, Verdict: runlog.VerdictError, Reason: err.Error()})
+			s.record(st, c)
 		}
 	}
 }
@@ -179,6 +198,12 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 
 	idle := now.Sub(obs.LastActivity)
 	switch {
+	case now.Before(st.limitedUntil):
+		return nil
+	case !st.limitedUntil.IsZero():
+		// The limit was due to reset. The screen has not changed, so only
+		// this makes the supervisor look again.
+		return s.review(ctx, w, st, obs, now, KindLimit, nil)
 	case idle < settle:
 		if now.Sub(st.lastReview) < s.Settings.ScopeEveryOrDefault() {
 			return nil
@@ -246,7 +271,7 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 		return err
 	}
 	idle := now.Sub(obs.LastActivity)
-	in := ReviewInput{Worker: w.Name, Brief: s.scope(w), Queue: queue, Recent: st.recent, Terminal: terminal}
+	in := ReviewInput{Worker: w.Name, Brief: s.scope(w), Queue: queue, Recent: st.recent, Terminal: terminal, Now: now, LimitedUntil: st.limitedUntil}
 	if idle >= settle {
 		in.Idle = idle
 	}
@@ -259,6 +284,15 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 
 	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: verdict.Verdict, Reason: verdict.Reason,
 		Activity: obs.LastActivity, Queue: st.queueSeen}
+	st.limitedUntil = time.Time{}
+	if verdict.Verdict == runlog.VerdictLimited {
+		wait := limitRecheck
+		if verdict.ResumeInMinutes > 0 {
+			wait = min(time.Duration(verdict.ResumeInMinutes)*time.Minute+limitSlack, limitLongest)
+		}
+		st.limitedUntil = now.Add(wait)
+		c.Until = st.limitedUntil
+	}
 	if verdict.Verdict == runlog.VerdictNudge {
 		st.nudges = within(st.nudges, now)
 		if len(st.nudges) >= maxNudges {
@@ -282,7 +316,11 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 			// The first issue of a session lands on a context that is
 			// already empty.
 			fresh := newIssue && w.FreshPerIssue && st.issue != 0
-			cleared := switchModel || fresh || (c.Cold && s.Settings.ClearWhenCold())
+			// A worker stopped by a usage limit was cut off in the middle of
+			// its work and wrote nothing down. Its context is all there is of
+			// that work, so it is kept, at the price of reading it again.
+			coldClear := c.Cold && s.Settings.ClearWhenCold() && kind != KindLimit
+			cleared := switchModel || fresh || coldClear
 			switch {
 			case cleared:
 				if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
@@ -328,6 +366,17 @@ func (s *Supervisor) command(w config.Worker, line string) error {
 	return nil
 }
 
+// isLimit reports whether a reviewer failed because it reached a usage limit.
+func isLimit(err error) bool {
+	text := strings.ToLower(err.Error())
+	for _, phrase := range []string{"usage limit", "rate limit", "limit reached", "hit your limit"} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 // recover rebuilds a worker's state from the check-in log.
 func (s *Supervisor) recover(worker string) *workerState {
 	st := &workerState{}
@@ -349,9 +398,15 @@ func (s *Supervisor) recover(worker string) *workerState {
 			st.lastReview = c.Time
 		case c.Kind == KindBrief:
 			st.briefStale = !c.Sent
-		case c.Kind == KindIdle || c.Kind == KindScope || c.Kind == KindQueue:
+		case c.Verdict == runlog.VerdictLimited && c.Activity.IsZero():
+			// The reviewer was limited; the worker itself was not reviewed.
+		case c.Kind == KindIdle || c.Kind == KindScope || c.Kind == KindQueue || c.Kind == KindLimit:
 			st.lastReview, st.lastQueueCheck = c.Time, c.Time
 			st.reviewedActivity, st.queueSeen = c.Activity, c.Queue
+			st.limitedUntil = time.Time{}
+			if c.Verdict == runlog.VerdictLimited {
+				st.limitedUntil = c.Until
+			}
 			if !c.Sent {
 				continue
 			}

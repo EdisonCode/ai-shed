@@ -88,6 +88,7 @@ one verdict:
 | `nudge` | one message would get work moving: next issue, an answer the brief already gives, a pull back into scope | types the message |
 | `needs_owner` | nothing can move without you, or a permission prompt or menu is open | types nothing; `shed status` shows it |
 | `done` | nothing left that it can act on | leaves it idle |
+| `limited` | it reached a usage limit and must wait for the reset | types nothing, looks again just after the reset (every 15 minutes when the screen names no time), then tells it to continue |
 
 The reviewer may not make your decisions. It tells the worker to write the
 question in the issue and take the next item. It never tells a worker to
@@ -97,7 +98,8 @@ Guards against wasted tokens:
 
 - Three nudges in 30 minutes that do not get a worker moving end with `stuck`, not a fourth nudge.
 - A session that exits three times in 30 minutes is not started a fourth time.
-- A failed check-in (the reviewer hit a rate limit, `gh` is logged out) is retried after 10 minutes, not every tick.
+- A failed check-in (`gh` is logged out, the reviewer command is broken) is retried after 10 minutes, not every tick.
+- A usage limit costs no nudges. A limited worker is left alone until its reset. A reviewer that is itself at its limit is tried again after 15 minutes and is not reported as a failure.
 - An idle worker is reviewed once per silence, not once per tick.
 
 ### Prompt cache
@@ -112,6 +114,10 @@ again at full price.
 - When work arrives for a worker whose cache has expired, the agent clears the
   worker's context first and tells it to re-read its brief and the state of the
   work. Set `when_cold: resume` to keep the context and pay for the re-read.
+
+- A worker that was stopped by a usage limit keeps its context when it
+  resumes, however cold: it was cut off mid-task and its context is the only
+  record of that work.
 
 shed cannot see the cache. `supervisor.cache_ttl` (default `5m`) is what you
 tell it your plan gives.

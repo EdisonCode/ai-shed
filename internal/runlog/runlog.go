@@ -81,6 +81,7 @@ const (
 	VerdictNeedsOwner = "needs_owner" // nothing can move without the owner
 	VerdictDone       = "done"        // nothing left that it can act on
 	VerdictStuck      = "stuck"       // nudges or restarts did not get it moving
+	VerdictLimited    = "limited"     // at a usage limit; left alone until it resets
 	VerdictStarted    = "started"     // the supervisor started its session
 	VerdictError      = "error"       // the check-in itself failed
 )
@@ -105,6 +106,8 @@ type Checkin struct {
 	// back, so it does not review again what it has already reviewed.
 	Activity time.Time `json:"activity,omitzero"`
 	Queue    string    `json:"queue,omitempty"`
+	// Until is when a limited worker is looked at again.
+	Until time.Time `json:"until,omitzero"`
 }
 
 func AppendCheckin(dir string, c Checkin) error {

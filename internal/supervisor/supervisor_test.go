@@ -334,14 +334,14 @@ func TestNudgesThatDoNotHelpStop(t *testing.T) {
 
 func TestReviewerFailureIsRecordedOnceAndRetriedLater(t *testing.T) {
 	f := started(t, config.Supervisor{}, onTrack)
-	f.reviewer.err = errors.New("usage limit reached")
+	f.reviewer.err = errors.New("exit status 1: not logged in")
 	f.tick(2 * time.Minute)
 	f.tick(time.Minute)
 	f.tick(time.Minute)
 	if len(f.reviewer.prompts) != 1 {
 		t.Fatalf("reviewer was called %d times inside the retry delay, want 1", len(f.reviewer.prompts))
 	}
-	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictError || !strings.Contains(c.Reason, "usage limit") {
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictError || !strings.Contains(c.Reason, "not logged in") {
 		t.Fatalf("check-in = %+v", c)
 	}
 
@@ -375,6 +375,7 @@ func TestParseVerdict(t *testing.T) {
 		wantErr      string
 	}{
 		{"issue is kept on a nudge", `{"verdict":"nudge","message":"Take #12.","issue":12,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12.", Reason: "r", Issue: 12}, ""},
+		{"limited", `{"verdict":"limited","message":"wait","resume_in_minutes":45,"reason":"r"}`, Verdict{Verdict: "limited", Reason: "r", ResumeInMinutes: 45}, ""},
 		{"plain", `{"verdict":"done","message":"","reason":"empty queue"}`, Verdict{Verdict: "done", Reason: "empty queue"}, ""},
 		{"wrapped in prose and a fence", "Here you go:\n```json\n{\"verdict\":\"nudge\",\"message\":\"Take #12.\",\"reason\":\"r\"}\n```", Verdict{Verdict: "nudge", Message: "Take #12.", Reason: "r"}, ""},
 		{"message becomes one line", `{"verdict":"nudge","message":"Take #12.\nThen #13.","reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12. Then #13.", Reason: "r"}, ""},
@@ -724,5 +725,80 @@ func TestCheckCutShortByAStoppingAgentIsNotAFailure(t *testing.T) {
 	f.tick(30 * time.Second)
 	if f.reviews() != 1 {
 		t.Fatalf("reviews after the restart = %d, want 1", f.reviews())
+	}
+}
+
+func limited(minutes int) Verdict {
+	return Verdict{Verdict: runlog.VerdictLimited, ResumeInMinutes: minutes, Reason: "the screen says the usage limit resets at 3pm"}
+}
+
+func TestLimitedWorkerIsLeftAloneUntilItsLimitResets(t *testing.T) {
+	f := started(t, config.Supervisor{}, limited(90), nudge("Your limit has reset. Continue with #12."))
+	f.tick(2 * time.Minute)
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictLimited || !c.Until.Equal(f.now.Add(91*time.Minute)) {
+		t.Fatalf("check-in = %+v, want limited until 91 minutes from now", c)
+	}
+
+	for range 8 { // 80 minutes: still limited
+		f.term.running(f.term.obs.LastActivity)
+		f.tick(10 * time.Minute)
+	}
+	if len(f.reviewer.prompts) != 1 || len(f.term.sent) != 0 {
+		t.Fatalf("before the reset: %d review(s), sent %q; want one review and no message", len(f.reviewer.prompts), f.term.sent)
+	}
+
+	f.tick(12 * time.Minute) // past the reset, and the screen has not changed
+	// Its cache is long cold, but it was cut off mid-task: the context is kept.
+	if !slices.Equal(f.term.sent, []string{"Your limit has reset. Continue with #12."}) {
+		t.Fatalf("after the reset: sent = %q, want the message alone with no clear", f.term.sent)
+	}
+	if c := f.lastCheckin(t); !c.Cold || c.Kind != KindLimit {
+		t.Fatalf("check-in = %+v", c)
+	}
+	if !strings.Contains(f.reviewer.prompts[1], "expected to reset at") {
+		t.Fatal("the reviewer was not told that the limit was due to reset")
+	}
+}
+
+func TestLimitWithNoResetTimeIsLookedAtAgainLater(t *testing.T) {
+	f := started(t, config.Supervisor{}, limited(0), limited(0))
+	f.tick(2 * time.Minute)
+	f.tick(limitRecheck - time.Minute)
+	if len(f.reviewer.prompts) != 1 {
+		t.Fatalf("reviews = %d before the recheck time, want 1", len(f.reviewer.prompts))
+	}
+	f.tick(2 * time.Minute)
+	if len(f.reviewer.prompts) != 2 {
+		t.Fatalf("reviews = %d after the recheck time, want 2", len(f.reviewer.prompts))
+	}
+}
+
+func TestLimitIsRememberedAcrossAnAgentRestart(t *testing.T) {
+	f := started(t, config.Supervisor{}, limited(90))
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	f.tick(30 * time.Minute)
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("after a restart: %d review(s), sent %q; the worker is still limited", f.reviews(), f.term.sent)
+	}
+}
+
+func TestLimitedReviewerIsNotAFailure(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.reviewer.err = errors.New("reviewer command: exit status 1: Claude usage limit reached. Your limit will reset at 3pm.")
+	f.tick(2 * time.Minute)
+	f.tick(retryAfter + time.Minute) // a plain failure would be retried by now
+
+	if len(f.reviewer.prompts) != 1 {
+		t.Fatalf("reviewer was asked %d times inside the limit wait, want 1", len(f.reviewer.prompts))
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictLimited || c.Kind != KindLimit {
+		t.Fatalf("check-in = %+v, want limited, not an error", c)
+	}
+
+	f.reviewer.err = nil
+	f.tick(limitRecheck)
+	if len(f.reviewer.prompts) != 2 {
+		t.Fatalf("reviewer was asked %d times after the limit wait, want 2", len(f.reviewer.prompts))
 	}
 }
