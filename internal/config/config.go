@@ -129,6 +129,35 @@ type Machine struct {
 	Issues  []IssueSource `yaml:"issues"`
 	Tasks   []Task        `yaml:"tasks"`
 	Workers []Worker      `yaml:"workers"`
+	// Capacity says when the machine is too busy to be given new work.
+	Capacity Capacity `yaml:"capacity"`
+}
+
+// Capacity is the machine's test for "busy". While it is busy no worker is
+// handed a new issue; work in progress goes on. With neither test set the
+// machine always has room.
+type Capacity struct {
+	// MaxLoad is the 1-minute load average per core above which the machine
+	// is busy. 0 turns the test off.
+	MaxLoad float64 `yaml:"max_load"`
+	// BusyWhen is a command that exits 0 while the machine is busy with
+	// something that is not shed's, such as a CI job.
+	BusyWhen string `yaml:"busy_when"`
+	// MaxWait is the longest a hand-over is held. After it the issue is
+	// handed over anyway, so a machine that is never quiet still works.
+	MaxWait string `yaml:"max_wait"`
+}
+
+// DefaultMaxWait is how long a hand-over is held on a busy machine.
+const DefaultMaxWait = 20 * time.Minute
+
+// Set reports whether the machine has a test for busy.
+func (c Capacity) Set() bool {
+	return c.MaxLoad > 0 || c.BusyWhen != ""
+}
+
+func (c Capacity) MaxWaitOrDefault() time.Duration {
+	return durationOr(c.MaxWait, DefaultMaxWait)
 }
 
 // Worker is a long-running agent session that the machine's agent keeps
@@ -341,6 +370,14 @@ func (c *Config) validate() error {
 				if d, err := time.ParseDuration(t.Timeout); err != nil || d <= 0 {
 					fail("%s: task %q timeout %q is not a positive duration such as 30m", where, t.Name, t.Timeout)
 				}
+			}
+		}
+		if m.Capacity.MaxLoad < 0 {
+			fail("%s: capacity.max_load must not be negative", where)
+		}
+		if w := m.Capacity.MaxWait; w != "" {
+			if d, err := time.ParseDuration(w); err != nil || d <= 0 {
+				fail("%s: capacity.max_wait %q is not a positive duration such as 20m", where, w)
 			}
 		}
 		workers := map[string]bool{}

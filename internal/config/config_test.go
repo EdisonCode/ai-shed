@@ -54,6 +54,8 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"bad cache ttl", minimal + "supervisor: {cache_ttl: long}\n", "cache_ttl"},
 		{"model command without placeholder", minimal + "supervisor: {model_command: /model}\n", "must contain {model}"},
 		{"worker issue source without filter", minimal + "    workers:\n      - {name: w, dir: /tmp, brief: b, issues: [{repo: org/app}]}\n", `worker "w": issue source org/app needs a label`},
+		{"negative max_load", minimal + "    capacity: {max_load: -1}\n", "max_load"},
+		{"bad max_wait", minimal + "    capacity: {max_wait: later}\n", "max_wait"},
 		{"bad models.apply", minimal + "supervisor: {models: {apply: maybe}}\n", "models.apply"},
 		{"bad when_cold", minimal + "supervisor: {when_cold: maybe}\n", "when_cold"},
 	}
@@ -200,5 +202,20 @@ func TestHandBackPhrase(t *testing.T) {
 				t.Errorf("%s: signal %s counts in comments with %q, want %q", tc.name, s.Name, s.HandBack, tc.want)
 			}
 		}
+	}
+}
+
+func TestCapacity(t *testing.T) {
+	if (Capacity{}).Set() {
+		t.Error("a machine with no test for busy must always have room")
+	}
+	if !(Capacity{MaxLoad: 1.5}).Set() || !(Capacity{BusyWhen: "pgrep x"}).Set() {
+		t.Error("either test makes the capacity set")
+	}
+	if got := (Capacity{}).MaxWaitOrDefault(); got != DefaultMaxWait {
+		t.Errorf("default max wait = %v", got)
+	}
+	if got := (Capacity{MaxWait: "5m"}).MaxWaitOrDefault(); got != 5*time.Minute {
+		t.Errorf("max wait = %v", got)
 	}
 }

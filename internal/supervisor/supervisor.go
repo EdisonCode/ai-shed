@@ -62,15 +62,16 @@ const (
 
 // Check-in kinds: why the supervisor looked.
 const (
-	KindStart   = "start"   // the worker had no window
-	KindRestart = "restart" // its session had exited to the shell
-	KindIdle    = "idle"    // it went quiet
-	KindScope   = "scope"   // it has worked a while; is it still in its brief?
-	KindQueue   = "queue"   // it was resting and its queue changed
-	KindBrief   = "brief"   // its brief was edited
-	KindLimit   = "limit"   // its usage limit was due to reset
-	KindRecycle = "recycle" // the owner asked for a fresh session
-	KindError   = "error"
+	KindStart    = "start"    // the worker had no window
+	KindRestart  = "restart"  // its session had exited to the shell
+	KindIdle     = "idle"     // it went quiet
+	KindScope    = "scope"    // it has worked a while; is it still in its brief?
+	KindQueue    = "queue"    // it was resting and its queue changed
+	KindBrief    = "brief"    // its brief was edited
+	KindLimit    = "limit"    // its usage limit was due to reset
+	KindRecycle  = "recycle"  // the owner asked for a fresh session
+	KindCapacity = "capacity" // a held hand-over was delivered
+	KindError    = "error"
 )
 
 var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "fish": true, "dash": true, "ksh": true, "-zsh": true, "-bash": true}
@@ -86,6 +87,9 @@ type Supervisor struct {
 	Lister         backlog.Lister
 	StateDir       string
 	Now            func() time.Time
+	// Busy says why the machine has no room for new work, or "" when it
+	// has. Nil means it always has room.
+	Busy func(ctx context.Context) string
 	// Notify tells the owner that a worker has started to need them. It may
 	// be nil.
 	Notify func(worker, message string)
@@ -101,6 +105,8 @@ type Supervisor struct {
 // costs a working worker nothing: no extra review and no repeated message.
 type workerState struct {
 	briefChecked bool
+	// held is a hand-over that waits for the machine to have room.
+	held *heldHandOver
 	// limitedUntil is set while the worker is at a usage limit. Nothing is
 	// reviewed or typed before then.
 	limitedUntil time.Time
@@ -132,6 +138,16 @@ func (st *workerState) lastVerdict() string {
 		return ""
 	}
 	return st.recent[len(st.recent)-1].Verdict
+}
+
+// heldHandOver is a hand-over the reviewer chose that was not delivered
+// because the machine was busy.
+type heldHandOver struct {
+	verdict Verdict
+	since   time.Time
+	// activity is the worker's last output when the hand-over was chosen. If
+	// the screen has changed since, the choice is out of date.
+	activity time.Time
 }
 
 // Tick checks every worker once. A failure on one worker is recorded and
@@ -213,6 +229,24 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 	// issue back: nothing is in progress.
 	if pending, immediately := s.recycleRequested(w.Name); pending && (immediately || st.issue == 0 || st.lastVerdict() == runlog.VerdictDone) {
 		return s.recycle(w, st, now)
+	}
+
+	if st.held != nil {
+		if !obs.LastActivity.Equal(st.held.activity) {
+			// The worker did something. What was chosen for it is out of date.
+			st.held = nil
+		} else {
+			reason, waited := s.busy(ctx), now.Sub(st.held.since)
+			switch {
+			case reason == "":
+				return s.release(ctx, w, st, obs, now, fmt.Sprintf("the machine has room again after %s", waited.Round(time.Second)))
+			case waited >= s.Machine.Capacity.MaxWaitOrDefault():
+				// Resist, not refuse: a machine that never goes quiet must
+				// not starve its workers.
+				return s.release(ctx, w, st, obs, now, fmt.Sprintf("handed over after waiting %s, although: %s", waited.Round(time.Second), reason))
+			}
+			return nil
+		}
 	}
 
 	idle := now.Sub(obs.LastActivity)
@@ -327,65 +361,116 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 		c.Until = st.limitedUntil
 	}
 	if verdict.Verdict == runlog.VerdictNudge {
-		st.nudges = within(st.nudges, now)
-		if len(st.nudges) >= maxNudges {
-			c.Verdict = runlog.VerdictStuck
-			c.Reason = fmt.Sprintf("%d nudges in %s did not get it moving; the next would have been: %s", maxNudges, loopWindow, verdict.Message)
-		} else {
-			// A context is worth keeping only while it is warm and still about
-			// the work in hand. Past the cache lifetime it is read again at
-			// full price; a change of model empties the cache too; and a
-			// worker set to start each issue fresh should not carry the last
-			// issue into the next. In each case a cleared context that
-			// re-reads the brief costs less.
-			c.Cold = idle > s.Settings.CacheTTLOrDefault()
-			c.Message, c.Issue = verdict.Message, verdict.Issue
-			// A nudge may name the issue the worker is already on. Only a
-			// different issue is a hand-over.
-			newIssue := verdict.Issue != 0 && verdict.Issue != st.issue
-			model := item.Model
-			c.Rework = item.Rework
-			tellOnly := s.Settings.Models.TellOnly()
-			switchModel := newIssue && !tellOnly && model != "" && model != st.model
-			// The first issue of a session lands on a context that is
-			// already empty.
-			fresh := newIssue && w.FreshPerIssue && st.issue != 0
-			// A worker stopped by a usage limit was cut off in the middle of
-			// its work and wrote nothing down. Its context is all there is of
-			// that work, so it is kept, at the price of reading it again.
-			coldClear := c.Cold && s.Settings.ClearWhenCold() && kind != KindLimit
-			cleared := switchModel || fresh || coldClear
-			switch {
-			case cleared:
-				if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
-					return err
-				}
-				// This message already sends the worker back to its brief.
-				c.Message = reorient + verdict.Message
-			case st.briefStale:
-				c.Message = briefChangedThen + verdict.Message
-			}
-			st.briefStale = false
-			if switchModel {
-				if err := s.command(w, s.Settings.ModelCommandFor(model)); err != nil {
-					return err
-				}
-				st.model, c.Model = model, model
-			}
-			if newIssue {
-				st.issue = verdict.Issue
-			}
-			if tellOnly && model != "" {
-				c.Model = model
-				c.Message += fmt.Sprintf(modelTold, model)
-			}
-			if err := s.Terminal.Send(w.Name, c.Message); err != nil {
-				return err
-			}
-			c.Sent = true
-			st.nudges = append(st.nudges, now)
+		// A different issue is a hand-over: new work for the machine. It is
+		// held while the machine is busy with something else.
+		handOver := verdict.Issue != 0 && verdict.Issue != st.issue
+		if reason := s.busy(ctx); handOver && reason != "" {
+			st.held = &heldHandOver{verdict: verdict, since: now, activity: obs.LastActivity}
+			c.Verdict, c.Issue = runlog.VerdictHeld, verdict.Issue
+			c.Reason = fmt.Sprintf("#%d is held for this worker: %s", verdict.Issue, reason)
+		} else if err := s.deliver(w, st, now, idle, kind, verdict, item, &c); err != nil {
+			return err
 		}
 	}
+	s.record(st, c)
+	return nil
+}
+
+// deliver types a nudge into the worker, unless nudges have stopped helping.
+// It fills in the check-in with what was sent.
+func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, idle time.Duration, kind string, verdict Verdict, item QueueItem, c *runlog.Checkin) error {
+	st.nudges = within(st.nudges, now)
+	if len(st.nudges) >= maxNudges {
+		c.Verdict = runlog.VerdictStuck
+		c.Reason = fmt.Sprintf("%d nudges in %s did not get it moving; the next would have been: %s", maxNudges, loopWindow, verdict.Message)
+		return nil
+	}
+	// A context is worth keeping only while it is warm and still about
+	// the work in hand. Past the cache lifetime it is read again at
+	// full price; a change of model empties the cache too; and a
+	// worker set to start each issue fresh should not carry the last
+	// issue into the next. In each case a cleared context that
+	// re-reads the brief costs less.
+	c.Cold = idle > s.Settings.CacheTTLOrDefault()
+	c.Message, c.Issue = verdict.Message, verdict.Issue
+	// A nudge may name the issue the worker is already on. Only a
+	// different issue is a hand-over.
+	newIssue := verdict.Issue != 0 && verdict.Issue != st.issue
+	model := item.Model
+	c.Rework = item.Rework
+	tellOnly := s.Settings.Models.TellOnly()
+	switchModel := newIssue && !tellOnly && model != "" && model != st.model
+	// The first issue of a session lands on a context that is
+	// already empty.
+	fresh := newIssue && w.FreshPerIssue && st.issue != 0
+	// A worker stopped by a usage limit was cut off in the middle of
+	// its work and wrote nothing down. Its context is all there is of
+	// that work, so it is kept, at the price of reading it again.
+	coldClear := c.Cold && s.Settings.ClearWhenCold() && kind != KindLimit
+	cleared := switchModel || fresh || coldClear
+	switch {
+	case cleared:
+		if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
+			return err
+		}
+		// This message already sends the worker back to its brief.
+		c.Message = reorient + verdict.Message
+	case st.briefStale:
+		c.Message = briefChangedThen + verdict.Message
+	}
+	st.briefStale = false
+	if switchModel {
+		if err := s.command(w, s.Settings.ModelCommandFor(model)); err != nil {
+			return err
+		}
+		st.model, c.Model = model, model
+	}
+	if newIssue {
+		st.issue = verdict.Issue
+	}
+	if tellOnly && model != "" {
+		c.Model = model
+		c.Message += fmt.Sprintf(modelTold, model)
+	}
+	if err := s.Terminal.Send(w.Name, c.Message); err != nil {
+		return err
+	}
+	c.Sent = true
+	st.nudges = append(st.nudges, now)
+	return nil
+}
+
+// busy says why the machine has no room for new work, or "" when it has.
+func (s *Supervisor) busy(ctx context.Context) string {
+	if s.Busy == nil {
+		return ""
+	}
+	return s.Busy(ctx)
+}
+
+// release hands over an issue that was held while the machine was busy. The
+// reviewer already chose it; it is not asked again.
+func (s *Supervisor) release(ctx context.Context, w config.Worker, st *workerState, obs Observation, now time.Time, reason string) error {
+	held := st.held
+	st.held = nil
+	queue, err := s.queue(ctx, w)
+	if err != nil {
+		return err
+	}
+	item, inQueue := find(queue, held.verdict.Issue)
+	if !inQueue {
+		// It was closed, or taken, while it was held. The next tick reviews
+		// the worker afresh.
+		st.reviewedActivity = time.Time{}
+		return nil
+	}
+	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: KindCapacity, Verdict: runlog.VerdictNudge, Reason: reason,
+		Activity: obs.LastActivity, Queue: fingerprint(queue)}
+	if err := s.deliver(w, st, now, now.Sub(obs.LastActivity), KindCapacity, held.verdict, item, &c); err != nil {
+		return err
+	}
+	st.lastReview, st.reviewedActivity = now, obs.LastActivity
+	st.lastQueueCheck, st.queueSeen = now, c.Queue
 	s.record(st, c)
 	return nil
 }
@@ -460,12 +545,17 @@ func (s *Supervisor) recover(worker string) *workerState {
 			st.briefStale = !c.Sent
 		case c.Verdict == runlog.VerdictLimited && c.Activity.IsZero():
 			// The reviewer was limited; the worker itself was not reviewed.
-		case c.Kind == KindIdle || c.Kind == KindScope || c.Kind == KindQueue || c.Kind == KindLimit:
+		case c.Kind == KindIdle || c.Kind == KindScope || c.Kind == KindQueue || c.Kind == KindLimit || c.Kind == KindCapacity:
 			st.lastReview, st.lastQueueCheck = c.Time, c.Time
 			st.reviewedActivity, st.queueSeen = c.Activity, c.Queue
 			st.limitedUntil = time.Time{}
 			if c.Verdict == runlog.VerdictLimited {
 				st.limitedUntil = c.Until
+			}
+			if c.Verdict == runlog.VerdictHeld {
+				// What was held is not in the log in full. The new agent
+				// reviews the worker once more and holds or hands over.
+				st.reviewedActivity = time.Time{}
 			}
 			if !c.Sent {
 				continue

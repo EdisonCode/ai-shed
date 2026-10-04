@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,6 +147,9 @@ func (a Agent) start(ctx context.Context, cfg *config.Config, m config.Machine) 
 	if len(m.Workers) > 0 {
 		sup := a.supervisor(cfg, m)
 		sup.Notify = notify
+		if m.Capacity.Set() {
+			sup.Busy = supervisor.SystemBusy(m, runtime.NumCPU())
+		}
 		stopSupervisor = every(ctx, superviseEvery, sup.Tick)
 	}
 	a.Logf("machine %s: %d task(s) scheduled, %d worker(s) supervised", m.Name, len(m.Tasks), len(m.Workers))

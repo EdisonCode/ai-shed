@@ -129,6 +129,9 @@ Run this as a checklist and report each line.
    - `worker needs you` / `is stuck`: look at the terminal
      (`ssh <host> tmux capture-pane -p -t shed:<worker>`). A permission
      prompt or a menu needs the owner at the keyboard, or by `tmux attach`.
+   - `held` under `supervised` needs nothing: the worker's next issue waits
+     for the machine to have room (its `capacity` in the fleet file) and is
+     handed over when it does, or after `max_wait`.
    - `worker could not be checked`: the reason is in the line. Usually the
      reviewer command or `gh` on that machine.
 3. The supervisor's log is on each machine:
