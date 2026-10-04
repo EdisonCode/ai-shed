@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -57,9 +58,17 @@ func (f *fakeReviewer) Review(_ context.Context, prompt string) (Verdict, error)
 	return v, nil
 }
 
-type fakeLister struct{ issues []backlog.Issue }
+// fakeLister serves one list of issues for every source, or a list per label
+// when byLabel is set.
+type fakeLister struct {
+	issues  []backlog.Issue
+	byLabel map[string][]backlog.Issue
+}
 
-func (f *fakeLister) List(context.Context, config.IssueSource) ([]backlog.Issue, error) {
+func (f *fakeLister) List(_ context.Context, src config.IssueSource) ([]backlog.Issue, error) {
+	if f.byLabel != nil {
+		return f.byLabel[src.Label], nil
+	}
 	return f.issues, nil
 }
 
@@ -800,5 +809,150 @@ func TestLimitedReviewerIsNotAFailure(t *testing.T) {
 	f.tick(limitRecheck)
 	if len(f.reviewer.prompts) != 2 {
 		t.Fatalf("reviewer was asked %d times after the limit wait, want 2", len(f.reviewer.prompts))
+	}
+}
+
+func labeled(number int, labels ...string) backlog.Issue {
+	i := backlog.Issue{Repo: "org/app", Number: number, Title: "Issue"}
+	for _, l := range labels {
+		i.Labels = append(i.Labels, backlog.Label{Name: l})
+	}
+	return i
+}
+
+// queueShown returns the issue numbers of the queue in the reviewer's prompt,
+// in order.
+func queueShown(t *testing.T, prompt string) []int {
+	t.Helper()
+	_, rest, _ := strings.Cut(prompt, "<queue>\n")
+	block, _, _ := strings.Cut(rest, "</queue>")
+	var numbers []int
+	for _, line := range strings.Split(strings.TrimSpace(block), "\n") {
+		var n int
+		if _, err := fmt.Sscanf(line, "org/app#%d", &n); err == nil {
+			numbers = append(numbers, n)
+		}
+	}
+	return numbers
+}
+
+func TestQueueIsOrderedByPriorityThenAge(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.Machine.Issues[0].Priority = []string{"p0", "p1"}
+	f.lister.issues = []backlog.Issue{labeled(30), labeled(20, "p1"), labeled(10), labeled(40, "p0"), labeled(25, "p1")}
+	f.tick(2 * time.Minute)
+
+	if got, want := queueShown(t, f.reviewer.prompts[0]), []int{40, 20, 25, 10, 30}; !slices.Equal(got, want) {
+		t.Fatalf("queue = %v, want %v", got, want)
+	}
+}
+
+func handedBackWith(number int, problem string) backlog.Issue {
+	i := labeled(number)
+	i.Comments = []backlog.Comment{{Body: "**PR:** #41 (ready)"}}
+	i.OpenPRs = map[int]backlog.PR{41: {Problem: problem}}
+	return i
+}
+
+func TestStalePullRequestGoesBackToAWorkerFirst(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"},
+		Verdict{Verdict: runlog.VerdictNudge, Message: "PR #41 conflicts with main. Rebase it and nothing else.", Issue: 12, Reason: "its pull request went stale"})
+	f.lister.issues = []backlog.Issue{labeled(5), handedBackWith(12, "conflicts with the base branch")}
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if got := queueShown(t, prompt); !slices.Equal(got, []int{12, 5}) {
+		t.Fatalf("queue = %v, want the rework item first", got)
+	}
+	if !strings.Contains(prompt, "[rework: pull request #41 conflicts with the base branch]") {
+		t.Fatalf("the reviewer was not told why:\n%s", prompt)
+	}
+	if c := f.lastCheckin(t); c.Issue != 12 || c.Rework != "pull request #41 conflicts with the base branch" || !c.Sent {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestHealthyPullRequestStaysWithTheOwner(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.lister.issues = []backlog.Issue{handedBackWith(12, "")}
+	f.tick(2 * time.Minute)
+	if prompt := f.reviewer.prompts[0]; strings.Contains(prompt, "rework") && strings.Contains(prompt, "#12 Issue [rework") || !strings.Contains(prompt, "org/app#12 Issue [waits on the owner: review]") {
+		t.Fatalf("prompt queue:\n%s", prompt)
+	}
+}
+
+func TestRestingWorkerWakesWhenAPullRequestGoesStale(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, Verdict{Verdict: runlog.VerdictDone, Reason: "all handed back"},
+		Verdict{Verdict: runlog.VerdictNudge, Message: "Rebase PR #41.", Issue: 12, Reason: "stale"})
+	f.lister.issues = []backlog.Issue{handedBackWith(12, "")}
+	f.tick(2 * time.Minute)
+	f.lister.issues = []backlog.Issue{handedBackWith(12, "has a failed check (integration)")}
+	f.tick(queueRecheck + time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{"Rebase PR #41."}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+}
+
+func TestPullRequestIsSentBackOnlySoManyTimes(t *testing.T) {
+	back := Verdict{Verdict: runlog.VerdictNudge, Message: "Fix the failed check on PR #41.", Issue: 12, Reason: "stale"}
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, back, back, Verdict{Verdict: runlog.VerdictDone, Reason: "nothing workable"})
+	f.lister.issues = []backlog.Issue{handedBackWith(12, "has a failed check (flaky)")}
+	f.tick(2 * time.Minute)
+	f.handOver()
+	f.handOver()
+
+	last := f.reviewer.prompts[len(f.reviewer.prompts)-1]
+	if strings.Contains(last, "[rework:") || !strings.Contains(last, "waits on the owner: pull request #41 has a failed check (flaky) after 2 tries") {
+		t.Fatalf("after two tries the item must go to the owner:\n%s", last)
+	}
+}
+
+func twoWorkers(t *testing.T, verdicts ...Verdict) *fixture {
+	t.Helper()
+	f := newFixture(t, config.Supervisor{CacheTTL: "1h"}, verdicts...)
+	f.Machine.Workers = append(f.Machine.Workers, config.Worker{Name: "docs", Dir: t.TempDir(), Brief: "Docs only."})
+	f.term.running(t0.Add(-10 * time.Minute)) // both sessions are up and silent
+	return f
+}
+
+func TestTwoWorkersAreNotHandedTheSameIssue(t *testing.T) {
+	f := twoWorkers(t, assign(12), Verdict{Verdict: runlog.VerdictDone, Reason: "nothing left"})
+	f.tick(0) // app is reviewed first and takes #12; then docs
+
+	if len(f.reviewer.prompts) != 2 {
+		t.Fatalf("reviews = %d, want one per worker", len(f.reviewer.prompts))
+	}
+	if got := queueShown(t, f.reviewer.prompts[1]); len(got) != 0 {
+		t.Fatalf("the second worker was shown %v; #12 is in hand for the first", got)
+	}
+}
+
+func TestReviewerCannotHandOverAnIssueOutsideTheQueue(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(99))
+	f.tick(2 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; #99 is not in the queue", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictError || !strings.Contains(c.Reason, "#99") {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestWorkerWithItsOwnQueueSeesOnlyThat(t *testing.T) {
+	f := twoWorkers(t, onTrack)
+	f.Machine.Workers[1].Issues = []config.IssueSource{{Repo: "org/app", Label: "area:docs"}}
+	f.lister.byLabel = map[string][]backlog.Issue{"machine:box": {labeled(12)}, "area:docs": {labeled(50), labeled(51)}}
+	f.tick(0)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
+		t.Fatalf("worker app was shown %v, want the machine's queue", got)
+	}
+	if got := queueShown(t, f.reviewer.prompts[1]); !slices.Equal(got, []int{50, 51}) {
+		t.Fatalf("worker docs was shown %v, want its own queue", got)
+	}
+	brief, _ := os.ReadFile(filepath.Join(f.Machine.Workers[1].Dir, BriefFile))
+	if !strings.Contains(string(brief), "label `area:docs`") || strings.Contains(string(brief), "machine:box") {
+		t.Fatalf("the docs worker's brief names the wrong queue:\n%s", brief)
 	}
 }

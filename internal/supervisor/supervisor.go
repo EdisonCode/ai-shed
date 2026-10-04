@@ -213,7 +213,7 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		return s.review(ctx, w, st, obs, now, KindIdle, nil)
 	case now.Sub(st.lastQueueCheck) >= queueRecheck:
 		// The worker is resting after a review. Only new work wakes it.
-		queue, err := s.queue(ctx)
+		queue, err := s.queue(ctx, w)
 		if err != nil {
 			return err
 		}
@@ -262,7 +262,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerState, obs Observation, now time.Time, kind string, queue []QueueItem) error {
 	if queue == nil {
 		var err error
-		if queue, err = s.queue(ctx); err != nil {
+		if queue, err = s.queue(ctx, w); err != nil {
 			return err
 		}
 	}
@@ -278,6 +278,11 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	verdict, err := s.Reviewer.Review(ctx, Prompt(in))
 	if err != nil {
 		return err
+	}
+	item, inQueue := find(queue, verdict.Issue)
+	if verdict.Issue != 0 && !inQueue {
+		// Another worker may have it in hand, or the reviewer made it up.
+		return fmt.Errorf("the reviewer handed over #%d, which is not in this worker's queue", verdict.Issue)
 	}
 	st.lastReview, st.reviewedActivity = now, obs.LastActivity
 	st.lastQueueCheck, st.queueSeen = now, fingerprint(queue)
@@ -310,7 +315,8 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 			// A nudge may name the issue the worker is already on. Only a
 			// different issue is a hand-over.
 			newIssue := verdict.Issue != 0 && verdict.Issue != st.issue
-			model := modelOf(queue, verdict.Issue)
+			model := item.Model
+			c.Rework = item.Rework
 			tellOnly := s.Settings.Models.TellOnly()
 			switchModel := newIssue && !tellOnly && model != "" && model != st.model
 			// The first issue of a session lands on a context that is
@@ -426,45 +432,75 @@ func (s *Supervisor) recover(worker string) *workerState {
 	return st
 }
 
-// modelOf returns the model of the queue item with this number.
-func modelOf(queue []QueueItem, number int) string {
-	for _, q := range queue {
-		if q.Number == number {
-			return q.Model
+// queue lists the worker's open issues in the order to work them: rework
+// first, since finishing started work beats starting more, then by the
+// owner's priority, then oldest first. An issue that another worker has in
+// hand is not in it.
+func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, error) {
+	checkins, err := runlog.ReadCheckins(s.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	taken := map[int]bool{}
+	for _, other := range s.Machine.Workers {
+		if other.Name != w.Name {
+			taken[runlog.IssueInHand(checkins, other.Name)] = true
 		}
 	}
-	return ""
-}
-
-// queue lists the machine's open issues, oldest first.
-func (s *Supervisor) queue(ctx context.Context) ([]QueueItem, error) {
 	items := []QueueItem{}
-	for _, src := range s.Machine.Issues {
+	for _, src := range s.Machine.SourcesFor(w) {
 		issues, err := s.Lister.List(ctx, src)
 		if err != nil {
 			return nil, err
 		}
 		for _, i := range issues {
-			items = append(items, QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title, Waiting: backlog.Waiting(i, s.Signals),
-				Model: s.Settings.Models.For(i.LabelNames())})
+			if taken[i.Number] {
+				continue
+			}
+			item := QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title, Waiting: backlog.Waiting(i, s.Signals),
+				Model: s.Settings.Models.For(i.LabelNames()), rank: src.Rank(i.LabelNames())}
+			if reason := backlog.Rework(i, s.Signals); reason != "" {
+				if runlog.ReworkSpent(checkins, i.Number, s.Now()) {
+					item.Waiting = append(item.Waiting, fmt.Sprintf("%s after %d tries", reason, runlog.ReworkLimit))
+				} else {
+					item.Rework = reason
+				}
+			}
+			items = append(items, item)
 		}
 	}
 	sort.SliceStable(items, func(a, b int) bool {
-		if items[a].Repo != items[b].Repo {
-			return items[a].Repo < items[b].Repo
+		x, y := items[a], items[b]
+		switch {
+		case (x.Rework != "") != (y.Rework != ""):
+			return x.Rework != ""
+		case x.rank != y.rank:
+			return x.rank < y.rank
+		case x.Repo != y.Repo:
+			return x.Repo < y.Repo
 		}
-		return items[a].Number < items[b].Number
+		return x.Number < y.Number
 	})
 	return items, nil
 }
 
+// find returns the queue item with this number.
+func find(queue []QueueItem, number int) (QueueItem, bool) {
+	for _, q := range queue {
+		if q.Number == number {
+			return q, true
+		}
+	}
+	return QueueItem{}, false
+}
+
 // fingerprint is a digest of the queue. It changes when an issue joins or
-// leaves, or when what an issue waits on changes (for example the owner
-// answered).
+// leaves, when what an issue waits on changes (for example the owner
+// answered), or when a handed-back pull request stops being mergeable.
 func fingerprint(queue []QueueItem) string {
 	h := sha256.New()
 	for _, q := range queue {
-		fmt.Fprintf(h, "%s#%d:%s;", q.Repo, q.Number, strings.Join(q.Waiting, ","))
+		fmt.Fprintf(h, "%s#%d:%s:%s;", q.Repo, q.Number, strings.Join(q.Waiting, ","), q.Rework)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
@@ -503,9 +539,9 @@ func (s *Supervisor) writeBrief(w config.Worker) (changed bool, err error) {
 func (s *Supervisor) briefText(w config.Worker) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Brief for worker %s on %s\n\n%s\n", w.Name, s.Machine.Name, s.scope(w))
-	if len(s.Machine.Issues) > 0 {
+	if sources := s.Machine.SourcesFor(w); len(sources) > 0 {
 		b.WriteString("\n## Queue\n\nYour queue is the open GitHub issues of:\n\n")
-		for _, src := range s.Machine.Issues {
+		for _, src := range sources {
 			fmt.Fprintf(&b, "- %s", src.Repo)
 			if src.Label != "" {
 				fmt.Fprintf(&b, " with label `%s`", src.Label)

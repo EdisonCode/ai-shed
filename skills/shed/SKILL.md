@@ -53,8 +53,13 @@ machine in the fleet file (a label, an assignee, or both).
    the standing orders say what it does with it. Pick the cheapest model that
    can do the work, by the owner's own rule if they gave one. When the rule
    does not settle it, ask the owner; do not default upward.
-4. An issue is handed out oldest first, and never while it waits on the owner.
-   To hold an issue back, remove its machine label.
+4. Order: an issue whose handed-back pull request cannot merge goes back to a
+   worker first; then the labels in the source's `priority` list, in order;
+   then the oldest. An issue that waits on the owner is skipped. To move an
+   issue up, give it a priority label from the fleet file. To hold one back,
+   remove its machine label.
+5. When a machine has two workers, give each its own `issues` in the fleet
+   file. An issue in hand for one worker is never handed to another.
 
 Check the result: `shed status` lists each machine's issues.
 
@@ -103,6 +108,10 @@ Run this as a checklist and report each line.
      post a comment that clears the signal: the `answered_by` phrase of the
      `eyes` signal if the fleet file has one, otherwise the ask phrase
      followed by a `clear` word.
+   - `rework` in the issues list needs nothing from the owner: the pull
+     request cannot merge and a worker is being sent back to it. A `!` line
+     that says `after 2 tries by a worker` is the owner's: the workers could
+     not fix it.
    - `issue waits on you (review)`: a pull request is open. The signal closes
      by itself when it is merged or closed. Read the diff and
      the checks yourself before you say it is good. A worker's report is a

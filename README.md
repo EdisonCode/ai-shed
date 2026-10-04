@@ -102,6 +102,39 @@ Guards against wasted tokens:
 - A usage limit costs no nudges. A limited worker is left alone until its reset. A reviewer that is itself at its limit is tried again after 15 minutes and is not reported as a failure.
 - An idle worker is reviewed once per silence, not once per tick.
 
+### The queue
+
+A worker's queue is the open issues of the machine's `issues` sources, or of
+the worker's own `issues` when it has them. The supervisor hands them out one
+at a time, in this order:
+
+1. **Rework.** An issue that was handed back with a pull request that can no
+   longer merge: it conflicts with its base branch, or a check failed.
+   Finishing started work comes before starting more. The worker is told what
+   is wrong and to fix only that. An issue is sent back at most twice in six
+   hours; after that it is yours, and `shed status` says so. A check that
+   fails for a reason no worker can fix must not keep one busy all night.
+2. **Priority.** The labels in the source's `priority` list, first to last.
+3. **Age.** Oldest first.
+
+```yaml
+machines:
+  - name: linux-box
+    issues:
+      - repo: my-org/my-app
+        label: "machine:linux-box"
+        priority: ["urgent", "quick"]
+    workers:
+      - name: app            # takes from the machine's queue
+      - name: docs           # has a queue of its own
+        issues:
+          - repo: my-org/my-app
+            label: "area:docs"
+```
+
+An issue that waits on you is skipped. An issue that one worker has in hand is
+never handed to another, whatever their queues.
+
 ### Prompt cache
 
 A long session is cheap only while its prompt cache is warm. After the cache
@@ -223,6 +256,9 @@ for these phrases in issue comments (configurable under `signals`):
 | decision | `Decisions needed:` | `none` | `Owner ruling` |
 | eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked` |
 | review | `**PR:** #41` | | that pull request is merged or closed |
+
+While that pull request is open but cannot merge (a conflict, a failed check),
+the issue does not wait on you: it goes back to a worker. See *The queue*.
 
 The review signal follows its pull request (`follows_pr`). An issue that takes
 several pull requests comes back into the queue each time one is merged, and
@@ -382,8 +418,7 @@ author's direction.
 
 - The supervisor reads a terminal. A reviewer model can misjudge it. The
   guards above bound the cost of a wrong nudge; they do not make it right.
-- Workers on one machine share that machine's queue. With two workers, split
-  the work in their briefs.
+- A stale pull request is judged by any failed check, required or not.
 - An issue is matched to a window by number only. Two repos with the same
   issue number on one machine share a match.
 - A missed task run is known only after the task has run once.

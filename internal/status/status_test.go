@@ -307,3 +307,39 @@ func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
 		}
 	}
 }
+
+func stalePR(number int, problem string) backlog.Issue {
+	i := issue(number, "**PR:** #41 (ready)")
+	i.OpenPRs = map[int]backlog.PR{41: {Problem: problem}}
+	return i
+}
+
+func sentBack(issueNumber int, ago time.Duration) runlog.Checkin {
+	return runlog.Checkin{Time: now.Add(-ago), Worker: "app", Kind: "queue", Verdict: runlog.VerdictNudge, Sent: true, Issue: issueNumber, Rework: "pull request #41 conflicts with the base branch"}
+}
+
+func TestStalePullRequestOnASupervisedMachineIsTheSupervisors(t *testing.T) {
+	r := Assess(appWorker, signals, healthy(), []backlog.Issue{stalePR(7, "conflicts with the base branch")})
+	wantAttention(t, r)
+	if r.Issues[0].State != Rework || r.Issues[0].Rework != "pull request #41 conflicts with the base branch" {
+		t.Fatalf("issue = %+v", r.Issues[0])
+	}
+}
+
+func TestStalePullRequestWithNoSupervisorNeedsOwner(t *testing.T) {
+	r := Assess(config.Machine{}, signals, healthy(), []backlog.Issue{stalePR(7, "has a failed check (integration)")})
+	wantAttention(t, r, "org/app#7: pull request #41 has a failed check (integration)")
+}
+
+func TestPullRequestStillStaleAfterTheAllowedTriesNeedsOwner(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{sentBack(7, 3*time.Hour), sentBack(7, time.Hour), checkin(runlog.VerdictDone, "nothing left")}
+	r := Assess(appWorker, signals, res, []backlog.Issue{stalePR(7, "conflicts with the base branch")})
+	wantAttention(t, r, "org/app#7: pull request #41 conflicts with the base branch after 2 tries by a worker")
+}
+
+func TestOldTriesDoNotCountAgainstAPullRequest(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{sentBack(7, 20*time.Hour), sentBack(7, 19*time.Hour), checkin(runlog.VerdictDone, "nothing left")}
+	wantAttention(t, Assess(appWorker, signals, res, []backlog.Issue{stalePR(7, "conflicts with the base branch")}))
+}

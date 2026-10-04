@@ -35,6 +35,9 @@ machines:
       # Open issues with this label are this machine's backlog.
       - repo: my-org/my-app
         label: "machine:linux-box"
+        # Optional. Issues with these labels go first, in this order; then
+        # the oldest first.
+        priority: ["urgent", "quick"]
     workers:
       # A long-running agent session that the machine's agent starts, keeps
       # alive and checks in on. It runs in tmux window shed:app.
@@ -44,6 +47,11 @@ machines:
         # Optional. Clear the worker's context at each new issue. Good for a
         # queue of independent issues; leave off for themed work.
         fresh_per_issue: true
+        # Optional. A queue of this worker's own, in place of the machine's.
+        # Use it when one machine runs two workers.
+        # issues:
+        #   - repo: my-org/my-app
+        #     label: "area:export"
         brief: |
           Work the issues in your queue. Stay inside the audit log and export
           features. Do not change the billing module.

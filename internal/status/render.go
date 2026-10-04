@@ -71,7 +71,11 @@ func renderMachine(w io.Writer, r MachineReport) {
 			if len(i.Waiting) > 0 {
 				state = strings.Join(i.Waiting, "+")
 			}
-			fmt.Fprintf(tw, "    %s#%d\t%s\t%s\t%s\n", i.Repo, i.Number, state, i.Worker, i.Title)
+			title := i.Title
+			if i.Rework != "" {
+				title += " (" + i.Rework + ")"
+			}
+			fmt.Fprintf(tw, "    %s#%d\t%s\t%s\t%s\n", i.Repo, i.Number, state, i.Worker, title)
 		}
 		tw.Flush()
 	}

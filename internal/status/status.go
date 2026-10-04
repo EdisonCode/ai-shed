@@ -28,6 +28,7 @@ const (
 // Issue states.
 const (
 	Working = "working" // a tmux window is named for the issue
+	Rework  = "rework"  // handed back, but its pull request cannot merge; a worker will be sent back to it
 	Queued  = "queued"  // nobody is on it
 	Waiting = "waiting" // it waits on the owner
 )
@@ -62,6 +63,8 @@ type IssueStatus struct {
 	State   string   `json:"state"`
 	Waiting []string `json:"waiting,omitempty"`
 	Worker  string   `json:"worker,omitempty"`
+	// Rework says why the issue's pull request cannot merge as it stands.
+	Rework string `json:"rework,omitempty"`
 }
 
 type TaskStatus struct {
@@ -113,7 +116,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 
 	var issues []backlog.Issue
 	var issueErrs []error
-	for _, src := range m.Issues {
+	for _, src := range m.AllSources() {
 		found, err := c.Lister.List(ctx, src)
 		if err != nil {
 			issueErrs = append(issueErrs, err)
@@ -160,7 +163,7 @@ func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues
 	queued, working := 0, 0
 	for _, issue := range issues {
 		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
-			State: Queued, Waiting: backlog.Waiting(issue, signals)}
+			State: Queued, Waiting: backlog.Waiting(issue, signals), Rework: backlog.Rework(issue, signals)}
 		// A supervised worker has the issue its supervisor handed it. Any
 		// other worker is matched by the name of its tmux window.
 		supervised := supervisedOn(report.Workers, issue.Number)
@@ -175,9 +178,20 @@ func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues
 		case len(st.Waiting) > 0:
 			st.State = Waiting
 			attend("%s#%d waits on you (%s): %s", issue.Repo, issue.Number, strings.Join(st.Waiting, ", "), issue.Title)
+		case st.Rework != "" && res != nil && runlog.ReworkSpent(res.Checkins, issue.Number, res.Now):
+			// A worker was sent back to it as often as allowed. It is the
+			// owner's now, whoever has it in hand.
+			st.State = Rework
+			attend("%s#%d: %s after %d tries by a worker: %s", issue.Repo, issue.Number, st.Rework, runlog.ReworkLimit, issue.Title)
 		case supervised != "":
 			// Its supervisor watches it; a quiet spell is the supervisor's to judge.
 			working++
+		case st.Rework != "":
+			st.State = Rework
+			// A supervisor sends a worker back to it. Without one it is the owner's.
+			if len(m.Workers) == 0 {
+				attend("%s#%d: %s: %s", issue.Repo, issue.Number, st.Rework, issue.Title)
+			}
 		case hasWindow:
 			working++
 			if quiet := res.Now.Sub(window.LastActivity); quiet > workerQuiet {

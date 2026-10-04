@@ -130,6 +130,9 @@ type Worker struct {
 	Command string `yaml:"command"`
 	// Brief is the worker's scope: what to work on and what to leave alone.
 	Brief string `yaml:"brief"`
+	// Issues is this worker's own queue. Without it the worker takes from
+	// the machine's queue.
+	Issues []IssueSource `yaml:"issues"`
 	// FreshPerIssue clears the worker's context each time it is handed a new
 	// issue, so one issue's conversation does not follow it into the next.
 	// Leave it off for themed work where the issues build on each other.
@@ -147,6 +150,23 @@ type IssueSource struct {
 	Repo     string `yaml:"repo"`
 	Label    string `yaml:"label"`
 	Assignee string `yaml:"assignee"`
+	// Priority lists labels, highest first. An issue with one of them is
+	// worked before an issue with a later one or with none; within one
+	// priority the oldest issue goes first.
+	Priority []string `yaml:"priority"`
+}
+
+// Rank is the place of an issue with these labels in the source's priority
+// order: 0 is first. An issue with no priority label ranks after all of them.
+func (s IssueSource) Rank(labels []string) int {
+	for rank, priority := range s.Priority {
+		for _, label := range labels {
+			if label == priority {
+				return rank
+			}
+		}
+	}
+	return len(s.Priority)
 }
 
 // Task is a command the machine's agent runs on a cron schedule.
@@ -260,14 +280,17 @@ func (c *Config) validate() error {
 				fail("%s: a check needs name and run", where)
 			}
 		}
-		for _, src := range m.Issues {
-			if !repoRE.MatchString(src.Repo) {
-				fail("%s: issue repo %q must be owner/name", where, src.Repo)
-			}
-			if src.Label == "" && src.Assignee == "" {
-				fail("%s: issue source %s needs a label or an assignee", where, src.Repo)
+		checkSources := func(where string, sources []IssueSource) {
+			for _, src := range sources {
+				if !repoRE.MatchString(src.Repo) {
+					fail("%s: issue repo %q must be owner/name", where, src.Repo)
+				}
+				if src.Label == "" && src.Assignee == "" {
+					fail("%s: issue source %s needs a label or an assignee", where, src.Repo)
+				}
 			}
 		}
+		checkSources(where, m.Issues)
 		tasks := map[string]bool{}
 		for _, t := range m.Tasks {
 			if !nameRE.MatchString(t.Name) {
@@ -304,6 +327,7 @@ func (c *Config) validate() error {
 			if strings.TrimSpace(w.Brief) == "" {
 				fail("%s: worker %q has no brief", where, w.Name)
 			}
+			checkSources(fmt.Sprintf("%s: worker %q", where, w.Name), w.Issues)
 		}
 	}
 	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery} {
@@ -350,6 +374,36 @@ func (c *Config) Machine(name string) (Machine, bool) {
 		}
 	}
 	return Machine{}, false
+}
+
+// SourcesFor returns the worker's queue: its own issue sources, or the
+// machine's when it has none.
+func (m Machine) SourcesFor(w Worker) []IssueSource {
+	if len(w.Issues) > 0 {
+		return w.Issues
+	}
+	return m.Issues
+}
+
+// AllSources returns every issue source on the machine, each once: the
+// machine's and its workers'.
+func (m Machine) AllSources() []IssueSource {
+	var all []IssueSource
+	seen := map[string]bool{}
+	add := func(sources []IssueSource) {
+		for _, src := range sources {
+			key := src.Repo + "\x00" + src.Label + "\x00" + src.Assignee
+			if !seen[key] {
+				seen[key] = true
+				all = append(all, src)
+			}
+		}
+	}
+	add(m.Issues)
+	for _, w := range m.Workers {
+		add(w.Issues)
+	}
+	return all
 }
 
 // ChecksFor returns the default checks followed by the machine's own.

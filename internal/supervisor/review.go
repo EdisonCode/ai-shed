@@ -43,6 +43,10 @@ type QueueItem struct {
 	Waiting []string
 	// Model is the model this issue should be worked with; empty for any.
 	Model string
+	// Rework says why an issue that was handed back needs a worker again.
+	Rework string
+	// rank is the issue's place in its source's priority order.
+	rank int
 }
 
 // ReviewInput is everything the reviewer is shown.
@@ -66,13 +70,14 @@ const instructions = `You supervise an unattended AI coding worker. Its owner is
 Choose one verdict:
 
 - on_track: the worker is doing work that its brief covers, or it waits on a command, a background task or a timer that it started itself. Say nothing.
-- nudge: one short message from you would get useful work moving. Use it when the worker has finished an item or waits for its first one and the queue has an item it can act on (give it the first queue item that does not wait on the owner, and put that number in "issue"), when it asked a question that the brief already answers, when its work has left the brief, when it repeats an approach that keeps failing, or when it waits for something that will not come.
+- nudge: one short message from you would get useful work moving. Use it when the worker has finished an item or waits for its first one and the queue has an item it can act on (give it the first workable item of the queue, which is in the order to work it, and put that number in "issue"; an item is workable when it is marked rework, or when it does not wait on the owner), when it asked a question that the brief already answers, when its work has left the brief, when it repeats an approach that keeps failing, or when it waits for something that will not come.
 - needs_owner: nothing useful can move until the owner acts. Also use it when the terminal shows a permission prompt, a menu or any dialog: you must never type into one.
 - done: the queue has no item the worker can act on and the worker has reported its work. Leave it idle; an idle worker costs nothing.
 - limited: the terminal shows that the worker reached a usage limit or a rate limit and must wait for it to reset. Nothing you type can help before then, and a message would be wasted. Set "resume_in_minutes" to the minutes from the current time until the reset the terminal names; 0 if it names none.
 
 Rules for the message of a nudge:
 - One line, plain words, specific. Name the issue number, the file or the command.
+- An item marked rework was handed back with a pull request that cannot merge as it stands. Say what is wrong with the pull request and tell the worker to fix that and nothing else, even if the item also waits on the owner for something.
 - Keep the worker inside its brief. Work that the brief does not cover is out of scope, however useful.
 - Do not make a decision that belongs to the owner: product behaviour, money, scope beyond the brief, merging, deploying, production, credentials. Tell the worker to write the question and its recommendation in the issue, then take the next item.
 - Never tell the worker to skip or weaken a test, bypass a hook, merge, or deploy.
@@ -97,6 +102,9 @@ func Prompt(in ReviewInput) string {
 	}
 	for _, q := range in.Queue {
 		fmt.Fprintf(&b, "%s#%d %s", q.Repo, q.Number, q.Title)
+		if q.Rework != "" {
+			fmt.Fprintf(&b, " [rework: %s]", q.Rework)
+		}
 		if len(q.Waiting) > 0 {
 			fmt.Fprintf(&b, " [waits on the owner: %s]", strings.Join(q.Waiting, ", "))
 		}

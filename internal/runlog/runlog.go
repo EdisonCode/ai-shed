@@ -108,6 +108,9 @@ type Checkin struct {
 	Queue    string    `json:"queue,omitempty"`
 	// Until is when a limited worker is looked at again.
 	Until time.Time `json:"until,omitzero"`
+	// Rework is set when the issue was handed back to a worker because its
+	// pull request could not merge; it says why.
+	Rework string `json:"rework,omitempty"`
 }
 
 func AppendCheckin(dir string, c Checkin) error {
@@ -164,4 +167,24 @@ func IssueInHand(checkins []Checkin, worker string) int {
 		}
 	}
 	return issue
+}
+
+// An issue is sent back to a worker over its pull request at most
+// ReworkLimit times in ReworkWindow. A check that fails for a reason no
+// worker can fix must not keep one busy all night.
+const (
+	ReworkLimit  = 2
+	ReworkWindow = 6 * time.Hour
+)
+
+// ReworkSpent reports whether the issue has been sent back as often as
+// allowed.
+func ReworkSpent(checkins []Checkin, issue int, now time.Time) bool {
+	count := 0
+	for _, c := range checkins {
+		if c.Sent && c.Issue == issue && c.Rework != "" && now.Sub(c.Time) < ReworkWindow {
+			count++
+		}
+	}
+	return count >= ReworkLimit
 }
