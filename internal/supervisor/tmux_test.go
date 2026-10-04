@@ -45,7 +45,7 @@ func TestTmuxOpenSendObserveCapture(t *testing.T) {
 	}
 	// The other window must be untouched: exact names, not prefixes.
 	other, _ := tm.Capture("one-more", 20)
-	if strings.Contains(other, "42") {
+	if strings.Contains(other, "answer") {
 		t.Fatalf("text sent to window one reached one-more:\n%s", other)
 	}
 	if obs, _ := tm.Observe("on"); obs.Exists {

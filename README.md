@@ -238,6 +238,18 @@ make dist                 # binaries for linux and macOS in dist/
 
 `deploy` copies the right binary to `~/.local/bin/shed`, the fleet file to
 `~/.config/shed/shed.yaml`, and the machine's name to `~/.config/shed/machine`.
+A worker's tool usually needs more than that from your machine: agent
+definitions, skills, notes. shed does not know your tool's layout, so it runs
+a command of yours instead. `defaults.deploy_hook` runs on the watcher after
+each machine's copy succeeds, with `SHED_MACHINE` and `SHED_HOST` set:
+
+```yaml
+defaults:
+  deploy_hook: rsync -a ~/.claude/agents ~/.claude/skills "$SHED_HOST:.claude/"
+```
+
+A failing hook fails the deploy of that machine.
+
 Then start the agent once on each machine:
 
 - **Linux (systemd):** copy [`contrib/shed-agent.service`](contrib/shed-agent.service)

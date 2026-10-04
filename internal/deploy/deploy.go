@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -71,6 +73,22 @@ func Machine(ctx context.Context, r probe.Runner, m config.Machine, distDir, con
 		if _, err := r.Run(ctx, m, cmd, bytes.NewReader(f.data)); err != nil {
 			return fmt.Errorf("write ~/%s: %w", f.path, err)
 		}
+	}
+	return nil
+}
+
+// Hook runs the owner's deploy hook on this machine (the watcher) for one
+// deployed machine. The hook learns which machine from SHED_MACHINE and
+// SHED_HOST. An empty command does nothing.
+func Hook(ctx context.Context, command string, m config.Machine, stdout, stderr io.Writer) error {
+	if command == "" {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Env = append(os.Environ(), "SHED_MACHINE="+m.Name, "SHED_HOST="+m.Host)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("deploy hook: %w", err)
 	}
 	return nil
 }
