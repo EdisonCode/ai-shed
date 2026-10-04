@@ -20,7 +20,7 @@ each machine runs that machine's scheduled tasks.
 **Goal**: List each machine's open GitHub issues (through `gh`) and detect the ones that wait on the owner.
 **Success Criteria**: A hand-back that asks for a decision marks the issue as waiting until an owner ruling follows.
 **Tests**: signal open, cleared by "none", answered by a later ruling, re-opened by a later ask.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Status report
 **Goal**: `shed status` combines probe and backlog into one report with an attention list; exit code 1 when something needs the owner.
