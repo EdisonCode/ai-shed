@@ -65,6 +65,10 @@ must leave alone. The supervisor judges "is this worker on task" against it, so
 a vague brief gives vague supervision.
 
 - Say the theme and the boundary: which repo, which area, what is out of scope.
+- For a queue of independent issues, set `fresh_per_issue: true` on the
+  worker: each issue then starts on a clear context, and the issue body is in
+  effect its brief, so it must stand on its own. For themed work where issues
+  build on each other, leave it off.
 - Rules that hold for every worker belong in `defaults.standing_orders`, not in
   each brief.
 - Never put a secret, customer data or a person's name in the fleet file.

@@ -97,7 +97,10 @@ type workerState struct {
 	notBefore        time.Time
 	lastError        string
 	// model is the model the worker was last switched to; empty when unknown.
-	model  string
+	model string
+	// issue is the issue the worker was last handed; 0 when it has had none
+	// since its session started.
+	issue  int
 	recent []runlog.Checkin
 }
 
@@ -110,7 +113,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 	for _, w := range s.Machine.Workers {
 		st := s.workers[w.Name]
 		if st == nil {
-			st = &workerState{}
+			st = &workerState{issue: s.lastIssue(w.Name)}
 			s.workers[w.Name] = st
 		}
 		now := s.Now()
@@ -207,7 +210,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 		return err
 	}
 	st.starts = append(st.starts, now)
-	st.lastReview, st.model = now, ""
+	st.lastReview, st.model, st.issue = now, "", 0
 	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: runlog.VerdictStarted, Message: command, Sent: true})
 	return nil
 }
@@ -243,15 +246,24 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 			c.Verdict = runlog.VerdictStuck
 			c.Reason = fmt.Sprintf("%d nudges in %s did not get it moving; the next would have been: %s", maxNudges, loopWindow, verdict.Message)
 		} else {
-			// Past the cache lifetime the whole context is read again at full
-			// price. A change of model empties the cache too. In both cases a
-			// cleared context that re-reads the brief costs less.
+			// A context is worth keeping only while it is warm and still about
+			// the work in hand. Past the cache lifetime it is read again at
+			// full price; a change of model empties the cache too; and a
+			// worker set to start each issue fresh should not carry the last
+			// issue into the next. In each case a cleared context that
+			// re-reads the brief costs less.
 			c.Cold = idle > s.Settings.CacheTTLOrDefault()
 			c.Message, c.Issue = verdict.Message, verdict.Issue
+			// A nudge may name the issue the worker is already on. Only a
+			// different issue is a hand-over.
+			newIssue := verdict.Issue != 0 && verdict.Issue != st.issue
 			model := modelOf(queue, verdict.Issue)
 			tellOnly := s.Settings.Models.TellOnly()
-			switchModel := !tellOnly && model != "" && model != st.model
-			if switchModel || (c.Cold && s.Settings.ClearWhenCold()) {
+			switchModel := newIssue && !tellOnly && model != "" && model != st.model
+			// The first issue of a session lands on a context that is
+			// already empty.
+			fresh := newIssue && w.FreshPerIssue && st.issue != 0
+			if switchModel || fresh || (c.Cold && s.Settings.ClearWhenCold()) {
 				if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
 					return err
 				}
@@ -262,6 +274,9 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 					return err
 				}
 				st.model, c.Model = model, model
+			}
+			if newIssue {
+				st.issue = verdict.Issue
 			}
 			if tellOnly && model != "" {
 				c.Model = model
@@ -286,6 +301,28 @@ func (s *Supervisor) command(w config.Worker, line string) error {
 	}
 	s.Sleep(clearSettling)
 	return nil
+}
+
+// lastIssue finds, in the check-in log, the issue the worker was handed
+// since its session last started. It lets an agent restart tell a nudge
+// about the issue in hand from a hand-over.
+func (s *Supervisor) lastIssue(worker string) int {
+	checkins, err := runlog.ReadCheckins(s.StateDir)
+	if err != nil {
+		s.Logf("worker %s: %v", worker, err)
+		return 0
+	}
+	issue := 0
+	for _, c := range checkins {
+		switch {
+		case c.Worker != worker:
+		case c.Kind == KindStart || c.Kind == KindRestart:
+			issue = 0
+		case c.Sent && c.Issue != 0:
+			issue = c.Issue
+		}
+	}
+	return issue
 }
 
 // modelOf returns the model of the queue item with this number.
@@ -376,7 +413,7 @@ func (s *Supervisor) briefText(w config.Worker) string {
 			}
 			b.WriteString("\n")
 		}
-		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\n")
+		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\n")
 	}
 	b.WriteString(`
 ## You work unattended

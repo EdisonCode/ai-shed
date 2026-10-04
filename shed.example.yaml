@@ -41,6 +41,9 @@ machines:
       - name: app
         dir: ~/Projects/my-app
         command: claude --permission-mode auto
+        # Optional. Clear the worker's context at each new issue. Good for a
+        # queue of independent issues; leave off for themed work.
+        fresh_per_issue: true
         brief: |
           Work the issues in your queue. Stay inside the audit log and export
           features. Do not change the billing module.

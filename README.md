@@ -144,6 +144,25 @@ an orchestrator and hands work to sub-agents on models it chooses itself, set
 Say in the standing orders what the worker does with that. Set the
 orchestrator's own model in the worker's `command`.
 
+### Fresh context per issue
+
+```yaml
+workers:
+  - name: app
+    fresh_per_issue: true
+```
+
+With this, the agent clears the worker's context each time it hands over a
+new issue. The worker starts the issue from its brief and the issue itself,
+without the last issue's files, dead ends and assumptions, and without paying
+to carry that conversation through every turn. Use it for a queue of
+independent issues. Leave it off for themed work, where what the worker
+learned on one issue helps with the next.
+
+A message about the issue already in hand never clears anything, and the
+first issue of a session is not cleared, since that context is already empty.
+The agent remembers the issue in hand across its own restarts.
+
 ### Standing orders
 
 `defaults.standing_orders` is text that goes into every worker's brief on
