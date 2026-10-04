@@ -26,6 +26,7 @@ const linuxOutput = `Welcome banner from the init line
 @@run {"task":"nightly","start":"2026-09-21T03:00:00Z","end":"2026-09-21T03:00:02Z","exit_code":0}
 @@run {"task":"nigh
 @@checkin {"time":"2026-09-21T03:10:00Z","worker":"app","kind":"idle","verdict":"nudge","reason":"it stopped","message":"Take #12.","sent":true}
+@@recycle app
 @@end
 `
 
@@ -128,5 +129,12 @@ func TestParseReadsCheckins(t *testing.T) {
 	}
 	if len(res.Checkins) != 1 || res.Checkins[0].Worker != "app" || !res.Checkins[0].Sent {
 		t.Fatalf("check-ins = %+v", res.Checkins)
+	}
+}
+
+func TestParseReadsRecycleRequests(t *testing.T) {
+	res, err := Parse(linuxOutput, twoChecks)
+	if err != nil || len(res.Recycle) != 1 || res.Recycle[0] != "app" {
+		t.Fatalf("recycle = %v, %v", res.Recycle, err)
 	}
 }

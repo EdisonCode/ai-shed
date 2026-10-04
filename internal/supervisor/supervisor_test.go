@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,7 +26,11 @@ type fakeTerminal struct {
 	closed []string
 }
 
-func (f *fakeTerminal) Close(window string) error { f.closed = append(f.closed, window); return nil }
+func (f *fakeTerminal) Close(window string) error {
+	f.closed = append(f.closed, window)
+	f.obs = Observation{}
+	return nil
+}
 
 func (f *fakeTerminal) Observe(string) (Observation, error) { return f.obs, nil }
 func (f *fakeTerminal) Capture(string, int) (string, error) { return f.screen, nil }
@@ -57,9 +62,17 @@ func (f *fakeReviewer) Review(_ context.Context, prompt string) (Verdict, error)
 	return v, nil
 }
 
-type fakeLister struct{ issues []backlog.Issue }
+// fakeLister serves one list of issues for every source, or a list per label
+// when byLabel is set.
+type fakeLister struct {
+	issues  []backlog.Issue
+	byLabel map[string][]backlog.Issue
+}
 
-func (f *fakeLister) List(context.Context, config.IssueSource) ([]backlog.Issue, error) {
+func (f *fakeLister) List(_ context.Context, src config.IssueSource) ([]backlog.Issue, error) {
+	if f.byLabel != nil {
+		return f.byLabel[src.Label], nil
+	}
 	return f.issues, nil
 }
 
@@ -70,6 +83,8 @@ type fixture struct {
 	lister   *fakeLister
 	now      time.Time
 	dir      string
+
+	reviewsBefore int
 }
 
 // tick moves the clock forward and runs one supervisor tick.
@@ -332,14 +347,14 @@ func TestNudgesThatDoNotHelpStop(t *testing.T) {
 
 func TestReviewerFailureIsRecordedOnceAndRetriedLater(t *testing.T) {
 	f := started(t, config.Supervisor{}, onTrack)
-	f.reviewer.err = errors.New("usage limit reached")
+	f.reviewer.err = errors.New("exit status 1: not logged in")
 	f.tick(2 * time.Minute)
 	f.tick(time.Minute)
 	f.tick(time.Minute)
 	if len(f.reviewer.prompts) != 1 {
 		t.Fatalf("reviewer was called %d times inside the retry delay, want 1", len(f.reviewer.prompts))
 	}
-	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictError || !strings.Contains(c.Reason, "usage limit") {
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictError || !strings.Contains(c.Reason, "not logged in") {
 		t.Fatalf("check-in = %+v", c)
 	}
 
@@ -373,10 +388,12 @@ func TestParseVerdict(t *testing.T) {
 		wantErr      string
 	}{
 		{"issue is kept on a nudge", `{"verdict":"nudge","message":"Take #12.","issue":12,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12.", Reason: "r", Issue: 12}, ""},
+		{"limited", `{"verdict":"limited","message":"wait","resume_in_minutes":45,"reason":"r"}`, Verdict{Verdict: "limited", Reason: "r", ResumeInMinutes: 45}, ""},
 		{"plain", `{"verdict":"done","message":"","reason":"empty queue"}`, Verdict{Verdict: "done", Reason: "empty queue"}, ""},
 		{"wrapped in prose and a fence", "Here you go:\n```json\n{\"verdict\":\"nudge\",\"message\":\"Take #12.\",\"reason\":\"r\"}\n```", Verdict{Verdict: "nudge", Message: "Take #12.", Reason: "r"}, ""},
 		{"message becomes one line", `{"verdict":"nudge","message":"Take #12.\nThen #13.","reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12. Then #13.", Reason: "r"}, ""},
 		{"message is dropped unless nudging", `{"verdict":"needs_owner","message":"y","reason":"r"}`, Verdict{Verdict: "needs_owner", Reason: "r"}, ""},
+		{"message never starts with a digit", `{"verdict":"nudge","message":"5227 is next: start it.","issue":5227,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Next: 5227 is next: start it.", Reason: "r", Issue: 5227}, ""},
 		{"nudge without message", `{"verdict":"nudge","message":" ","reason":"r"}`, Verdict{}, "no message"},
 		{"unknown verdict", `{"verdict":"approve","reason":"r"}`, Verdict{}, "unknown verdict"},
 		{"no json", "I think it is fine.", Verdict{}, "no JSON"},
@@ -550,7 +567,7 @@ func TestNudgeAboutTheIssueInHandKeepsTheContext(t *testing.T) {
 func TestIssueInHandIsRememberedAcrossAnAgentRestart(t *testing.T) {
 	f := freshWorker(t, config.Supervisor{CacheTTL: "1h"}, assign(12), assign(12), assign(13))
 	f.tick(2 * time.Minute)
-	f.Supervisor.workers = nil // the agent restarted; the worker did not
+	f.restartAgent() // the agent restarted; the worker did not
 
 	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
 		t.Fatalf("after restart, same issue: sent = %q, want no clear", sent)
@@ -590,5 +607,471 @@ func TestWorkerThatKeepsItsContextIsNotClearedBetweenIssues(t *testing.T) {
 	f.tick(2 * time.Minute)
 	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
 		t.Fatalf("sent = %q", sent)
+	}
+}
+
+// restartAgent stands for a new agent process, or a reloaded fleet file: the
+// supervisor's memory is gone and only the check-in log is left.
+func (f *fixture) restartAgent() {
+	f.Supervisor.workers = nil
+	f.reviewsBefore = len(f.reviewer.prompts)
+	f.term.sent = nil
+}
+
+// reviews is how many times the reviewer was asked since the last restart.
+func (f *fixture) reviews() int {
+	return len(f.reviewer.prompts) - f.reviewsBefore
+}
+
+func TestRestartCostsARestingWorkerNothing(t *testing.T) {
+	f := started(t, config.Supervisor{}, Verdict{Verdict: runlog.VerdictDone, Reason: "queue is empty"})
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	f.tick(time.Minute)
+	f.tick(10 * time.Minute)
+
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("after a restart: %d review(s), sent %q; want none, the worker was already reviewed", f.reviews(), f.term.sent)
+	}
+}
+
+func TestRestartCostsABusyWorkerNothing(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	f.tick(2 * time.Minute) // handed #12
+	f.restartAgent()
+	f.term.running(f.now.Add(5 * time.Minute)) // working on it
+	f.tick(5 * time.Minute)
+
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("after a restart: %d review(s), sent %q; want none until the scope check is due", f.reviews(), f.term.sent)
+	}
+}
+
+func TestRestartDoesNotResetTheNudgeLimit(t *testing.T) {
+	f := started(t, config.Supervisor{}, nudge("Continue with #12."))
+	for range maxNudges {
+		f.term.running(f.now)
+		f.tick(2 * time.Minute)
+	}
+	f.restartAgent()
+	f.term.running(f.now)
+	f.tick(2 * time.Minute)
+
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; a restart must not buy a stuck worker three more nudges", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictStuck {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestRestartRemembersTheModel(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h", Models: models}, assign(12), assign(13))
+	f.lister.issues = append(f.lister.issues, backlog.Issue{Repo: "org/app", Number: 13, Title: "Another sonnet job"})
+	f.tick(2 * time.Minute) // switched to sonnet for #12
+	f.restartAgent()
+
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; #13 is on the same model, so nothing should be cleared or switched", sent)
+	}
+}
+
+func TestBriefEditDoesNotInterruptAWorkerMidIssue(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), nudge("Run the failing test again with -v."))
+	f.tick(2 * time.Minute) // handed #12
+	f.restartAgent()        // a deploy brought an edited brief
+	f.Machine.Workers[0].Brief = "Fix export bugs only."
+	f.term.running(f.now.Add(5 * time.Minute))
+	f.tick(5 * time.Minute)
+
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; a worker in the middle of an issue must not be interrupted", f.term.sent)
+	}
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	if !strings.Contains(string(brief), "Fix export bugs only.") {
+		t.Fatal("the brief file was not rewritten")
+	}
+
+	f.tick(2 * time.Minute) // it goes quiet; the next message carries the notice
+	want := "Your brief changed. Read .shed/BRIEF.md again. Then: Run the failing test again with -v."
+	if !slices.Equal(f.term.sent, []string{want}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+}
+
+func TestPendingBriefNoticeSurvivesASecondRestart(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), nudge("Carry on."))
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	f.Machine.Workers[0].Brief = "Fix export bugs only."
+	f.term.running(f.now.Add(5 * time.Minute))
+	f.tick(5 * time.Minute)
+	f.restartAgent() // and another deploy before the worker went quiet
+	f.tick(2 * time.Minute)
+
+	if len(f.term.sent) != 1 || !strings.HasPrefix(f.term.sent[0], "Your brief changed.") {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+}
+
+// cancelledReviewer behaves as a reviewer command killed by a stopping agent.
+type cancelledReviewer struct{ cancel context.CancelFunc }
+
+func (c cancelledReviewer) Review(ctx context.Context, _ string) (Verdict, error) {
+	c.cancel()
+	return Verdict{}, ctx.Err()
+}
+
+func TestCheckCutShortByAStoppingAgentIsNotAFailure(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	before := len(f.checkins(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	f.Reviewer = cancelledReviewer{cancel}
+	f.now = f.now.Add(2 * time.Minute)
+	f.Tick(ctx)
+
+	if got := len(f.checkins(t)); got != before {
+		t.Fatalf("%d check-in(s) recorded for a check the agent itself cut short: %+v", got-before, f.lastCheckin(t))
+	}
+	// The next agent reviews the worker at once: nothing was backed off.
+	f.Reviewer = f.reviewer
+	f.restartAgent()
+	f.tick(30 * time.Second)
+	if f.reviews() != 1 {
+		t.Fatalf("reviews after the restart = %d, want 1", f.reviews())
+	}
+}
+
+func limited(minutes int) Verdict {
+	return Verdict{Verdict: runlog.VerdictLimited, ResumeInMinutes: minutes, Reason: "the screen says the usage limit resets at 3pm"}
+}
+
+func TestLimitedWorkerIsLeftAloneUntilItsLimitResets(t *testing.T) {
+	f := started(t, config.Supervisor{}, limited(90), nudge("Your limit has reset. Continue with #12."))
+	f.tick(2 * time.Minute)
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictLimited || !c.Until.Equal(f.now.Add(91*time.Minute)) {
+		t.Fatalf("check-in = %+v, want limited until 91 minutes from now", c)
+	}
+
+	for range 8 { // 80 minutes: still limited
+		f.term.running(f.term.obs.LastActivity)
+		f.tick(10 * time.Minute)
+	}
+	if len(f.reviewer.prompts) != 1 || len(f.term.sent) != 0 {
+		t.Fatalf("before the reset: %d review(s), sent %q; want one review and no message", len(f.reviewer.prompts), f.term.sent)
+	}
+
+	f.tick(12 * time.Minute) // past the reset, and the screen has not changed
+	// Its cache is long cold, but it was cut off mid-task: the context is kept.
+	if !slices.Equal(f.term.sent, []string{"Your limit has reset. Continue with #12."}) {
+		t.Fatalf("after the reset: sent = %q, want the message alone with no clear", f.term.sent)
+	}
+	if c := f.lastCheckin(t); !c.Cold || c.Kind != KindLimit {
+		t.Fatalf("check-in = %+v", c)
+	}
+	if !strings.Contains(f.reviewer.prompts[1], "expected to reset at") {
+		t.Fatal("the reviewer was not told that the limit was due to reset")
+	}
+}
+
+func TestLimitWithNoResetTimeIsLookedAtAgainLater(t *testing.T) {
+	f := started(t, config.Supervisor{}, limited(0), limited(0))
+	f.tick(2 * time.Minute)
+	f.tick(limitRecheck - time.Minute)
+	if len(f.reviewer.prompts) != 1 {
+		t.Fatalf("reviews = %d before the recheck time, want 1", len(f.reviewer.prompts))
+	}
+	f.tick(2 * time.Minute)
+	if len(f.reviewer.prompts) != 2 {
+		t.Fatalf("reviews = %d after the recheck time, want 2", len(f.reviewer.prompts))
+	}
+}
+
+func TestLimitIsRememberedAcrossAnAgentRestart(t *testing.T) {
+	f := started(t, config.Supervisor{}, limited(90))
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	f.tick(30 * time.Minute)
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("after a restart: %d review(s), sent %q; the worker is still limited", f.reviews(), f.term.sent)
+	}
+}
+
+func TestLimitedReviewerIsNotAFailure(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.reviewer.err = errors.New("reviewer command: exit status 1: Claude usage limit reached. Your limit will reset at 3pm.")
+	f.tick(2 * time.Minute)
+	f.tick(retryAfter + time.Minute) // a plain failure would be retried by now
+
+	if len(f.reviewer.prompts) != 1 {
+		t.Fatalf("reviewer was asked %d times inside the limit wait, want 1", len(f.reviewer.prompts))
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictLimited || c.Kind != KindLimit {
+		t.Fatalf("check-in = %+v, want limited, not an error", c)
+	}
+
+	f.reviewer.err = nil
+	f.tick(limitRecheck)
+	if len(f.reviewer.prompts) != 2 {
+		t.Fatalf("reviewer was asked %d times after the limit wait, want 2", len(f.reviewer.prompts))
+	}
+}
+
+func labeled(number int, labels ...string) backlog.Issue {
+	i := backlog.Issue{Repo: "org/app", Number: number, Title: "Issue"}
+	for _, l := range labels {
+		i.Labels = append(i.Labels, backlog.Label{Name: l})
+	}
+	return i
+}
+
+// queueShown returns the issue numbers of the queue in the reviewer's prompt,
+// in order.
+func queueShown(t *testing.T, prompt string) []int {
+	t.Helper()
+	_, rest, _ := strings.Cut(prompt, "<queue>\n")
+	block, _, _ := strings.Cut(rest, "</queue>")
+	var numbers []int
+	for _, line := range strings.Split(strings.TrimSpace(block), "\n") {
+		var n int
+		if _, err := fmt.Sscanf(line, "org/app#%d", &n); err == nil {
+			numbers = append(numbers, n)
+		}
+	}
+	return numbers
+}
+
+func TestQueueIsOrderedByPriorityThenAge(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.Machine.Issues[0].Priority = []string{"p0", "p1"}
+	f.lister.issues = []backlog.Issue{labeled(30), labeled(20, "p1"), labeled(10), labeled(40, "p0"), labeled(25, "p1")}
+	f.tick(2 * time.Minute)
+
+	if got, want := queueShown(t, f.reviewer.prompts[0]), []int{40, 20, 25, 10, 30}; !slices.Equal(got, want) {
+		t.Fatalf("queue = %v, want %v", got, want)
+	}
+}
+
+func handedBackWith(number int, problem string) backlog.Issue {
+	i := labeled(number)
+	i.Comments = []backlog.Comment{{Body: "**PR:** #41 (ready)"}}
+	i.OpenPRs = map[int]backlog.PR{41: {Problem: problem}}
+	return i
+}
+
+func TestStalePullRequestGoesBackToAWorkerFirst(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"},
+		Verdict{Verdict: runlog.VerdictNudge, Message: "PR #41 conflicts with main. Rebase it and nothing else.", Issue: 12, Reason: "its pull request went stale"})
+	f.lister.issues = []backlog.Issue{labeled(5), handedBackWith(12, "conflicts with the base branch")}
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if got := queueShown(t, prompt); !slices.Equal(got, []int{12, 5}) {
+		t.Fatalf("queue = %v, want the rework item first", got)
+	}
+	if !strings.Contains(prompt, "[rework: pull request #41 conflicts with the base branch]") {
+		t.Fatalf("the reviewer was not told why:\n%s", prompt)
+	}
+	if c := f.lastCheckin(t); c.Issue != 12 || c.Rework != "pull request #41 conflicts with the base branch" || !c.Sent {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestHealthyPullRequestStaysWithTheOwner(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.lister.issues = []backlog.Issue{handedBackWith(12, "")}
+	f.tick(2 * time.Minute)
+	if prompt := f.reviewer.prompts[0]; strings.Contains(prompt, "rework") && strings.Contains(prompt, "#12 Issue [rework") || !strings.Contains(prompt, "org/app#12 Issue [waits on the owner: review]") {
+		t.Fatalf("prompt queue:\n%s", prompt)
+	}
+}
+
+func TestRestingWorkerWakesWhenAPullRequestGoesStale(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, Verdict{Verdict: runlog.VerdictDone, Reason: "all handed back"},
+		Verdict{Verdict: runlog.VerdictNudge, Message: "Rebase PR #41.", Issue: 12, Reason: "stale"})
+	f.lister.issues = []backlog.Issue{handedBackWith(12, "")}
+	f.tick(2 * time.Minute)
+	f.lister.issues = []backlog.Issue{handedBackWith(12, "has a failed check (integration)")}
+	f.tick(queueRecheck + time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{"Rebase PR #41."}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+}
+
+func TestPullRequestIsSentBackOnlySoManyTimes(t *testing.T) {
+	back := Verdict{Verdict: runlog.VerdictNudge, Message: "Fix the failed check on PR #41.", Issue: 12, Reason: "stale"}
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, back, back, Verdict{Verdict: runlog.VerdictDone, Reason: "nothing workable"})
+	f.lister.issues = []backlog.Issue{handedBackWith(12, "has a failed check (flaky)")}
+	f.tick(2 * time.Minute)
+	f.handOver()
+	f.handOver()
+
+	last := f.reviewer.prompts[len(f.reviewer.prompts)-1]
+	if strings.Contains(last, "[rework:") || !strings.Contains(last, "waits on the owner: pull request #41 has a failed check (flaky) after 2 tries") {
+		t.Fatalf("after two tries the item must go to the owner:\n%s", last)
+	}
+}
+
+func twoWorkers(t *testing.T, verdicts ...Verdict) *fixture {
+	t.Helper()
+	f := newFixture(t, config.Supervisor{CacheTTL: "1h"}, verdicts...)
+	f.Machine.Workers = append(f.Machine.Workers, config.Worker{Name: "docs", Dir: t.TempDir(), Brief: "Docs only."})
+	f.term.running(t0.Add(-10 * time.Minute)) // both sessions are up and silent
+	return f
+}
+
+func TestTwoWorkersAreNotHandedTheSameIssue(t *testing.T) {
+	f := twoWorkers(t, assign(12), Verdict{Verdict: runlog.VerdictDone, Reason: "nothing left"})
+	f.tick(0) // app is reviewed first and takes #12; then docs
+
+	if len(f.reviewer.prompts) != 2 {
+		t.Fatalf("reviews = %d, want one per worker", len(f.reviewer.prompts))
+	}
+	if got := queueShown(t, f.reviewer.prompts[1]); len(got) != 0 {
+		t.Fatalf("the second worker was shown %v; #12 is in hand for the first", got)
+	}
+}
+
+func TestReviewerCannotHandOverAnIssueOutsideTheQueue(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(99))
+	f.tick(2 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; #99 is not in the queue", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictError || !strings.Contains(c.Reason, "#99") {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestWorkerWithItsOwnQueueSeesOnlyThat(t *testing.T) {
+	f := twoWorkers(t, onTrack)
+	f.Machine.Workers[1].Issues = []config.IssueSource{{Repo: "org/app", Label: "area:docs"}}
+	f.lister.byLabel = map[string][]backlog.Issue{"machine:box": {labeled(12)}, "area:docs": {labeled(50), labeled(51)}}
+	f.tick(0)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
+		t.Fatalf("worker app was shown %v, want the machine's queue", got)
+	}
+	if got := queueShown(t, f.reviewer.prompts[1]); !slices.Equal(got, []int{50, 51}) {
+		t.Fatalf("worker docs was shown %v, want its own queue", got)
+	}
+	brief, _ := os.ReadFile(filepath.Join(f.Machine.Workers[1].Dir, BriefFile))
+	if !strings.Contains(string(brief), "label `area:docs`") || strings.Contains(string(brief), "machine:box") {
+		t.Fatalf("the docs worker's brief names the wrong queue:\n%s", brief)
+	}
+}
+
+func (f *fixture) requestRecycle(t *testing.T, mode string) string {
+	t.Helper()
+	path := filepath.Join(f.StateDir, runlog.RecycleDir, "app")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, []byte(mode), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRecycleWaitsForTheIssueInHand(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), nudge("The test still fails. Read its output."), assign(13))
+	f.lister.issues = append(f.lister.issues, labeled(13))
+	f.tick(2 * time.Minute) // handed #12
+	request := f.requestRecycle(t, "")
+
+	f.handOver() // mid-issue: a nudge about #12 goes through as usual
+	if len(f.term.closed) != 0 || !slices.Equal(f.term.sent, []string{"The test still fails. Read its output."}) {
+		t.Fatalf("closed %v, sent %q; a worker with an issue in hand must not be recycled", f.term.closed, f.term.sent)
+	}
+
+	f.handOver() // it finished #12; the reviewer would hand over #13
+	if !slices.Equal(f.term.closed, []string{"app"}) || len(f.term.sent) != 0 {
+		t.Fatalf("closed %v, sent %q; want the session ended and #13 held for the new one", f.term.closed, f.term.sent)
+	}
+	if _, err := os.Stat(request); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the recycle request was not cleared")
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictRecycled {
+		t.Fatalf("check-in = %+v", c)
+	}
+
+	f.tick(30 * time.Second) // the next tick starts a fresh session
+	if len(f.term.sent) != 1 || !strings.Contains(f.term.sent[0], startPrompt) {
+		t.Fatalf("sent = %q, want the worker's command", f.term.sent)
+	}
+	f.term.running(f.now)
+	f.term.sent = nil
+	f.tick(2 * time.Minute) // and the new session is handed #13
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Issue != 13 {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestRecycleNowDoesNotWait(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	f.tick(2 * time.Minute)
+	f.requestRecycle(t, runlog.RecycleNow)
+	f.term.running(f.now.Add(time.Minute)) // busy on #12
+	f.tick(time.Minute)
+	if !slices.Equal(f.term.closed, []string{"app"}) {
+		t.Fatalf("closed = %v", f.term.closed)
+	}
+}
+
+func TestRecycleOfAWorkerWithNothingInHandIsImmediate(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.requestRecycle(t, "")
+	f.tick(30 * time.Second)
+	if !slices.Equal(f.term.closed, []string{"app"}) || len(f.reviewer.prompts) != 0 {
+		t.Fatalf("closed = %v after %d review(s)", f.term.closed, len(f.reviewer.prompts))
+	}
+}
+
+func TestOwnerIsNotifiedOnceWhenAWorkerStartsToNeedThem(t *testing.T) {
+	needs := Verdict{Verdict: runlog.VerdictNeedsOwner, Reason: "a permission prompt is open"}
+	f := started(t, config.Supervisor{}, needs, needs, onTrack, needs)
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, worker+"|"+message) }
+
+	f.tick(2 * time.Minute)
+	f.term.running(f.now) // the screen changed, and it needs the owner still
+	f.tick(2 * time.Minute)
+	if want := []string{"app|box: worker app needs you: a permission prompt is open"}; !slices.Equal(notes, want) {
+		t.Fatalf("notifications = %q, want %q", notes, want)
+	}
+
+	f.term.running(f.now) // the owner answered; it works; later it needs them again
+	f.tick(2 * time.Minute)
+	f.term.running(f.now)
+	f.tick(2 * time.Minute)
+	if len(notes) != 2 {
+		t.Fatalf("notifications = %q, want a second one for the new problem", notes)
+	}
+}
+
+func TestOwnerIsNotNotifiedAboutWorkThatIsGoingWell(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12), Verdict{Verdict: runlog.VerdictDone, Reason: "r"}, limited(30))
+	notified := false
+	f.Notify = func(string, string) { notified = true }
+	f.tick(2 * time.Minute)
+	f.handOver()
+	f.handOver()
+	if notified {
+		t.Fatal("a nudge, a finished queue and a usage limit need nobody")
+	}
+}
+
+func TestOwnerIsNotifiedWhenAWorkerIsStuck(t *testing.T) {
+	f := started(t, config.Supervisor{}, nudge("Continue with #12."))
+	var notes []string
+	f.Notify = func(_, message string) { notes = append(notes, message) }
+	for range 5 {
+		f.term.running(f.now)
+		f.tick(2 * time.Minute)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "worker app is stuck") {
+		t.Fatalf("notifications = %q", notes)
 	}
 }

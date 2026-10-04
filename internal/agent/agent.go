@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 const (
 	heartbeatEvery = 30 * time.Second
 	superviseEvery = 30 * time.Second
+	notifyTimeout  = 30 * time.Second
 	// outputTail is how much of a task's output a run record keeps.
 	outputTail = 2000
 	// exitNotRun is the exit code of a run that timed out or could not start.
@@ -40,13 +42,14 @@ type Agent struct {
 
 // Run schedules the machine's tasks and supervises its workers until ctx is
 // cancelled. A config file that changes on disk is loaded again; a broken
-// edit keeps the old schedule.
+// edit keeps the old one in force.
 func (a Agent) Run(ctx context.Context) error {
-	current, modified, err := a.load(ctx)
+	cfg, m, modified, err := a.read()
 	if err != nil {
 		return err
 	}
-	defer func() { <-current.stop().Done() }()
+	current := a.start(ctx, cfg, m)
+	defer func() { current.stop() }()
 
 	ticker := time.NewTicker(heartbeatEvery)
 	defer ticker.Stop()
@@ -64,73 +67,120 @@ func (a Agent) Run(ctx context.Context) error {
 			continue
 		}
 		modified = info.ModTime()
-		next, _, err := a.load(ctx)
+		cfg, m, _, err := a.read()
 		if err != nil {
-			a.Logf("config changed but was not loaded, the old schedule stays: %v", err)
+			a.Logf("config changed but was not loaded, the old one stays in force: %v", err)
 			continue
 		}
-		// Runs in progress finish under the old scheduler.
+		// The old supervisor finishes what it is typing before the new one
+		// starts, so two never act on one worker.
 		current.stop()
-		current = next
+		current = a.start(ctx, cfg, m)
 	}
 }
 
 // loaded is what one version of the config started.
 type loaded struct {
-	scheduler      *cron.Cron
-	stopSupervisor context.CancelFunc
+	scheduler *cron.Cron
+	// stopSupervisor returns when the supervisor has finished its tick.
+	stopSupervisor func()
 }
 
-func (l loaded) stop() context.Context {
+// stop ends the supervisor and the schedule. Task runs in progress finish
+// under the old scheduler.
+func (l loaded) stop() {
 	l.stopSupervisor()
-	return l.scheduler.Stop()
+	l.scheduler.Stop()
 }
 
-// load reads the config, starts a scheduler for this machine's tasks and a
-// supervisor for its workers.
-func (a Agent) load(ctx context.Context) (loaded, time.Time, error) {
+// read loads the config and finds this machine in it.
+func (a Agent) read() (*config.Config, config.Machine, time.Time, error) {
 	info, err := os.Stat(a.ConfigPath)
 	if err != nil {
-		return loaded{}, time.Time{}, fmt.Errorf("read config: %w", err)
+		return nil, config.Machine{}, time.Time{}, fmt.Errorf("read config: %w", err)
 	}
 	cfg, err := config.Load(a.ConfigPath)
 	if err != nil {
-		return loaded{}, time.Time{}, err
+		return nil, config.Machine{}, time.Time{}, err
 	}
 	m, ok := cfg.Machine(a.Machine)
 	if !ok {
-		return loaded{}, time.Time{}, fmt.Errorf("machine %q is not in %s", a.Machine, a.ConfigPath)
+		return nil, config.Machine{}, time.Time{}, fmt.Errorf("machine %q is not in %s", a.Machine, a.ConfigPath)
 	}
+	return cfg, m, info.ModTime(), nil
+}
+
+// start runs a scheduler for the machine's tasks and a supervisor for its
+// workers.
+func (a Agent) start(ctx context.Context, cfg *config.Config, m config.Machine) loaded {
 	adoptPath(m)
 
 	// A task that is still running when its next time comes is skipped.
 	scheduler := cron.New(cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)))
+	notify := a.notifier(cfg, m)
+	// failing holds the tasks whose last run failed, so the owner hears of a
+	// failure once and not at every run.
+	var mu sync.Mutex
+	failing := map[string]bool{}
 	for _, t := range m.Tasks {
-		schedule, err := config.ParseSchedule(t.Schedule)
-		if err != nil {
-			return loaded{}, time.Time{}, fmt.Errorf("task %q: %w", t.Name, err)
-		}
+		// The config was validated when it was read.
+		schedule, _ := config.ParseSchedule(t.Schedule)
 		scheduler.Schedule(schedule, cron.FuncJob(func() {
 			start := time.Now()
-			if err := RunTask(ctx, a.StateDir, m, t, start, schedule.Next(start)); err != nil {
+			rec, err := RunTask(ctx, a.StateDir, m, t, start, schedule.Next(start))
+			if err != nil {
 				a.Logf("task %s: %v", t.Name, err)
+			}
+			mu.Lock()
+			wasFailing := failing[t.Name]
+			failing[t.Name] = rec.ExitCode != 0
+			mu.Unlock()
+			if rec.ExitCode != 0 && !wasFailing && notify != nil {
+				notify("", fmt.Sprintf("%s: task %s failed (exit %d)", m.Name, t.Name, rec.ExitCode))
 			}
 		}))
 	}
 	scheduler.Start()
 
-	supCtx, stopSupervisor := context.WithCancel(ctx)
+	stopSupervisor := func() {}
 	if len(m.Workers) > 0 {
-		go a.supervise(supCtx, cfg, m)
+		sup := a.supervisor(cfg, m)
+		sup.Notify = notify
+		stopSupervisor = every(ctx, superviseEvery, sup.Tick)
 	}
 	a.Logf("machine %s: %d task(s) scheduled, %d worker(s) supervised", m.Name, len(m.Tasks), len(m.Workers))
-	return loaded{scheduler: scheduler, stopSupervisor: stopSupervisor}, info.ModTime(), nil
+	return loaded{scheduler: scheduler, stopSupervisor: stopSupervisor}
 }
 
-// supervise checks in on the machine's workers until ctx is cancelled. It
-// has its own loop so a slow review never delays the heartbeat.
-func (a Agent) supervise(ctx context.Context, cfg *config.Config, m config.Machine) {
-	sup := &supervisor.Supervisor{
+// every calls tick now and then at each interval, on its own goroutine, so a
+// slow tick never delays the heartbeat. The returned stop cancels the tick's
+// context and waits for a tick in progress to return: a tick is cut short
+// only where it can be (a model call), never between the keystrokes of a
+// message to a worker.
+func every(ctx context.Context, interval time.Duration, tick func(context.Context)) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			tick(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supervisor {
+	return &supervisor.Supervisor{
 		Machine:        m,
 		Settings:       cfg.Supervisor,
 		Signals:        cfg.Signals,
@@ -143,16 +193,34 @@ func (a Agent) supervise(ctx context.Context, cfg *config.Config, m config.Machi
 		Sleep:          time.Sleep,
 		Logf:           a.Logf,
 	}
-	ticker := time.NewTicker(superviseEvery)
-	defer ticker.Stop()
-	for {
-		sup.Tick(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+}
+
+// notifier returns the function that tells the owner something, or nil when
+// the fleet file has no notify command.
+func (a Agent) notifier(cfg *config.Config, m config.Machine) func(worker, message string) {
+	if cfg.Defaults.Notify == "" {
+		return nil
+	}
+	command := m.Command(cfg.Defaults.Notify)
+	return func(worker, message string) {
+		if err := Notify(command, m.Name, worker, message); err != nil {
+			a.Logf("notify: %v", err)
 		}
 	}
+}
+
+// Notify runs the owner's notify command. Where the message goes is the
+// command's business; shed passes it in SHED_MESSAGE, with SHED_MACHINE and
+// SHED_WORKER (empty when the message is not about a worker).
+func Notify(command, machine, worker, message string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Env = append(os.Environ(), "SHED_MESSAGE="+message, "SHED_MACHINE="+machine, "SHED_WORKER="+worker)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // adoptPath gives the agent the PATH that the machine's init line sets, so
@@ -183,16 +251,17 @@ func (a Agent) beat() error {
 	return nil
 }
 
-// RunTask runs one task and appends its start and end records to the run log.
-// The returned error is about the log; a failing task is not an error here.
-func RunTask(ctx context.Context, stateDir string, m config.Machine, t config.Task, start, next time.Time) error {
+// RunTask runs one task, appends its start and end records to the run log and
+// returns the end record. The returned error is about the log; a failing task
+// is not an error here.
+func RunTask(ctx context.Context, stateDir string, m config.Machine, t config.Task, start, next time.Time) (runlog.Record, error) {
 	rec := runlog.Record{Task: t.Name, Start: start, Next: next}
 	if err := runlog.Append(stateDir, rec); err != nil {
-		return err
+		return rec, err
 	}
 	output, exit := execute(ctx, m.Command(t.Run), t.TimeoutOrDefault())
 	rec.End, rec.ExitCode, rec.Output = time.Now(), exit, tail(output, outputTail)
-	return runlog.Append(stateDir, rec)
+	return rec, runlog.Append(stateDir, rec)
 }
 
 // execute runs a shell script and returns its combined output and exit code.

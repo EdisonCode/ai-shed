@@ -60,7 +60,11 @@ func renderMachine(w io.Writer, r MachineReport) {
 				fmt.Fprintf(tw, "    %s\tno check-in yet\n", wk.Name)
 				continue
 			}
-			fmt.Fprintf(tw, "    %s\t%s\t%s\t%s ago\t%s\n", wk.Name, inHand(wk), wk.Last.Verdict, Short(r.Probe.Now.Sub(wk.Last.Time)), wk.Last.Reason)
+			reason := wk.Last.Reason
+			if wk.RecyclePending {
+				reason = "[fresh session pending] " + reason
+			}
+			fmt.Fprintf(tw, "    %s\t%s\t%s\t%s ago\t%s\n", wk.Name, inHand(wk), wk.Last.Verdict, Short(r.Probe.Now.Sub(wk.Last.Time)), reason)
 		}
 		tw.Flush()
 	}
@@ -71,7 +75,11 @@ func renderMachine(w io.Writer, r MachineReport) {
 			if len(i.Waiting) > 0 {
 				state = strings.Join(i.Waiting, "+")
 			}
-			fmt.Fprintf(tw, "    %s#%d\t%s\t%s\t%s\n", i.Repo, i.Number, state, i.Worker, i.Title)
+			title := i.Title
+			if i.Rework != "" {
+				title += " (" + i.Rework + ")"
+			}
+			fmt.Fprintf(tw, "    %s#%d\t%s\t%s\t%s\n", i.Repo, i.Number, state, i.Worker, title)
 		}
 		tw.Flush()
 	}

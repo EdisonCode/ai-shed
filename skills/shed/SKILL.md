@@ -53,8 +53,13 @@ machine in the fleet file (a label, an assignee, or both).
    the standing orders say what it does with it. Pick the cheapest model that
    can do the work, by the owner's own rule if they gave one. When the rule
    does not settle it, ask the owner; do not default upward.
-4. An issue is handed out oldest first, and never while it waits on the owner.
-   To hold an issue back, remove its machine label.
+4. Order: an issue whose handed-back pull request cannot merge goes back to a
+   worker first; then the labels in the source's `priority` list, in order;
+   then the oldest. An issue that waits on the owner is skipped. To move an
+   issue up, give it a priority label from the fleet file. To hold one back,
+   remove its machine label.
+5. When a machine has two workers, give each its own `issues` in the fleet
+   file. An issue in hand for one worker is never handed to another.
 
 Check the result: `shed status` lists each machine's issues.
 
@@ -103,6 +108,10 @@ Run this as a checklist and report each line.
      post a comment that clears the signal: the `answered_by` phrase of the
      `eyes` signal if the fleet file has one, otherwise the ask phrase
      followed by a `clear` word.
+   - `rework` in the issues list needs nothing from the owner: the pull
+     request cannot merge and a worker is being sent back to it. A `!` line
+     that says `after 2 tries by a worker` is the owner's: the workers could
+     not fix it.
    - `issue waits on you (review)`: a pull request is open. The signal closes
      by itself when it is merged or closed. Read the diff and
      the checks yourself before you say it is good. A worker's report is a
@@ -148,10 +157,21 @@ tokens.
 then brings every machine to the same version and restarts its agent. Workers
 keep running across that restart.
 
+A deploy is safe while workers are busy: the agent finishes a message it is
+typing before it restarts, and the new agent picks up from the check-in log
+without reviewing or messaging anyone again.
+
+A worker keeps the tools it started with. After a change to its tooling (an
+integration installed, an agent definition or skill changed), give it a fresh
+session: `shed recycle <machine> <worker>` waits for the issue in hand;
+`-now` does not, and loses whatever that issue had not yet written down. Use
+`-now` only on the owner's word.
+
 ## Do not
 
 - Do not type into a `shed` tmux window yourself while the agent runs, except
   to answer a prompt for the owner. The supervisor reads that terminal.
+- Do not end or restart a worker's session by hand. Use `shed recycle`.
 - Do not edit the fleet file on a worker machine. Edit the owner's copy and
   deploy.
 - Do not label an issue for a machine to "see what happens". A worker will

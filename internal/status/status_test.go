@@ -251,7 +251,7 @@ func TestWorkerVerdictsThatNeedOwner(t *testing.T) {
 }
 
 func TestWorkerThatIsOnTrackNeedsNothing(t *testing.T) {
-	for _, verdict := range []string{runlog.VerdictOnTrack, runlog.VerdictNudge, runlog.VerdictDone, runlog.VerdictStarted} {
+	for _, verdict := range []string{runlog.VerdictOnTrack, runlog.VerdictNudge, runlog.VerdictDone, runlog.VerdictStarted, runlog.VerdictLimited} {
 		res := healthy()
 		res.Checkins = []runlog.Checkin{checkin(runlog.VerdictNeedsOwner, "older"), checkin(verdict, "fine")}
 		r := Assess(appWorker, signals, res, nil)
@@ -305,5 +305,54 @@ func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func stalePR(number int, problem string) backlog.Issue {
+	i := issue(number, "**PR:** #41 (ready)")
+	i.OpenPRs = map[int]backlog.PR{41: {Problem: problem}}
+	return i
+}
+
+func sentBack(issueNumber int, ago time.Duration) runlog.Checkin {
+	return runlog.Checkin{Time: now.Add(-ago), Worker: "app", Kind: "queue", Verdict: runlog.VerdictNudge, Sent: true, Issue: issueNumber, Rework: "pull request #41 conflicts with the base branch"}
+}
+
+func TestStalePullRequestOnASupervisedMachineIsTheSupervisors(t *testing.T) {
+	r := Assess(appWorker, signals, healthy(), []backlog.Issue{stalePR(7, "conflicts with the base branch")})
+	wantAttention(t, r)
+	if r.Issues[0].State != Rework || r.Issues[0].Rework != "pull request #41 conflicts with the base branch" {
+		t.Fatalf("issue = %+v", r.Issues[0])
+	}
+}
+
+func TestStalePullRequestWithNoSupervisorNeedsOwner(t *testing.T) {
+	r := Assess(config.Machine{}, signals, healthy(), []backlog.Issue{stalePR(7, "has a failed check (integration)")})
+	wantAttention(t, r, "org/app#7: pull request #41 has a failed check (integration)")
+}
+
+func TestPullRequestStillStaleAfterTheAllowedTriesNeedsOwner(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{sentBack(7, 3*time.Hour), sentBack(7, time.Hour), checkin(runlog.VerdictDone, "nothing left")}
+	r := Assess(appWorker, signals, res, []backlog.Issue{stalePR(7, "conflicts with the base branch")})
+	wantAttention(t, r, "org/app#7: pull request #41 conflicts with the base branch after 2 tries by a worker")
+}
+
+func TestOldTriesDoNotCountAgainstAPullRequest(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{sentBack(7, 20*time.Hour), sentBack(7, 19*time.Hour), checkin(runlog.VerdictDone, "nothing left")}
+	wantAttention(t, Assess(appWorker, signals, res, []backlog.Issue{stalePR(7, "conflicts with the base branch")}))
+}
+
+func TestPendingRecycleIsShownAndNeedsNothing(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{handedOver(7)}
+	res.Recycle = []string{"app"}
+	r := Assess(appWorker, signals, res, nil)
+	wantAttention(t, r)
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r})
+	if !r.Workers[0].RecyclePending || !strings.Contains(out.String(), "[fresh session pending]") {
+		t.Fatalf("worker = %+v\n%s", r.Workers[0], out.String())
 	}
 }

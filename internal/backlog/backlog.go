@@ -4,6 +4,7 @@ package backlog
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,9 +25,16 @@ type Issue struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	Comments  []Comment `json:"comments"`
 	Labels    []Label   `json:"labels"`
-	// OpenPRs holds the numbers of the repo's open pull requests. It is nil
-	// when the lister did not look them up.
-	OpenPRs map[int]bool `json:"-"`
+	// OpenPRs holds the repo's open pull requests by number. It is nil when
+	// the lister did not look them up.
+	OpenPRs map[int]PR `json:"-"`
+}
+
+// PR is the state of an open pull request.
+type PR struct {
+	// Problem says why the pull request cannot merge as it stands, for
+	// example "conflicts with the base branch". Empty when nothing is wrong.
+	Problem string
 }
 
 type Label struct {
@@ -85,41 +93,88 @@ func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 	return issues, nil
 }
 
-func openPRs(ctx context.Context, repo string) (map[int]bool, error) {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number")
+func openPRs(ctx context.Context, repo string) (map[int]PR, error) {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000",
+		"--json", "number,mergeable,statusCheckRollup")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list %s: %w: %s", repo, err, strings.TrimSpace(stderr.String()))
 	}
+	return parsePRs(out)
+}
+
+// check is one entry of a pull request's checks: a check run (Name and
+// Conclusion) or a commit status (Context and State).
+type check struct {
+	Name       string `json:"name"`
+	Context    string `json:"context"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+}
+
+func parsePRs(data []byte) (map[int]PR, error) {
 	var prs []struct {
-		Number int `json:"number"`
+		Number    int     `json:"number"`
+		Mergeable string  `json:"mergeable"`
+		Checks    []check `json:"statusCheckRollup"`
 	}
-	if err := json.Unmarshal(out, &prs); err != nil {
-		return nil, fmt.Errorf("gh pr list %s: parse output: %w", repo, err)
+	if err := json.Unmarshal(data, &prs); err != nil {
+		return nil, fmt.Errorf("gh pr list: parse output: %w", err)
 	}
-	open := make(map[int]bool, len(prs))
+	open := make(map[int]PR, len(prs))
 	for _, pr := range prs {
-		open[pr.Number] = true
+		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks)}
 	}
 	return open, nil
 }
 
+var failed = map[string]bool{"FAILURE": true, "TIMED_OUT": true, "STARTUP_FAILURE": true, "ERROR": true}
+
+// prProblem says what stops a pull request from merging: a conflict first,
+// since a rebase reruns the checks anyway.
+func prProblem(mergeable string, checks []check) string {
+	if mergeable == "CONFLICTING" {
+		return "conflicts with the base branch"
+	}
+	for _, c := range checks {
+		if failed[c.Conclusion] || failed[c.State] {
+			return fmt.Sprintf("has a failed check (%s)", cmp.Or(c.Name, c.Context))
+		}
+	}
+	return ""
+}
+
 // Waiting returns the names of the signals that are open on the issue: the
-// reasons it waits on the owner.
+// reasons it waits on the owner. A review of a pull request that cannot
+// merge is not one of them: that waits on a worker (see Rework).
 func Waiting(issue Issue, signals []config.Signal) []string {
 	var open []string
 	for _, s := range signals {
-		if signalOpen(issue, s) {
+		isOpen, pr := signalState(issue, s)
+		if isOpen && !(s.FollowsPR && issue.OpenPRs[pr].Problem != "") {
 			open = append(open, s.Name)
 		}
 	}
 	return open
 }
 
-func signalOpen(issue Issue, s config.Signal) bool {
-	open, pr := false, 0
+// Rework says why an issue that was handed back needs a worker again: its
+// pull request is open and cannot merge as it stands. Empty when it does not.
+func Rework(issue Issue, signals []config.Signal) string {
+	for _, s := range signals {
+		isOpen, pr := signalState(issue, s)
+		if isOpen && s.FollowsPR && issue.OpenPRs[pr].Problem != "" {
+			return fmt.Sprintf("pull request #%d %s", pr, issue.OpenPRs[pr].Problem)
+		}
+	}
+	return ""
+}
+
+// signalState reports whether the signal is open on the issue, and the pull
+// request its last ask named (0 for none).
+func signalState(issue Issue, s config.Signal) (open bool, pr int) {
 	for _, c := range issue.Comments {
 		body := strings.ToLower(c.Body)
 		// The answer is tested first: a comment that both cites an earlier
@@ -133,10 +188,12 @@ func signalOpen(issue Issue, s config.Signal) bool {
 	}
 	// A signal that follows a pull request is over once that pull request is
 	// merged or closed.
-	if open && s.FollowsPR && pr != 0 && issue.OpenPRs != nil && !issue.OpenPRs[pr] {
-		return false
+	if open && s.FollowsPR && pr != 0 && issue.OpenPRs != nil {
+		if _, stillOpen := issue.OpenPRs[pr]; !stillOpen {
+			return false, pr
+		}
 	}
-	return open
+	return open, pr
 }
 
 var prRE = regexp.MustCompile(`#(\d+)`)

@@ -53,6 +53,7 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"duplicate worker", minimal + "    workers:\n      - {name: w, dir: /tmp, brief: a}\n      - {name: w, dir: /tmp, brief: b}\n", "duplicate worker"},
 		{"bad cache ttl", minimal + "supervisor: {cache_ttl: long}\n", "cache_ttl"},
 		{"model command without placeholder", minimal + "supervisor: {model_command: /model}\n", "must contain {model}"},
+		{"worker issue source without filter", minimal + "    workers:\n      - {name: w, dir: /tmp, brief: b, issues: [{repo: org/app}]}\n", `worker "w": issue source org/app needs a label`},
 		{"bad models.apply", minimal + "supervisor: {models: {apply: maybe}}\n", "models.apply"},
 		{"bad when_cold", minimal + "supervisor: {when_cold: maybe}\n", "when_cold"},
 	}
@@ -152,5 +153,32 @@ func TestModelCommand(t *testing.T) {
 	}
 	if got := (Supervisor{ModelCommand: "use {model} now"}).ModelCommandFor("opus"); got != "use opus now" {
 		t.Fatalf("custom command = %q", got)
+	}
+}
+
+func TestPriorityRank(t *testing.T) {
+	src := IssueSource{Priority: []string{"p0", "p1"}}
+	for want, labels := range [][]string{{"bug", "p0"}, {"p1"}, {"bug"}} {
+		if got := src.Rank(labels); got != want {
+			t.Errorf("Rank(%v) = %d, want %d", labels, got, want)
+		}
+	}
+	if got := (IssueSource{}).Rank([]string{"p0"}); got != 0 {
+		t.Errorf("with no priority configured every issue ranks the same; got %d", got)
+	}
+}
+
+func TestWorkerQueueIsItsOwnOrTheMachines(t *testing.T) {
+	shared := []IssueSource{{Repo: "org/app", Label: "machine:box"}}
+	own := []IssueSource{{Repo: "org/app", Label: "area:billing"}}
+	m := Machine{Issues: shared, Workers: []Worker{{Name: "a"}, {Name: "b", Issues: own}, {Name: "c", Issues: own}}}
+	if got := m.SourcesFor(m.Workers[0]); got[0].Label != "machine:box" {
+		t.Errorf("worker with no queue of its own: %+v", got)
+	}
+	if got := m.SourcesFor(m.Workers[1]); got[0].Label != "area:billing" {
+		t.Errorf("worker with its own queue: %+v", got)
+	}
+	if got := m.AllSources(); len(got) != 2 {
+		t.Errorf("all sources = %+v, want the machine's and the shared worker source once each", got)
 	}
 }

@@ -14,8 +14,13 @@ import (
 
 // State files live in this directory under the machine user's home.
 const (
-	StateDir      = ".local/state/shed"
-	RunsFile      = "runs.jsonl"
+	StateDir = ".local/state/shed"
+	RunsFile = "runs.jsonl"
+	// RecycleDir holds one file per worker whose session the owner asked to
+	// replace. The file's content is RecycleNow, or empty to wait for the
+	// worker to finish the issue it has in hand.
+	RecycleDir    = "recycle"
+	RecycleNow    = "now"
 	CheckinsFile  = "checkins.jsonl"
 	HeartbeatFile = "heartbeat"
 )
@@ -81,7 +86,9 @@ const (
 	VerdictNeedsOwner = "needs_owner" // nothing can move without the owner
 	VerdictDone       = "done"        // nothing left that it can act on
 	VerdictStuck      = "stuck"       // nudges or restarts did not get it moving
+	VerdictLimited    = "limited"     // at a usage limit; left alone until it resets
 	VerdictStarted    = "started"     // the supervisor started its session
+	VerdictRecycled   = "recycled"    // the supervisor ended its session to start a fresh one
 	VerdictError      = "error"       // the check-in itself failed
 )
 
@@ -100,6 +107,16 @@ type Checkin struct {
 	// Issue and Model are set when the message gave the worker an issue.
 	Issue int    `json:"issue,omitempty"`
 	Model string `json:"model,omitempty"`
+	// Activity and Queue record what a review saw: the time of the window's
+	// last output, and a digest of the queue. A restarted agent reads them
+	// back, so it does not review again what it has already reviewed.
+	Activity time.Time `json:"activity,omitzero"`
+	Queue    string    `json:"queue,omitempty"`
+	// Until is when a limited worker is looked at again.
+	Until time.Time `json:"until,omitzero"`
+	// Rework is set when the issue was handed back to a worker because its
+	// pull request could not merge; it says why.
+	Rework string `json:"rework,omitempty"`
 }
 
 func AppendCheckin(dir string, c Checkin) error {
@@ -149,11 +166,31 @@ func IssueInHand(checkins []Checkin, worker string) int {
 	for _, c := range checkins {
 		switch {
 		case c.Worker != worker:
-		case c.Verdict == VerdictStarted:
+		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled:
 			issue = 0
 		case c.Sent && c.Issue != 0:
 			issue = c.Issue
 		}
 	}
 	return issue
+}
+
+// An issue is sent back to a worker over its pull request at most
+// ReworkLimit times in ReworkWindow. A check that fails for a reason no
+// worker can fix must not keep one busy all night.
+const (
+	ReworkLimit  = 2
+	ReworkWindow = 6 * time.Hour
+)
+
+// ReworkSpent reports whether the issue has been sent back as often as
+// allowed.
+func ReworkSpent(checkins []Checkin, issue int, now time.Time) bool {
+	count := 0
+	for _, c := range checkins {
+		if c.Sent && c.Issue == issue && c.Rework != "" && now.Sub(c.Time) < ReworkWindow {
+			count++
+		}
+	}
+	return count >= ReworkLimit
 }

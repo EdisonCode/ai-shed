@@ -88,6 +88,7 @@ one verdict:
 | `nudge` | one message would get work moving: next issue, an answer the brief already gives, a pull back into scope | types the message |
 | `needs_owner` | nothing can move without you, or a permission prompt or menu is open | types nothing; `shed status` shows it |
 | `done` | nothing left that it can act on | leaves it idle |
+| `limited` | it reached a usage limit and must wait for the reset | types nothing, looks again just after the reset (every 15 minutes when the screen names no time), then tells it to continue |
 
 The reviewer may not make your decisions. It tells the worker to write the
 question in the issue and take the next item. It never tells a worker to
@@ -97,8 +98,42 @@ Guards against wasted tokens:
 
 - Three nudges in 30 minutes that do not get a worker moving end with `stuck`, not a fourth nudge.
 - A session that exits three times in 30 minutes is not started a fourth time.
-- A failed check-in (the reviewer hit a rate limit, `gh` is logged out) is retried after 10 minutes, not every tick.
+- A failed check-in (`gh` is logged out, the reviewer command is broken) is retried after 10 minutes, not every tick.
+- A usage limit costs no nudges. A limited worker is left alone until its reset. A reviewer that is itself at its limit is tried again after 15 minutes and is not reported as a failure.
 - An idle worker is reviewed once per silence, not once per tick.
+
+### The queue
+
+A worker's queue is the open issues of the machine's `issues` sources, or of
+the worker's own `issues` when it has them. The supervisor hands them out one
+at a time, in this order:
+
+1. **Rework.** An issue that was handed back with a pull request that can no
+   longer merge: it conflicts with its base branch, or a check failed.
+   Finishing started work comes before starting more. The worker is told what
+   is wrong and to fix only that. An issue is sent back at most twice in six
+   hours; after that it is yours, and `shed status` says so. A check that
+   fails for a reason no worker can fix must not keep one busy all night.
+2. **Priority.** The labels in the source's `priority` list, first to last.
+3. **Age.** Oldest first.
+
+```yaml
+machines:
+  - name: linux-box
+    issues:
+      - repo: my-org/my-app
+        label: "machine:linux-box"
+        priority: ["urgent", "quick"]
+    workers:
+      - name: app            # takes from the machine's queue
+      - name: docs           # has a queue of its own
+        issues:
+          - repo: my-org/my-app
+            label: "area:docs"
+```
+
+An issue that waits on you is skipped. An issue that one worker has in hand is
+never handed to another, whatever their queues.
 
 ### Prompt cache
 
@@ -112,6 +147,10 @@ again at full price.
 - When work arrives for a worker whose cache has expired, the agent clears the
   worker's context first and tells it to re-read its brief and the state of the
   work. Set `when_cold: resume` to keep the context and pay for the re-read.
+
+- A worker that was stopped by a usage limit keeps its context when it
+  resumes, however cold: it was cut off mid-task and its context is the only
+  record of that work.
 
 shed cannot see the cache. `supervisor.cache_ttl` (default `5m`) is what you
 tell it your plan gives.
@@ -217,6 +256,9 @@ for these phrases in issue comments (configurable under `signals`):
 | decision | `Decisions needed:` | `none` | `Owner ruling` |
 | eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked` |
 | review | `**PR:** #41` | | that pull request is merged or closed |
+
+While that pull request is open but cannot merge (a conflict, a failed check),
+the issue does not wait on you: it goes back to a worker. See *The queue*.
 
 The review signal follows its pull request (`follows_pr`). An issue that takes
 several pull requests comes back into the queue each time one is merged, and
@@ -336,6 +378,55 @@ a restart.
 Watch a worker with `tmux attach -t shed` on its machine. What the supervisor
 saw and did is in `~/.local/state/shed/checkins.jsonl`.
 
+### Updating while workers are busy
+
+`shed update && shed deploy` is safe in the middle of the night's work.
+
+- **Workers are separate processes.** A restart of the agent does not touch a
+  worker's session.
+- **The agent stops between messages, never inside one.** It is asked to stop,
+  finishes what it is typing to a worker, and exits. Only a call to the
+  reviewer is cut short, and that is not recorded as a failure.
+- **A restart costs a worker nothing.** The new agent rebuilds what the old one
+  knew from the check-in log: the issue each worker has in hand, its model,
+  what was last reviewed, how many nudges it has had, a usage limit it waits
+  on. No extra review, no repeated message.
+- **An edited brief does not interrupt.** The file is rewritten at once. A
+  worker with an issue in hand is told with its next message; an idle worker
+  is told straight away.
+- **The preflight leaves a running worker alone.**
+
+To get a worker onto new tooling (an integration you installed, a changed
+agent definition), ask for a fresh session:
+
+```sh
+shed recycle mini app        # after the issue it has in hand
+shed recycle -now mini app   # at once
+```
+
+The agent ends the session at the next point where nothing is in progress and
+starts a new one, which reads the brief and is handed the next issue.
+`shed status` shows the request while it waits.
+
+A scheduled task that is running when the agent restarts is stopped and
+recorded as stopped.
+
+### Hearing about it
+
+With the laptop closed, `shed status` tells nobody anything. Set a command and
+the agent runs it, on the machine, when a worker starts to need you (it needs
+a decision, it is stuck, it could not be checked) or a scheduled task starts
+to fail:
+
+```yaml
+defaults:
+  notify: curl -s -d "$SHED_MESSAGE" https://ntfy.sh/my-private-topic
+```
+
+The message is in `SHED_MESSAGE`; `SHED_MACHINE` and `SHED_WORKER` say where
+it came from. It runs once when the state begins, not while it lasts. A usage
+limit, a nudge and a finished queue do not notify.
+
 ### Scheduled tasks
 
 - A task runs through `sh -c`, after the machine's `init` line.
@@ -376,8 +467,7 @@ author's direction.
 
 - The supervisor reads a terminal. A reviewer model can misjudge it. The
   guards above bound the cost of a wrong nudge; they do not make it right.
-- Workers on one machine share that machine's queue. With two workers, split
-  the work in their briefs.
+- A stale pull request is judged by any failed check, required or not.
 - An issue is matched to a window by number only. Two repos with the same
   issue number on one machine share a match.
 - A missed task run is known only after the task has run once.

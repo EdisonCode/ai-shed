@@ -157,7 +157,7 @@ func (s *scriptedRunner) Run(_ context.Context, _ config.Machine, command string
 }
 
 func TestRestartAgentUsesThePlatformsServiceManager(t *testing.T) {
-	for platform, want := range map[string]string{"linux-amd64": "systemctl --user restart shed-agent", "darwin-arm64": "launchctl kickstart -k"} {
+	for platform, want := range map[string]string{"linux-amd64": "systemctl --user restart shed-agent", "darwin-arm64": "launchctl kill SIGTERM"} {
 		r := &scriptedRunner{out: "restarted\n"}
 		restarted, err := RestartAgent(context.Background(), r, box, platform)
 		if err != nil || !restarted || !strings.Contains(r.commands[0], want) {
@@ -243,5 +243,19 @@ func TestInstallAgentReportsAServiceThatDidNotStart(t *testing.T) {
 	r := &scriptedRunner{err: errors.New("Bootstrap failed: 5: Input/output error")}
 	if _, err := InstallAgent(context.Background(), r, box, "darwin-arm64"); err == nil {
 		t.Fatal("a failed start must be an error")
+	}
+}
+
+func TestRecycleLeavesARequestForTheAgent(t *testing.T) {
+	for now, want := range map[bool]string{false: "", true: "now"} {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if err := Recycle(context.Background(), probe.ShellRunner{}, here, "app", now); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(home, ".local/state/shed/recycle/app"))
+		if err != nil || string(got) != want {
+			t.Errorf("now=%v: request = %q, %v; want %q", now, got, err, want)
+		}
 	}
 }
