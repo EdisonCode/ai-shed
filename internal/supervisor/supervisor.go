@@ -290,7 +290,7 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 		return err
 	}
 	idle := now.Sub(obs.LastActivity)
-	in := ReviewInput{Worker: w.Name, Brief: s.scope(w), Queue: queue, Recent: st.recent, Terminal: terminal, Now: now, LimitedUntil: st.limitedUntil}
+	in := ReviewInput{Worker: w.Name, Brief: s.scope(w), Queue: queue, Recent: st.recent, Terminal: terminal, Now: now, LimitedUntil: st.limitedUntil, InHand: st.issue}
 	if idle >= settle {
 		in.Idle = idle
 	}

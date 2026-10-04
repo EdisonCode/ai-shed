@@ -1087,3 +1087,15 @@ func TestRecycleOfAWorkerThatHandedBackDoesNotWaitForMoreWork(t *testing.T) {
 		t.Fatalf("closed = %v; a resting worker has nothing in progress, so the fresh session must not wait", f.term.closed)
 	}
 }
+
+func TestReviewerIsToldWhatTheLogSaysIsInHand(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack)
+	f.tick(2 * time.Minute)
+	if !strings.Contains(f.reviewer.prompts[0], "<in_hand>none: you have not handed this worker an issue") {
+		t.Fatalf("first review: the prompt does not say that nothing is in hand:\n%s", f.reviewer.prompts[0])
+	}
+	f.handOver()
+	if !strings.Contains(f.reviewer.prompts[1], "<in_hand>#12</in_hand>") {
+		t.Fatal("second review: the prompt does not name the issue in hand")
+	}
+}

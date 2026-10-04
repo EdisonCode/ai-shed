@@ -127,11 +127,13 @@ func (t Tmux) Observe(window string) (Observation, error) {
 }
 
 func (t Tmux) Capture(window string, lines int) (string, error) {
-	out, err := t.run("capture-pane", "-p", "-S", "-"+strconv.Itoa(lines), "-t", target(window))
+	// -e keeps the styles, so that text the tool draws faint (a suggestion in
+	// an empty input line) can be told from text that was typed.
+	out, err := t.run("capture-pane", "-p", "-e", "-S", "-"+strconv.Itoa(lines), "-t", target(window))
 	if err != nil {
 		return "", err
 	}
-	kept := strings.Split(strings.TrimRight(out, "\n "), "\n")
+	kept := strings.Split(strings.TrimRight(plain(out), "\n "), "\n")
 	if len(kept) > lines {
 		kept = kept[len(kept)-lines:]
 	}
