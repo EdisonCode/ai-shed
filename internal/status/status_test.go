@@ -104,7 +104,7 @@ func TestQueuedIssuesBehindABusyWorkerAreFine(t *testing.T) {
 func TestIssueWaitingOnDecisionNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{window("app-7", 3*time.Hour)}
-	r := Assess(config.Machine{}, signals, res, []backlog.Issue{issue(7, "Decisions needed: 1. which one?")})
+	r := Assess(config.Machine{}, signals, res, []backlog.Issue{issue(7, "## Hand-back\nDecisions needed: 1. which one?")})
 	wantAttention(t, r, "org/app#7 waits on you (decision)")
 	if r.Issues[0].State != Waiting {
 		t.Fatalf("state = %s", r.Issues[0].State)
@@ -194,7 +194,7 @@ func oneMachine() *config.Config {
 func TestUnreachableMachineStillReportsWaitingIssues(t *testing.T) {
 	c := Collector{
 		Runner: fakeRunner{err: errors.New("connection timed out")},
-		Lister: fakeLister{issues: []backlog.Issue{issue(7, "Decisions needed: 1. which one?"), issue(8)}},
+		Lister: fakeLister{issues: []backlog.Issue{issue(7, "## Hand-back\nDecisions needed: 1. which one?"), issue(8)}},
 	}
 	r := c.Collect(context.Background(), oneMachine())[0]
 	wantAttention(t, r, "unreachable: connection timed out", "#7 waits on you")
@@ -287,7 +287,7 @@ func TestQueueBehindAnIdleSupervisedWorkerIsNotAnAlarm(t *testing.T) {
 func TestHandedBackIssueWaitsOnOwnerEvenWhileInHand(t *testing.T) {
 	res := healthy()
 	res.Checkins = []runlog.Checkin{handedOver(7)}
-	r := Assess(appWorker, signals, res, []backlog.Issue{issue(7, "**PR:** #41 (ready)")})
+	r := Assess(appWorker, signals, res, []backlog.Issue{issue(7, "## Hand-back\n**PR:** #41 (ready)")})
 	wantAttention(t, r, "#7 waits on you (review)")
 }
 
@@ -309,7 +309,7 @@ func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
 }
 
 func stalePR(number int, problem string) backlog.Issue {
-	i := issue(number, "**PR:** #41 (ready)")
+	i := issue(number, "## Hand-back\n**PR:** #41 (ready)")
 	i.OpenPRs = map[int]backlog.PR{41: {Problem: problem}}
 	return i
 }

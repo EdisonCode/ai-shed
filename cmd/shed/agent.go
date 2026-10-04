@@ -130,6 +130,11 @@ func binarySource(dist string) (func(platform string) (string, error), error) {
 }
 
 func deployOne(ctx context.Context, runner probe.Runner, cfg *config.Config, path string, m config.Machine, binaryFor func(string) (string, error), preflight, installAgent bool) error {
+	unlock, err := deploy.Lock(ctx, runner, m)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	res, err := deploy.Machine(ctx, runner, m, version, binaryFor, path)
 	if err != nil {
 		return err

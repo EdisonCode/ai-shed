@@ -25,6 +25,9 @@ Your brief is `.shed/BRIEF.md`. It is the whole of your scope.
 - Before you stop, write your plan and progress in the issue. Your context may
   be cleared before your next item; the issue, the branch and the pull request
   are all that survive.
+- Report in the issue with one hand-back comment, headed with the hand-back
+  phrase the brief gives. shed reads your questions to the owner only from
+  such a comment.
 - A decision that belongs to the owner: write the question and your
   recommendation in an issue comment using the phrase the brief gives, then
   stop on that issue. Do not guess and do not wait.
@@ -62,6 +65,11 @@ machine in the fleet file (a label, an assignee, or both).
    file. An issue in hand for one worker is never handed to another.
 
 Check the result: `shed status` lists each machine's issues.
+
+When you write on an issue yourself (a plan, a scope, instructions for the
+worker), you may use the signal phrases freely: they count only inside a
+worker's hand-back comment. Do not head your own comment with the hand-back
+phrase.
 
 ## Write or change a brief
 

@@ -177,7 +177,7 @@ func TestMissingWorkerIsStartedWithItsBrief(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []string{"Fix audit log bugs only.", "org/app with label `machine:box`", "after the words `Decisions needed:`", "write your plan and your progress in the issue"} {
+	for _, part := range []string{"Fix audit log bugs only.", "org/app with label `machine:box`", "after the words `Decisions needed:`, in a comment headed `Hand-back`", "write your plan and your progress in the issue"} {
 		if !strings.Contains(string(brief), part) {
 			t.Fatalf("brief lacks %q:\n%s", part, brief)
 		}
@@ -854,7 +854,7 @@ func TestQueueIsOrderedByPriorityThenAge(t *testing.T) {
 
 func handedBackWith(number int, problem string) backlog.Issue {
 	i := labeled(number)
-	i.Comments = []backlog.Comment{{Body: "**PR:** #41 (ready)"}}
+	i.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** #41 (ready)"}}
 	i.OpenPRs = map[int]backlog.PR{41: {Problem: problem}}
 	return i
 }
