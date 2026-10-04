@@ -1,0 +1,121 @@
+package agent
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/runlog"
+)
+
+var (
+	start = time.Date(2026, 10, 4, 3, 0, 0, 0, time.UTC)
+	next  = start.Add(24 * time.Hour)
+)
+
+// runAndRead runs one task and returns the records it wrote.
+func runAndRead(t *testing.T, m config.Machine, task config.Task) []runlog.Record {
+	t.Helper()
+	dir := t.TempDir()
+	if err := RunTask(context.Background(), dir, m, task, start, next); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, runlog.RunsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []runlog.Record
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		rec, err := runlog.ParseLine(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, rec)
+	}
+	return records
+}
+
+func TestRunTaskWritesStartThenEnd(t *testing.T) {
+	records := runAndRead(t, config.Machine{}, config.Task{Name: "hello", Run: "echo hi"})
+	if len(records) != 2 || !records[0].Running() || records[1].Running() {
+		t.Fatalf("records = %+v, want a start record then an end record", records)
+	}
+	end := records[1]
+	if end.ExitCode != 0 || end.Output != "hi\n" || !end.Next.Equal(next) {
+		t.Fatalf("end record = %+v", end)
+	}
+}
+
+func TestRunTaskRecordsFailure(t *testing.T) {
+	records := runAndRead(t, config.Machine{}, config.Task{Name: "bad", Run: "echo oops >&2; exit 3"})
+	if end := records[1]; end.ExitCode != 3 || end.Output != "oops\n" {
+		t.Fatalf("end record = %+v", end)
+	}
+}
+
+func TestRunTaskUsesMachineInit(t *testing.T) {
+	m := config.Machine{Init: "export SHED_TEST_VALUE=7"}
+	records := runAndRead(t, m, config.Task{Name: "env", Run: `test "$SHED_TEST_VALUE" = 7`})
+	if records[1].ExitCode != 0 {
+		t.Fatalf("end record = %+v", records[1])
+	}
+}
+
+func TestRunTaskStopsAtTimeout(t *testing.T) {
+	began := time.Now()
+	records := runAndRead(t, config.Machine{}, config.Task{Name: "slow", Run: "sleep 30 & sleep 30", Timeout: "200ms"})
+	if took := time.Since(began); took > 10*time.Second {
+		t.Fatalf("task ran %s, the timeout did not stop it", took)
+	}
+	if end := records[1]; end.ExitCode != exitNotRun || !strings.Contains(end.Output, "timeout") {
+		t.Fatalf("end record = %+v", end)
+	}
+}
+
+func TestOutputKeepsOnlyTheTail(t *testing.T) {
+	records := runAndRead(t, config.Machine{}, config.Task{Name: "loud", Run: "yes line | head -n 5000; echo the-end"})
+	out := records[1].Output
+	if len(out) != outputTail || !strings.HasSuffix(out, "the-end\n") {
+		t.Fatalf("output is %d bytes, ends %q", len(out), out[len(out)-10:])
+	}
+}
+
+func TestAgentRejectsUnknownMachine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shed.yaml")
+	if err := os.WriteFile(path, []byte("machines:\n  - {name: box, host: local}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := Agent{ConfigPath: path, Machine: "other", StateDir: t.TempDir(), Logf: t.Logf}
+	if err := a.Run(context.Background()); err == nil || !strings.Contains(err.Error(), `machine "other"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAgentWritesHeartbeatAndStopsOnCancel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shed.yaml")
+	if err := os.WriteFile(path, []byte("machines:\n  - {name: box, host: local}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Agent{ConfigPath: path, Machine: "box", StateDir: state, Logf: t.Logf}.Run(ctx) }()
+
+	heartbeat := filepath.Join(state, runlog.HeartbeatFile)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(heartbeat); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no heartbeat file after 5s")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+}

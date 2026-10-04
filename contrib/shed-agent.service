@@ -1,0 +1,11 @@
+[Unit]
+Description=shed agent: runs this machine's scheduled tasks
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/shed agent
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

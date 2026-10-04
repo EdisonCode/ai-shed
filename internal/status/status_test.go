@@ -73,20 +73,20 @@ func TestFullDiskNeedsOwner(t *testing.T) {
 
 func TestIssueWithWorkerIsWorking(t *testing.T) {
 	res := healthy()
-	res.Windows = []probe.Window{window("we-123", time.Minute)}
+	res.Windows = []probe.Window{window("app-123", time.Minute)}
 	r := Assess(config.Machine{}, signals, res, []backlog.Issue{issue(123)})
 	wantAttention(t, r)
-	if r.Issues[0].State != Working || r.Issues[0].Worker != "we-123" {
+	if r.Issues[0].State != Working || r.Issues[0].Worker != "app-123" {
 		t.Fatalf("issue = %+v", r.Issues[0])
 	}
 }
 
 func TestWorkerMatchNeedsTheWholeNumber(t *testing.T) {
 	res := healthy()
-	res.Windows = []probe.Window{window("we-1234", time.Minute)}
+	res.Windows = []probe.Window{window("app-1234", time.Minute)}
 	r := Assess(config.Machine{}, signals, res, []backlog.Issue{issue(123)})
 	if r.Issues[0].State != Queued {
-		t.Fatalf("issue 123 matched window we-1234: %+v", r.Issues[0])
+		t.Fatalf("issue 123 matched window app-1234: %+v", r.Issues[0])
 	}
 }
 
@@ -97,13 +97,13 @@ func TestQueuedIssuesWithNoWorkerNeedOwner(t *testing.T) {
 
 func TestQueuedIssuesBehindABusyWorkerAreFine(t *testing.T) {
 	res := healthy()
-	res.Windows = []probe.Window{window("we-1", time.Minute)}
+	res.Windows = []probe.Window{window("app-1", time.Minute)}
 	wantAttention(t, Assess(config.Machine{}, signals, res, []backlog.Issue{issue(1), issue(2)}))
 }
 
 func TestIssueWaitingOnDecisionNeedsOwner(t *testing.T) {
 	res := healthy()
-	res.Windows = []probe.Window{window("we-7", 3*time.Hour)}
+	res.Windows = []probe.Window{window("app-7", 3*time.Hour)}
 	r := Assess(config.Machine{}, signals, res, []backlog.Issue{issue(7, "Decisions needed: 1. which one?")})
 	wantAttention(t, r, "org/app#7 waits on you (decision)")
 	if r.Issues[0].State != Waiting {
@@ -113,8 +113,8 @@ func TestIssueWaitingOnDecisionNeedsOwner(t *testing.T) {
 
 func TestQuietWorkerNeedsOwner(t *testing.T) {
 	res := healthy()
-	res.Windows = []probe.Window{window("we-9", 2*time.Hour)}
-	wantAttention(t, Assess(config.Machine{}, signals, res, []backlog.Issue{issue(9)}), "worker we-9 on #9 has been quiet for 2h")
+	res.Windows = []probe.Window{window("app-9", 2*time.Hour)}
+	wantAttention(t, Assess(config.Machine{}, signals, res, []backlog.Issue{issue(9)}), "worker app-9 on #9 has been quiet for 2h")
 }
 
 func TestTasksWithoutAgentNeedOwner(t *testing.T) {

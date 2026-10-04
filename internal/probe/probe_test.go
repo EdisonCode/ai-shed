@@ -20,7 +20,7 @@ const linuxOutput = `Welcome banner from the init line
 @@detail 0 github.com
 @@check 1 127
 @@detail 1 sh: claude: not found
-@@win	1789999400	work	claude	we-123
+@@win	1789999400	work	claude	app-123
 @@win	1789990000	work	zsh	my notes
 @@heartbeat 1789999990
 @@run {"task":"nightly","start":"2026-09-21T03:00:00Z","end":"2026-09-21T03:00:02Z","exit_code":0}

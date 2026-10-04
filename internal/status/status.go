@@ -210,7 +210,7 @@ func assessTasks(m config.Machine, res probe.Result, report *MachineReport, atte
 }
 
 // workerFor finds the tmux window named for an issue: the name holds the
-// issue number as a whole number, as in "we-123" or "fix-123-login".
+// issue number as a whole number, as in "app-123" or "fix-123-login".
 func workerFor(number int, windows []probe.Window) (probe.Window, bool) {
 	re := regexp.MustCompile(`(^|[^0-9])` + strconv.Itoa(number) + `([^0-9]|$)`)
 	for _, w := range windows {

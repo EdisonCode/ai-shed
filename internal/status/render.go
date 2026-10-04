@@ -38,16 +38,16 @@ func renderMachine(w io.Writer, r MachineReport) {
 			}
 			fmt.Fprintf(w, "  checks   %s\n", strings.Join(words, ", "))
 		}
-		if len(p.Windows) > 0 {
-			words := make([]string, len(p.Windows))
-			for i, win := range p.Windows {
-				words[i] = fmt.Sprintf("%s:%s (%s, active %s ago)", win.Session, win.Name, win.Command, Short(p.Now.Sub(win.LastActivity)))
-			}
-			fmt.Fprintf(w, "  workers  %s\n", strings.Join(words, ", "))
-		}
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if r.Probe != nil && len(r.Probe.Windows) > 0 {
+		fmt.Fprintln(w, "  workers")
+		for _, win := range r.Probe.Windows {
+			fmt.Fprintf(tw, "    %s:%s\t%s\tactive %s ago\n", win.Session, win.Name, win.Command, Short(r.Probe.Now.Sub(win.LastActivity)))
+		}
+		tw.Flush()
+	}
 	if len(r.Issues) > 0 {
 		fmt.Fprintln(w, "  issues")
 		for _, i := range r.Issues {
