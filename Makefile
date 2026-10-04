@@ -1,9 +1,11 @@
 PLATFORMS := linux-amd64 linux-arm64 darwin-arm64 darwin-amd64
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 .PHONY: build test lint dist clean hooks
 
 build:
-	go build -o shed ./cmd/shed
+	go build $(LDFLAGS) -o shed ./cmd/shed
 
 test:
 	go test ./...
@@ -19,7 +21,7 @@ hooks:
 # One binary per platform, named the way `shed deploy` looks for them.
 dist:
 	@for p in $(PLATFORMS); do \
-		GOOS=$${p%-*} GOARCH=$${p#*-} CGO_ENABLED=0 go build -o dist/shed-$$p ./cmd/shed || exit 1; \
+		GOOS=$${p%-*} GOARCH=$${p#*-} CGO_ENABLED=0 go build $(LDFLAGS) -o dist/shed-$$p ./cmd/shed || exit 1; \
 	done
 
 clean:

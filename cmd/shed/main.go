@@ -9,13 +9,17 @@ import (
 	"github.com/edisoncode/ai-shed/internal/config"
 )
 
+// version is set at build time; see the Makefile.
+var version = "dev"
+
 const usage = `shed watches the worker machines in your shed.
 
 Usage:
   shed status [-json] [-watch 1m]   report every machine; exit 1 when something needs you
   shed validate                     check the fleet file
   shed deploy [machine...]          copy the binary and the fleet file to machines
-  shed agent [-machine name]        on a machine: run its scheduled tasks
+  shed agent [-machine name]        on a machine: supervise its workers and run its tasks
+  shed version                      print the version
 
 Every command accepts -config <path>. Without it, shed reads $SHED_CONFIG,
 then ./shed.yaml, then ~/.config/shed/shed.yaml.
@@ -43,6 +47,8 @@ func main() {
 		code = cmdDeploy(args)
 	case "validate":
 		code = cmdValidate(args)
+	case "version":
+		fmt.Println("shed", version)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

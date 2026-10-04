@@ -292,9 +292,17 @@ author's direction.
 - The log files are not rotated.
 - Linux and macOS only.
 
+## License
+
+[Apache-2.0](LICENSE).
+
 ## Development
 
 ```sh
 make hooks        # once per clone: the pre-push hook runs the gates below
 make lint test
 ```
+
+A release is a version tag. Pushing `v1.2.3` runs the gates, builds the
+binaries for Linux and macOS, and publishes them with checksums on the GitHub
+release.
