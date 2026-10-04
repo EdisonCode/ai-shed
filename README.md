@@ -131,16 +131,18 @@ supervisor:
 ```
 
 A model switch empties the prompt cache, so the agent clears the context at
-the same moment (the brief tells the worker to keep its plan and progress in
-the issue for this reason): the new model starts from the brief, not from a re-read of
+the same moment. The brief tells the worker to keep its plan and progress in
+the issue for this reason, and the reviewer asks for it when a worker stops
+partway through an item: the new model starts from the brief, not from a re-read of
 the old conversation. Two issues in a row on the same model keep the warm
 context. With no `models` block the agent never touches the model.
 
-This switches the model of the worker's own session. **Leave `models` out when
-the worker is an orchestrator** that hands work to sub-agents on models of its
-own choosing: a switch would change the orchestrator, not the sub-agents. Set
-the orchestrator's model in the worker's `command`, and put the rule for
-choosing a sub-agent's model, by label or otherwise, in the standing orders.
+This switches the model of the worker's own session. For a worker that is
+an orchestrator and hands work to sub-agents on models it chooses itself, set
+`apply: tell`: the agent leaves the session and its context alone, and adds
+"The model for this issue is opus." to the message that hands over the issue.
+Say in the standing orders what the worker does with that. Set the
+orchestrator's own model in the worker's `command`.
 
 ### Standing orders
 
@@ -194,12 +196,8 @@ for these phrases in issue comments (configurable under `signals`):
 | Signal | Opens when a comment has | Stays closed when followed by | Closes when a later comment has |
 | --- | --- | --- | --- |
 | decision | `Decisions needed:` | `none` | `Owner ruling` |
-| eyes | `Needs eyes:` | `nothing`, `none` | |
+| eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked` |
 | review | `**PR:** #41` | | that pull request is merged or closed |
-
-A signal with no closing phrase stays open until the issue closes or a later
-comment has the opening phrase with a clear value. Give it an `answered_by`
-phrase in the fleet file to close it with one comment.
 
 The review signal follows its pull request (`follows_pr`). An issue that takes
 several pull requests comes back into the queue each time one is merged, and

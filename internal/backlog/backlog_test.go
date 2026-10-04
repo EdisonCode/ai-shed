@@ -27,6 +27,7 @@ func TestWaiting(t *testing.T) {
 		{"a later hand-back asks again", []string{handBackAsking, ruling, handBackAsking}, []string{"decision", "review"}},
 		{"ask that cites an earlier ruling stays open", []string{"Per the owner ruling above.\nDecisions needed: 1. A new one."}, []string{"decision"}},
 		{"needs eyes with steps", []string{"**Needs eyes:** open /orders and check the total"}, []string{"eyes"}},
+		{"owner's check answers needs eyes", []string{"**Needs eyes:** open /orders and check the total", "Eyes checked: the total is right."}, nil},
 		{"needs eyes cleared in quotes", []string{`**Needs eyes:** "nothing"`}, nil},
 		{"phrase match ignores case", []string{"decisions NEEDED: which one?"}, []string{"decision"}},
 	}

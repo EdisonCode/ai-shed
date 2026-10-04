@@ -72,12 +72,14 @@ supervisor:
   # What to type into a worker to empty its context and to switch its model.
   clear_command: /clear
   model_command: "/model {model}"
-  # The model for an issue, from its labels. This switches the worker's own
-  # session. Leave it out when the worker orchestrates sub-agents.
+  # The model for an issue, from its labels. "switch" (the default) switches
+  # the worker's own session. "tell" leaves the session alone and tells the
+  # worker the model, for a worker that orchestrates sub-agents.
   models:
     default: sonnet
     labels:
       "model:opus": opus
+    apply: switch
 
 # Optional. These are the defaults: phrases in issue comments that mean the
 # issue waits on you. A signal opens when a comment has the `ask` phrase and
@@ -93,7 +95,7 @@ signals:
   - name: eyes
     ask: "Needs eyes:"
     clear: ["nothing", "none"]
-    # answered_by: "Eyes done"   # add a phrase of your own to close it with one comment
+    answered_by: "Eyes checked"
   - name: review
     ask: "**PR:**"
     follows_pr: true
