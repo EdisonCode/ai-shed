@@ -129,13 +129,16 @@ tokens.
 2. `shed status` must show it reachable with every check `ok`. Fix a failed
    check on the machine before going on. A worker needs `tmux`, `gh` logged
    in, and the agent tool logged in.
-3. `shed deploy <machine>`. It installs this shed's version on the machine
-   and sends the fleet file.
-4. Have the owner start each worker's command once by hand in its directory
-   and answer the tool's first-run prompts (folder trust, integrations). A
-   worker stopped at one shows as `needs_owner`.
-5. Start the agent once on the machine. The README has the systemd and launchd
-   commands.
+3. `shed deploy <machine>`. It installs this shed's version, sends the fleet
+   file, and runs a preflight: it starts each worker's command once, with no
+   prompt, and prints one line per worker. Nothing is typed into a question.
+4. For each `needs you` line, show the owner the screen text that deploy
+   printed. A first-run question (folder trust, integrations) or a login
+   problem needs the owner on the machine: `tmux attach`, start the worker's
+   command, answer, exit. Then deploy again. A `ready` line that names
+   something that failed to load changes what the brief should say.
+5. When every worker is `ready`, and the owner agrees, start the agent:
+   `shed deploy -install-agent <machine>`.
 6. `shed status` shows `agent ok` within a minute, and each worker under
    `supervised` within two.
 
