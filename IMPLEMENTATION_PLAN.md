@@ -26,7 +26,7 @@ each machine runs that machine's scheduled tasks.
 **Goal**: `shed status` combines probe and backlog into one report with an attention list; exit code 1 when something needs the owner.
 **Success Criteria**: Unreachable machine, failed check, full disk, waiting issue, idle backlog, failed or missed task each produce an attention line.
 **Tests**: one test per attention rule with fake runner and lister.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Agent and deploy
 **Goal**: `shed agent` runs a machine's scheduled tasks and records each run; `shed deploy` copies binary and config to a machine.

@@ -12,7 +12,8 @@ import (
 const usage = `shed watches the worker machines in your shed.
 
 Usage:
-  shed validate            check the fleet file
+  shed status [-json] [-watch 1m]   report every machine; exit 1 when something needs you
+  shed validate                     check the fleet file
 
 Every command accepts -config <path>. Without it, shed reads $SHED_CONFIG,
 then ./shed.yaml, then ~/.config/shed/shed.yaml.
@@ -32,6 +33,8 @@ func main() {
 	}
 	var code int
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
+	case "status":
+		code = cmdStatus(args)
 	case "validate":
 		code = cmdValidate(args)
 	case "help", "-h", "--help":

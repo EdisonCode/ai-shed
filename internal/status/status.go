@@ -1,0 +1,258 @@
+// Package status combines what the machines report and what GitHub says into
+// one answer: is each machine on track, and what needs the owner.
+package status
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/edisoncode/ai-shed/internal/backlog"
+	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/probe"
+	"github.com/edisoncode/ai-shed/internal/runlog"
+)
+
+const (
+	probeTimeout   = 45 * time.Second
+	diskFullPct    = 90
+	heartbeatStale = 3 * time.Minute
+	missedGrace    = 2 * time.Minute
+	workerQuiet    = 30 * time.Minute
+)
+
+// Issue states.
+const (
+	Working = "working" // a tmux window is named for the issue
+	Queued  = "queued"  // nobody is on it
+	Waiting = "waiting" // it waits on the owner
+)
+
+// Task states.
+const (
+	TaskNever   = "never"
+	TaskRunning = "running"
+	TaskOK      = "ok"
+	TaskFailed  = "failed"
+)
+
+type MachineReport struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+	// Error is set when the machine could not be probed; Probe is then nil.
+	Error  string        `json:"error,omitempty"`
+	Probe  *probe.Result `json:"probe,omitempty"`
+	Issues []IssueStatus `json:"issues"`
+	Tasks  []TaskStatus  `json:"tasks"`
+	// Attention lists what needs the owner. Empty means the machine is on track.
+	Attention []string `json:"attention"`
+}
+
+type IssueStatus struct {
+	Repo    string   `json:"repo"`
+	Number  int      `json:"number"`
+	Title   string   `json:"title"`
+	URL     string   `json:"url"`
+	State   string   `json:"state"`
+	Waiting []string `json:"waiting,omitempty"`
+	Worker  string   `json:"worker,omitempty"`
+}
+
+type TaskStatus struct {
+	Name     string         `json:"name"`
+	Schedule string         `json:"schedule"`
+	State    string         `json:"state"`
+	Missed   bool           `json:"missed,omitempty"`
+	Last     *runlog.Record `json:"last,omitempty"`
+}
+
+type Collector struct {
+	Runner probe.Runner
+	Lister backlog.Lister
+}
+
+// Collect reports on every machine, in config order. Machines are asked in
+// parallel; one slow or dead machine does not hold up the others.
+func (c Collector) Collect(ctx context.Context, cfg *config.Config) []MachineReport {
+	reports := make([]MachineReport, len(cfg.Machines))
+	var wg sync.WaitGroup
+	for i, m := range cfg.Machines {
+		wg.Go(func() { reports[i] = c.collectOne(ctx, cfg, m) })
+	}
+	wg.Wait()
+	return reports
+}
+
+func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.Machine) MachineReport {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	var res *probe.Result
+	var probeErr error
+	if r, err := probe.Run(ctx, c.Runner, m, cfg.ChecksFor(m)); err != nil {
+		probeErr = err
+	} else {
+		res = &r
+	}
+
+	var issues []backlog.Issue
+	var issueErrs []error
+	for _, src := range m.Issues {
+		found, err := c.Lister.List(ctx, src)
+		if err != nil {
+			issueErrs = append(issueErrs, err)
+			continue
+		}
+		issues = append(issues, found...)
+	}
+
+	report := Assess(m, cfg.Signals, res, issues)
+	if probeErr != nil {
+		report.Error = probeErr.Error()
+		report.Attention = append([]string{"unreachable: " + probeErr.Error()}, report.Attention...)
+	}
+	for _, err := range issueErrs {
+		report.Attention = append(report.Attention, "cannot list issues: "+err.Error())
+	}
+	return report
+}
+
+// Assess applies the attention rules to one machine. res is nil when the
+// machine could not be probed; the issue rules still apply.
+func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues []backlog.Issue) MachineReport {
+	report := MachineReport{Name: m.Name, Host: m.Host, Probe: res, Attention: []string{}}
+	attend := func(format string, args ...any) {
+		report.Attention = append(report.Attention, fmt.Sprintf(format, args...))
+	}
+
+	var windows []probe.Window
+	if res != nil {
+		windows = res.Windows
+		for _, c := range res.Checks {
+			if !c.OK {
+				attend("check failed: %s%s", c.Name, parenthesized(c.Detail))
+			}
+		}
+		if res.DiskUsedPct >= diskFullPct {
+			attend("disk is %d%% full", res.DiskUsedPct)
+		}
+		assessTasks(m, *res, &report, attend)
+	}
+
+	queued, working := 0, 0
+	for _, issue := range issues {
+		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
+			State: Queued, Waiting: backlog.Waiting(issue, signals)}
+		worker, hasWorker := workerFor(issue.Number, windows)
+		if hasWorker {
+			st.Worker, st.State = worker.Name, Working
+		}
+		switch {
+		case len(st.Waiting) > 0:
+			st.State = Waiting
+			attend("%s#%d waits on you (%s): %s", issue.Repo, issue.Number, strings.Join(st.Waiting, ", "), issue.Title)
+		case hasWorker:
+			working++
+			if quiet := res.Now.Sub(worker.LastActivity); quiet > workerQuiet {
+				attend("worker %s on #%d has been quiet for %s: finished or stuck?", worker.Name, issue.Number, Short(quiet))
+			}
+		default:
+			queued++
+		}
+		report.Issues = append(report.Issues, st)
+	}
+	if res != nil && queued > 0 && working == 0 {
+		attend("%d issue(s) queued and no worker is running", queued)
+	}
+	return report
+}
+
+func assessTasks(m config.Machine, res probe.Result, report *MachineReport, attend func(string, ...any)) {
+	if len(m.Tasks) == 0 {
+		return
+	}
+	agentUp := true
+	switch age := res.Now.Sub(res.Heartbeat); {
+	case res.Heartbeat.IsZero():
+		agentUp = false
+		attend("agent is not running: %d scheduled task(s) will not run", len(m.Tasks))
+	case age > heartbeatStale:
+		agentUp = false
+		attend("agent stopped %s ago: %d scheduled task(s) will not run", Short(age), len(m.Tasks))
+	}
+
+	latest := runlog.Latest(res.Runs)
+	for _, t := range m.Tasks {
+		st := TaskStatus{Name: t.Name, Schedule: t.Schedule, State: TaskNever}
+		if rec, ok := latest[t.Name]; ok {
+			st.Last = &rec
+			switch {
+			case rec.Running():
+				st.State = TaskRunning
+			case rec.ExitCode != 0:
+				st.State = TaskFailed
+				attend("task %s failed (exit %d) %s ago%s", t.Name, rec.ExitCode, Short(res.Now.Sub(rec.End)), parenthesized(lastLine(rec.Output)))
+			default:
+				st.State = TaskOK
+			}
+			// With the agent down every task is late; the agent line says so once.
+			st.Missed = !rec.Next.IsZero() && res.Now.After(rec.Next.Add(missedGrace))
+			if st.Missed && agentUp {
+				attend("task %s missed its %s run", t.Name, rec.Next.Local().Format("Mon 15:04"))
+			}
+		}
+		report.Tasks = append(report.Tasks, st)
+	}
+}
+
+// workerFor finds the tmux window named for an issue: the name holds the
+// issue number as a whole number, as in "we-123" or "fix-123-login".
+func workerFor(number int, windows []probe.Window) (probe.Window, bool) {
+	re := regexp.MustCompile(`(^|[^0-9])` + strconv.Itoa(number) + `([^0-9]|$)`)
+	for _, w := range windows {
+		if re.MatchString(w.Name) {
+			return w, true
+		}
+	}
+	return probe.Window{}, false
+}
+
+func parenthesized(s string) string {
+	if s == "" {
+		return ""
+	}
+	return " (" + s + ")"
+}
+
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// Short formats a duration for a status line: 45s, 12m, 3h, 5d.
+func Short(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+// NeedsOwner reports whether any machine has an attention item.
+func NeedsOwner(reports []MachineReport) bool {
+	for _, r := range reports {
+		if len(r.Attention) > 0 {
+			return true
+		}
+	}
+	return false
+}
