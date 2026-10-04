@@ -140,13 +140,17 @@ type Signal struct {
 	Ask        string   `yaml:"ask"`
 	Clear      []string `yaml:"clear"`
 	AnsweredBy string   `yaml:"answered_by"`
+	// FollowsPR is for a signal whose ask names a pull request ("#41"). The
+	// signal then closes when that pull request is merged or closed, so an
+	// issue that takes several pull requests comes back into the queue.
+	FollowsPR bool `yaml:"follows_pr"`
 }
 
 func DefaultSignals() []Signal {
 	return []Signal{
 		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling"},
 		{Name: "eyes", Ask: "Needs eyes:", Clear: []string{"nothing", "none"}},
-		{Name: "review", Ask: "**PR:**"},
+		{Name: "review", Ask: "**PR:**", FollowsPR: true},
 	}
 }
 

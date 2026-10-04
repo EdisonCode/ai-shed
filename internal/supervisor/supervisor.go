@@ -385,6 +385,7 @@ new brief.
 		fmt.Fprintf(&b, " after the words `%s`", phrase)
 	}
 	b.WriteString(`, then take the next item.
+- Before you stop for any reason, write your plan and your progress in the issue. Your context may be cleared between items. What is not in the issue, the branch or a pull request is lost.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
 `)
 	return b.String()

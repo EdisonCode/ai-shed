@@ -131,7 +131,8 @@ supervisor:
 ```
 
 A model switch empties the prompt cache, so the agent clears the context at
-the same moment: the new model starts from the brief, not from a re-read of
+the same moment (the brief tells the worker to keep its plan and progress in
+the issue for this reason): the new model starts from the brief, not from a re-read of
 the old conversation. Two issues in a row on the same model keep the warm
 context. With no `models` block the agent never touches the model.
 
@@ -188,11 +189,17 @@ for these phrases in issue comments (configurable under `signals`):
 | --- | --- | --- | --- |
 | decision | `Decisions needed:` | `none` | `Owner ruling` |
 | eyes | `Needs eyes:` | `nothing`, `none` | |
-| review | `**PR:**` | | |
+| review | `**PR:** #41` | | that pull request is merged or closed |
 
 A signal with no closing phrase stays open until the issue closes or a later
-comment has the opening phrase with a clear value. An issue with an open
-signal is not handed to a worker.
+comment has the opening phrase with a clear value. Give it an `answered_by`
+phrase in the fleet file to close it with one comment.
+
+The review signal follows its pull request (`follows_pr`). An issue that takes
+several pull requests comes back into the queue each time one is merged, and
+the worker picks up the rest from what the issue says.
+
+An issue with an open signal is not handed to a worker.
 
 ## Setup
 
@@ -236,6 +243,11 @@ Then start the agent once on each machine:
 - **macOS (launchd):** copy [`contrib/com.edisoncode.shed-agent.plist`](contrib/com.edisoncode.shed-agent.plist)
   to `~/Library/LaunchAgents/`, then
   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.edisoncode.shed-agent.plist`.
+
+**Before the first unattended run**, start the worker's command once by hand
+in the worker's directory. An agent tool asks first-run questions (trust this
+folder, enable these integrations) that only a person may answer. The
+supervisor reports a worker stopped at one as `needs_owner` and types nothing.
 
 After that, run `shed deploy` again whenever the fleet file changes. The agent
 loads a changed fleet file within 30 seconds; a new binary takes effect when

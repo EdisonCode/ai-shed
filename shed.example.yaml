@@ -81,7 +81,9 @@ supervisor:
 # Optional. These are the defaults: phrases in issue comments that mean the
 # issue waits on you. A signal opens when a comment has the `ask` phrase and
 # the text after it does not start with one of `clear`. It closes when a later
-# comment has the `answered_by` phrase.
+# comment has the `answered_by` phrase. With `follows_pr`, the ask names a
+# pull request ("#41") and the signal closes when that pull request is merged
+# or closed.
 signals:
   - name: decision
     ask: "Decisions needed:"
@@ -90,5 +92,7 @@ signals:
   - name: eyes
     ask: "Needs eyes:"
     clear: ["nothing", "none"]
+    # answered_by: "Eyes done"   # add a phrase of your own to close it with one comment
   - name: review
     ask: "**PR:**"
+    follows_pr: true

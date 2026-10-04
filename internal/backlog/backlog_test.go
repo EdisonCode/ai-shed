@@ -43,3 +43,32 @@ func TestWaiting(t *testing.T) {
 		})
 	}
 }
+
+func TestReviewSignalFollowsItsPullRequest(t *testing.T) {
+	laterHandBack := "## Hand-back\n**PR:** #58 (ready)\n**Decisions needed:** none"
+	cases := []struct {
+		name     string
+		comments []string
+		openPRs  map[int]bool
+		want     []string
+	}{
+		{"pull request still open", []string{handBackClean}, map[int]bool{41: true}, []string{"review"}},
+		{"pull request merged: the issue is free again", []string{handBackClean}, map[int]bool{}, nil},
+		{"second pull request of the same issue is open", []string{handBackClean, laterHandBack}, map[int]bool{58: true}, []string{"review"}},
+		{"first is still open but the latest hand-back's is merged", []string{handBackClean, laterHandBack}, map[int]bool{41: true}, nil},
+		{"open pull requests unknown: stay open", []string{handBackClean}, nil, []string{"review"}},
+		{"no pull request number: stay open", []string{"**PR:** not opened yet, branch pushed"}, map[int]bool{}, []string{"review"}},
+		{"a merged pull request does not answer a decision", []string{handBackAsking}, map[int]bool{}, []string{"decision"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issue := Issue{OpenPRs: tc.openPRs}
+			for _, body := range tc.comments {
+				issue.Comments = append(issue.Comments, Comment{Body: body})
+			}
+			if got := Waiting(issue, config.DefaultSignals()); !slices.Equal(got, tc.want) {
+				t.Fatalf("waiting = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
