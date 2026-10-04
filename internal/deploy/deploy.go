@@ -4,6 +4,7 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -205,6 +206,39 @@ func InstallAgent(ctx context.Context, r probe.Runner, m config.Machine, platfor
 		return "", fmt.Errorf("start the agent service: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// lockDir marks a deploy in progress on a machine. A lock older than
+// lockStaleAfter was left by a deploy that died, and is taken over.
+const (
+	lockDir        = runlog.StateDir + "/deploy.lock"
+	lockStaleAfter = 15 * 60 // seconds
+)
+
+// ErrBusy is returned by Lock when another deploy of the machine is running.
+var ErrBusy = errors.New("another deploy of this machine is running")
+
+// Lock takes the machine's deploy lock, so that two deploys never run their
+// preflights and installs over each other. The lock lives on the machine: it
+// holds against a deploy from any watcher. unlock releases it.
+func Lock(ctx context.Context, r probe.Runner, m config.Machine) (unlock func(), err error) {
+	// mkdir is the lock: it fails when the directory exists.
+	command := fmt.Sprintf(`d="$HOME/%s"; mkdir -p "$(dirname "$d")"
+if mkdir "$d" 2>/dev/null; then echo locked; exit 0; fi
+age=$(( $(date +%%s) - $(stat -c %%Y "$d" 2>/dev/null || stat -f %%m "$d") ))
+if [ "$age" -gt %d ]; then touch "$d" && echo locked; else echo "busy $age"; fi`, lockDir, lockStaleAfter)
+	out, err := r.Run(ctx, m, command, nil)
+	if err != nil {
+		return nil, fmt.Errorf("take the deploy lock: %w", err)
+	}
+	if answer := strings.TrimSpace(string(out)); answer != "locked" {
+		age := strings.TrimPrefix(answer, "busy ")
+		return nil, fmt.Errorf("%w (started %ss ago). If none is, remove ~/%s on the machine", ErrBusy, age, lockDir)
+	}
+	return func() {
+		// A deploy cut short leaves the lock; it goes stale by itself.
+		r.Run(context.Background(), m, fmt.Sprintf(`rmdir "$HOME/%s"`, lockDir), nil)
+	}, nil
 }
 
 // Recycle asks the machine's agent to replace a worker's session with a

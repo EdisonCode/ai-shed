@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/probe"
@@ -258,4 +259,42 @@ func TestRecycleLeavesARequestForTheAgent(t *testing.T) {
 			t.Errorf("now=%v: request = %q, %v; want %q", now, got, err, want)
 		}
 	}
+}
+
+func TestSecondDeployOfAMachineIsRefused(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx, r := context.Background(), probe.ShellRunner{}
+	unlock, err := Lock(ctx, r, here)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lock(ctx, r, here); !errors.Is(err, ErrBusy) {
+		t.Fatalf("second lock = %v, want a refusal", err)
+	}
+	unlock()
+	again, err := Lock(ctx, r, here)
+	if err != nil {
+		t.Fatalf("lock after the first deploy finished = %v", err)
+	}
+	again()
+}
+
+func TestLockLeftByADeadDeployIsTakenOver(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stale := filepath.Join(home, lockDir)
+	os.MkdirAll(stale, 0o755)
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := Lock(context.Background(), probe.ShellRunner{}, here)
+	if err != nil {
+		t.Fatalf("lock = %v; an hour-old lock is from a deploy that died", err)
+	}
+	// It is this deploy's lock now: a third deploy must be refused.
+	if _, err := Lock(context.Background(), probe.ShellRunner{}, here); !errors.Is(err, ErrBusy) {
+		t.Fatalf("lock after the takeover = %v, want a refusal", err)
+	}
+	unlock()
 }

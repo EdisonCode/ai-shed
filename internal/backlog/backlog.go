@@ -193,7 +193,7 @@ func lastHandBack(issue Issue, signals []config.Signal) (index, pr int) {
 			continue
 		}
 		for i, c := range issue.Comments {
-			if value, found := afterPhrase(strings.ToLower(c.Body), strings.ToLower(s.Ask)); found && i >= index {
+			if value, found := asked(strings.ToLower(c.Body), s); found && i >= index {
 				if n := prNumber(value); n != 0 {
 					index, pr = i, n
 				}
@@ -225,7 +225,7 @@ func signalState(issue Issue, s config.Signal) (open bool, pr int) {
 		if s.AnsweredBy != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) {
 			open = false
 		}
-		if value, found := afterPhrase(body, strings.ToLower(s.Ask)); found {
+		if value, found := asked(body, s); found {
 			open, pr = !isClear(value, s.Clear), prNumber(value)
 		}
 	}
@@ -250,6 +250,16 @@ func prNumber(value string) int {
 	}
 	n, _ := strconv.Atoi(m[1])
 	return n
+}
+
+// asked returns what follows the signal's ask in a comment. The ask counts
+// only in a hand-back comment: the same words in a plan, a brief or a
+// discussion ask the owner nothing. body is lower case.
+func asked(body string, s config.Signal) (string, bool) {
+	if s.HandBack != "" && !strings.Contains(body, strings.ToLower(s.HandBack)) {
+		return "", false
+	}
+	return afterPhrase(body, strings.ToLower(s.Ask))
 }
 
 // afterPhrase returns the text that follows the phrase, without leading

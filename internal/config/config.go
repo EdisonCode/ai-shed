@@ -26,7 +26,15 @@ type Config struct {
 	Machines   []Machine  `yaml:"machines"`
 	Signals    []Signal   `yaml:"signals"`
 	Supervisor Supervisor `yaml:"supervisor"`
+	// HandBack is the phrase that marks a comment as a worker's hand-back.
+	// A signal's ask counts only in such a comment, so the same words in a
+	// plan, a brief or a discussion do not hold an issue back. Omitted, it is
+	// DefaultHandBack; set to "" to count an ask in any comment.
+	HandBack *string `yaml:"handback"`
 }
+
+// DefaultHandBack is the phrase that marks a hand-back comment.
+const DefaultHandBack = "Hand-back"
 
 // Supervisor sets how the agent checks in on a machine's workers.
 type Supervisor struct {
@@ -195,14 +203,25 @@ type Signal struct {
 	// must act on. When the answer comes after the worker handed back and its
 	// pull request is still open, the issue goes back to a worker.
 	SendsBack bool `yaml:"sends_back"`
+	// HandBack is the config's hand-back phrase, copied onto each signal
+	// when the config is read.
+	HandBack string `yaml:"-"`
 }
 
+// DefaultSignals returns the built-in signals, counted in hand-back comments.
 func DefaultSignals() []Signal {
-	return []Signal{
+	return withHandBack(DefaultHandBack, []Signal{
 		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true},
 		{Name: "eyes", Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked"},
 		{Name: "review", Ask: "**PR:**", FollowsPR: true},
+	})
+}
+
+func withHandBack(phrase string, signals []Signal) []Signal {
+	for i := range signals {
+		signals[i].HandBack = phrase
 	}
+	return signals
 }
 
 var (
@@ -254,6 +273,11 @@ func Parse(data []byte) (*Config, error) {
 	if len(cfg.Signals) == 0 {
 		cfg.Signals = DefaultSignals()
 	}
+	handBack := DefaultHandBack
+	if cfg.HandBack != nil {
+		handBack = *cfg.HandBack
+	}
+	withHandBack(handBack, cfg.Signals)
 	return &cfg, nil
 }
 

@@ -267,8 +267,10 @@ number in its name (`app-123`).
 
 ### Waiting on you: comment signals
 
-A worker cannot ask you a question, so it writes one in its issue. shed looks
-for these phrases in issue comments (configurable under `signals`):
+A worker cannot ask you a question, so it writes one in its issue, in its
+hand-back: a comment that contains the word `Hand-back` (configurable as
+`handback`). In hand-back comments shed looks for these phrases
+(configurable under `signals`):
 
 | Signal | Opens when a comment has | Stays closed when followed by | Closes when a later comment has |
 | --- | --- | --- | --- |
@@ -282,6 +284,10 @@ the issue does not wait on you: it goes back to a worker. See *The queue*.
 The review signal follows its pull request (`follows_pr`). An issue that takes
 several pull requests comes back into the queue each time one is merged, and
 the worker picks up the rest from what the issue says.
+
+An ask counts only in a hand-back comment. The same words in a plan, a brief
+or a discussion on the issue ask you nothing and hold nothing back. Your
+answers (`Owner ruling`, `Eyes checked`) count in any comment.
 
 An issue with an open signal is not handed to a worker.
 
@@ -341,6 +347,9 @@ For each machine, `deploy`:
 5. Runs a preflight of each worker that has no live session.
 6. With `-install-agent`, sets up and starts the agent service on a machine
    that has none, if every worker is ready.
+
+One deploy of a machine runs at a time. A second one, from this watcher or
+another, is refused while the first runs.
 
 **The deploy hook.** A worker's tool usually needs more from your machine than
 shed sends: agent definitions, skills, notes. shed does not know your tool's

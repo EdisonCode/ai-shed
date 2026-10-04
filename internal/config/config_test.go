@@ -182,3 +182,23 @@ func TestWorkerQueueIsItsOwnOrTheMachines(t *testing.T) {
 		t.Errorf("all sources = %+v, want the machine's and the shared worker source once each", got)
 	}
 }
+
+func TestHandBackPhrase(t *testing.T) {
+	cases := []struct{ name, yaml, want string }{
+		{"omitted: the default", minimal, DefaultHandBack},
+		{"set", minimal + "handback: Worker report\n", "Worker report"},
+		{"empty: an ask counts in any comment", minimal + "handback: \"\"\n", ""},
+		{"applies to the owner's own signals", minimal + "handback: Report\nsignals: [{name: q, ask: \"Question:\"}]\n", "Report"},
+	}
+	for _, tc := range cases {
+		cfg, err := Parse([]byte(tc.yaml))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		for _, s := range cfg.Signals {
+			if s.HandBack != tc.want {
+				t.Errorf("%s: signal %s counts in comments with %q, want %q", tc.name, s.Name, s.HandBack, tc.want)
+			}
+		}
+	}
+}

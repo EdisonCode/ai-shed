@@ -633,8 +633,11 @@ new brief.
 
 - Stay inside this brief. Work that it does not cover is out of scope: note it in the issue and leave it.
 - Do not wait for an answer. When a decision belongs to the owner, write the question and your recommendation in an issue comment`)
-	if phrase := s.decisionPhrase(); phrase != "" {
+	if phrase, handBack := s.decisionPhrase(); phrase != "" {
 		fmt.Fprintf(&b, " after the words `%s`", phrase)
+		if handBack != "" {
+			fmt.Fprintf(&b, ", in a comment headed `%s`", handBack)
+		}
 	}
 	b.WriteString(`, then take the next item.
 - Before you stop for any reason, write your plan and your progress in the issue. Your context may be cleared between items. What is not in the issue, the branch or a pull request is lost.
@@ -654,14 +657,15 @@ func (s *Supervisor) scope(w config.Worker) string {
 }
 
 // decisionPhrase is the phrase that makes shed status show an issue as
-// waiting on a decision.
-func (s *Supervisor) decisionPhrase() string {
+// waiting on a decision, and the phrase that must head the comment for it to
+// count.
+func (s *Supervisor) decisionPhrase() (ask, handBack string) {
 	for _, sig := range s.Signals {
 		if sig.Name == "decision" {
-			return sig.Ask
+			return sig.Ask, sig.HandBack
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // excludeFromGit keeps the brief out of the worker's commits. It is best

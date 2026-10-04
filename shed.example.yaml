@@ -109,6 +109,10 @@ supervisor:
 # or closed. With `sends_back`, your answer is something a worker must act
 # on: an answer that comes after the worker handed back sends the issue back
 # to a worker while its pull request is open.
+# A signal's ask counts only in a comment that contains this phrase: a
+# worker's hand-back. Set it to "" to count an ask in any comment.
+handback: "Hand-back"
+
 signals:
   - name: decision
     ask: "Decisions needed:"

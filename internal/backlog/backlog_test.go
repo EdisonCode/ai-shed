@@ -25,11 +25,11 @@ func TestWaiting(t *testing.T) {
 		{"hand-back with nothing to decide", []string{handBackClean}, []string{"review"}},
 		{"ruling answers the decision", []string{handBackAsking, ruling}, []string{"review"}},
 		{"a later hand-back asks again", []string{handBackAsking, ruling, handBackAsking}, []string{"decision", "review"}},
-		{"ask that cites an earlier ruling stays open", []string{"Per the owner ruling above.\nDecisions needed: 1. A new one."}, []string{"decision"}},
-		{"needs eyes with steps", []string{"**Needs eyes:** open /orders and check the total"}, []string{"eyes"}},
-		{"owner's check answers needs eyes", []string{"**Needs eyes:** open /orders and check the total", "Eyes checked: the total is right."}, nil},
-		{"needs eyes cleared in quotes", []string{`**Needs eyes:** "nothing"`}, nil},
-		{"phrase match ignores case", []string{"decisions NEEDED: which one?"}, []string{"decision"}},
+		{"ask that cites an earlier ruling stays open", []string{"## Hand-back\nPer the owner ruling above.\nDecisions needed: 1. A new one."}, []string{"decision"}},
+		{"needs eyes with steps", []string{"## Hand-back\n**Needs eyes:** open /orders and check the total"}, []string{"eyes"}},
+		{"owner's check answers needs eyes", []string{"## Hand-back\n**Needs eyes:** open /orders and check the total", "Eyes checked: the total is right."}, nil},
+		{"needs eyes cleared in quotes", []string{"## Hand-back\n**Needs eyes:** \"nothing\""}, nil},
+		{"phrase match ignores case", []string{"hand-BACK\ndecisions NEEDED: which one?"}, []string{"decision"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -58,7 +58,7 @@ func TestReviewSignalFollowsItsPullRequest(t *testing.T) {
 		{"second pull request of the same issue is open", []string{handBackClean, laterHandBack}, map[int]PR{58: {}}, []string{"review"}},
 		{"first is still open but the latest hand-back's is merged", []string{handBackClean, laterHandBack}, map[int]PR{41: {}}, nil},
 		{"open pull requests unknown: stay open", []string{handBackClean}, nil, []string{"review"}},
-		{"no pull request number: stay open", []string{"**PR:** not opened yet, branch pushed"}, map[int]PR{}, []string{"review"}},
+		{"no pull request number: stay open", []string{"## Hand-back\n**PR:** not opened yet, branch pushed"}, map[int]PR{}, []string{"review"}},
 		{"a merged pull request does not answer a decision", []string{handBackAsking}, map[int]PR{}, []string{"decision"}},
 	}
 	for _, tc := range cases {
@@ -169,5 +169,41 @@ func TestWhileAWorkerIsDueBackOnlyAQuestionWaitsOnTheOwner(t *testing.T) {
 	issue := Issue{OpenPRs: map[int]PR{41: {Problem: "conflicts with the base branch"}}, Comments: []Comment{{Body: needsEyes}}}
 	if got := Waiting(issue, config.DefaultSignals()); !slices.Equal(got, []string{"decision"}) {
 		t.Fatalf("waiting = %v; the look and the review can wait for the rebased work, the question cannot", got)
+	}
+}
+
+func TestAskCountsOnlyInAHandBack(t *testing.T) {
+	scoping := "Scope for the worker. When you stop, post a hand-off with:\n**PR:** none yet\n**Needs eyes:** the page to check\n**Decisions needed:** anything I must rule on"
+	cases := []struct {
+		name     string
+		comments []string
+		want     []string
+	}{
+		{"the phrases in instructions ask the owner nothing", []string{scoping}, nil},
+		{"the phrases in a discussion ask the owner nothing", []string{"Should this go under Decisions needed: or is it obvious?"}, nil},
+		{"a real hand-back after the instructions counts", []string{scoping, handBackAsking}, []string{"decision", "review"}},
+		{"instructions after a hand-back do not reopen or clear it", []string{handBackClean, scoping}, []string{"review"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issue := Issue{OpenPRs: map[int]PR{41: {}}}
+			for _, body := range tc.comments {
+				issue.Comments = append(issue.Comments, Comment{Body: body})
+			}
+			if got := Waiting(issue, config.DefaultSignals()); !slices.Equal(got, tc.want) {
+				t.Fatalf("waiting = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWithNoHandBackPhraseAnAskCountsAnywhere(t *testing.T) {
+	signals := config.DefaultSignals()
+	for i := range signals {
+		signals[i].HandBack = ""
+	}
+	issue := Issue{Comments: []Comment{{Body: "Decisions needed: which one?"}}}
+	if got := Waiting(issue, signals); !slices.Equal(got, []string{"decision"}) {
+		t.Fatalf("waiting = %v", got)
 	}
 }
