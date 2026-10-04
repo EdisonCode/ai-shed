@@ -69,6 +69,7 @@ const (
 	KindQueue   = "queue"   // it was resting and its queue changed
 	KindBrief   = "brief"   // its brief was edited
 	KindLimit   = "limit"   // its usage limit was due to reset
+	KindRecycle = "recycle" // the owner asked for a fresh session
 	KindError   = "error"
 )
 
@@ -85,6 +86,9 @@ type Supervisor struct {
 	Lister         backlog.Lister
 	StateDir       string
 	Now            func() time.Time
+	// Notify tells the owner that a worker has started to need them. It may
+	// be nil.
+	Notify func(worker, message string)
 	// Sleep waits for the worker's terminal to take a command.
 	Sleep func(time.Duration)
 	Logf  func(format string, args ...any)
@@ -196,6 +200,12 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		}
 	}
 
+	// A fresh session was asked for. It waits for the issue in hand unless
+	// the owner said now.
+	if pending, immediately := s.recycleRequested(w.Name); pending && (immediately || st.issue == 0) {
+		return s.recycle(w, st, now)
+	}
+
 	idle := now.Sub(obs.LastActivity)
 	switch {
 	case now.Before(st.limitedUntil):
@@ -278,6 +288,15 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	verdict, err := s.Reviewer.Review(ctx, Prompt(in))
 	if err != nil {
 		return err
+	}
+	// The worker has reached a point where nothing is in progress: it is done,
+	// or it is about to be given another issue. A fresh session that was
+	// asked for starts here; the hand-over happens in the new session.
+	if pending, _ := s.recycleRequested(w.Name); pending {
+		handOver := verdict.Verdict == runlog.VerdictNudge && verdict.Issue != 0 && verdict.Issue != st.issue
+		if handOver || verdict.Verdict == runlog.VerdictDone {
+			return s.recycle(w, st, now)
+		}
 	}
 	item, inQueue := find(queue, verdict.Issue)
 	if verdict.Issue != 0 && !inQueue {
@@ -372,6 +391,30 @@ func (s *Supervisor) command(w config.Worker, line string) error {
 	return nil
 }
 
+// recycleRequested reports whether the owner asked for a fresh session for
+// the worker, and whether they asked for it at once.
+func (s *Supervisor) recycleRequested(worker string) (pending, immediately bool) {
+	data, err := os.ReadFile(filepath.Join(s.StateDir, runlog.RecycleDir, worker))
+	if err != nil {
+		return false, false
+	}
+	return true, strings.TrimSpace(string(data)) == runlog.RecycleNow
+}
+
+// recycle ends the worker's session. The next tick finds no window and
+// starts a new one, which reads the brief and waits for its first issue.
+func (s *Supervisor) recycle(w config.Worker, st *workerState, now time.Time) error {
+	if err := s.Terminal.Close(w.Name); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(s.StateDir, runlog.RecycleDir, w.Name)); err != nil {
+		return fmt.Errorf("worker %s: clear the recycle request: %w", w.Name, err)
+	}
+	st.issue, st.model, st.limitedUntil = 0, "", time.Time{}
+	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindRecycle, Verdict: runlog.VerdictRecycled, Reason: "its session was ended so that a fresh one starts"})
+	return nil
+}
+
 // isLimit reports whether a reviewer failed because it reached a usage limit.
 func isLimit(err error) bool {
 	text := strings.ToLower(err.Error())
@@ -402,6 +445,8 @@ func (s *Supervisor) recover(worker string) *workerState {
 			st.issue, st.model, st.briefStale = 0, "", false
 			st.starts = append(st.starts, c.Time)
 			st.lastReview = c.Time
+		case c.Verdict == runlog.VerdictRecycled:
+			st.issue, st.model, st.limitedUntil = 0, "", time.Time{}
 		case c.Kind == KindBrief:
 			st.briefStale = !c.Sent
 		case c.Verdict == runlog.VerdictLimited && c.Activity.IsZero():
@@ -505,7 +550,24 @@ func fingerprint(queue []QueueItem) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
+// needsOwner maps the verdicts that need the owner to how a notification
+// says them.
+var needsOwner = map[string]string{
+	runlog.VerdictNeedsOwner: "needs you",
+	runlog.VerdictStuck:      "is stuck",
+	runlog.VerdictError:      "could not be checked",
+}
+
 func (s *Supervisor) record(st *workerState, c runlog.Checkin) {
+	// The owner is told when a worker starts to need them, not every time
+	// the same state is seen again.
+	previous := ""
+	if len(st.recent) > 0 {
+		previous = st.recent[len(st.recent)-1].Verdict
+	}
+	if phrase, ok := needsOwner[c.Verdict]; ok && c.Verdict != previous && s.Notify != nil {
+		s.Notify(c.Worker, fmt.Sprintf("%s: worker %s %s: %s", s.Machine.Name, c.Worker, phrase, c.Reason))
+	}
 	st.recent = append(st.recent, c)
 	if len(st.recent) > recentKept {
 		st.recent = st.recent[len(st.recent)-recentKept:]

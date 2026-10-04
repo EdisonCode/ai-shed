@@ -27,6 +27,8 @@ type Result struct {
 	Runs      []runlog.Record `json:"-"`
 	// Checkins are the supervisor's recent check-ins, oldest first.
 	Checkins []runlog.Checkin `json:"-"`
+	// Recycle names the workers whose session the owner asked to replace.
+	Recycle []string `json:"-"`
 }
 
 type CheckResult struct {
@@ -56,6 +58,7 @@ s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.HeartbeatFile + `" ] && echo "@@heartbeat $(cat "$s/` + runlog.HeartbeatFile + `")"
 [ -f "$s/` + runlog.RunsFile + `" ] && tail -n 200 "$s/` + runlog.RunsFile + `" | sed 's/^/@@run /'
 [ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 100 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
+[ -d "$s/` + runlog.RecycleDir + `" ] && ls "$s/` + runlog.RecycleDir + `" | sed 's/^/@@recycle /'
 echo "@@end"
 `
 
@@ -129,6 +132,8 @@ func Parse(out string, checks []config.Check) (Result, error) {
 			if c, err := runlog.ParseCheckin(rest); err == nil {
 				res.Checkins = append(res.Checkins, c)
 			}
+		case "@@recycle":
+			res.Recycle = append(res.Recycle, strings.TrimSpace(rest))
 		case "@@end":
 			complete = true
 		default:

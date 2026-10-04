@@ -19,6 +19,8 @@ Usage:
   shed validate                     check the fleet file
   shed deploy [-install-agent] [machine...]
                                     send this version and the fleet file to machines
+  shed recycle [-now] <machine> <worker>
+                                    give a worker a fresh session after its current issue
   shed update                       replace this shed with the latest release
   shed preflight [-machine name]    on a machine: check that each worker's command comes up ready
   shed agent [-machine name]        on a machine: supervise its workers and run its tasks
@@ -52,6 +54,8 @@ func main() {
 		code = cmdValidate(args)
 	case "preflight":
 		code = cmdPreflight(args)
+	case "recycle":
+		code = cmdRecycle(args)
 	case "update":
 		code = cmdUpdate(args)
 	case "version":

@@ -378,6 +378,55 @@ a restart.
 Watch a worker with `tmux attach -t shed` on its machine. What the supervisor
 saw and did is in `~/.local/state/shed/checkins.jsonl`.
 
+### Updating while workers are busy
+
+`shed update && shed deploy` is safe in the middle of the night's work.
+
+- **Workers are separate processes.** A restart of the agent does not touch a
+  worker's session.
+- **The agent stops between messages, never inside one.** It is asked to stop,
+  finishes what it is typing to a worker, and exits. Only a call to the
+  reviewer is cut short, and that is not recorded as a failure.
+- **A restart costs a worker nothing.** The new agent rebuilds what the old one
+  knew from the check-in log: the issue each worker has in hand, its model,
+  what was last reviewed, how many nudges it has had, a usage limit it waits
+  on. No extra review, no repeated message.
+- **An edited brief does not interrupt.** The file is rewritten at once. A
+  worker with an issue in hand is told with its next message; an idle worker
+  is told straight away.
+- **The preflight leaves a running worker alone.**
+
+To get a worker onto new tooling (an integration you installed, a changed
+agent definition), ask for a fresh session:
+
+```sh
+shed recycle mini app        # after the issue it has in hand
+shed recycle -now mini app   # at once
+```
+
+The agent ends the session at the next point where nothing is in progress and
+starts a new one, which reads the brief and is handed the next issue.
+`shed status` shows the request while it waits.
+
+A scheduled task that is running when the agent restarts is stopped and
+recorded as stopped.
+
+### Hearing about it
+
+With the laptop closed, `shed status` tells nobody anything. Set a command and
+the agent runs it, on the machine, when a worker starts to need you (it needs
+a decision, it is stuck, it could not be checked) or a scheduled task starts
+to fail:
+
+```yaml
+defaults:
+  notify: curl -s -d "$SHED_MESSAGE" https://ntfy.sh/my-private-topic
+```
+
+The message is in `SHED_MESSAGE`; `SHED_MACHINE` and `SHED_WORKER` say where
+it came from. It runs once when the state begins, not while it lasts. A usage
+limit, a nudge and a finished queue do not notify.
+
 ### Scheduled tasks
 
 - A task runs through `sh -c`, after the machine's `init` line.

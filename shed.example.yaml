@@ -23,6 +23,10 @@ defaults:
   # agent tool needs and shed does not know about.
   deploy_hook: rsync -a ~/.claude/agents ~/.claude/skills "$SHED_HOST:.claude/"
 
+  # Optional. Runs on a worker machine when a worker starts to need you or a
+  # task starts to fail. The message is in SHED_MESSAGE.
+  # notify: curl -s -d "$SHED_MESSAGE" https://ntfy.sh/my-private-topic
+
 machines:
   - name: linux-box
     host: me@linux-box            # any ssh target; "local" means this machine

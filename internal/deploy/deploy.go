@@ -14,6 +14,7 @@ import (
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/probe"
 	"github.com/edisoncode/ai-shed/internal/release"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
 // Paths on the machine, under the user's home.
@@ -204,6 +205,16 @@ func InstallAgent(ctx context.Context, r probe.Runner, m config.Machine, platfor
 		return "", fmt.Errorf("start the agent service: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// Recycle asks the machine's agent to replace a worker's session with a
+// fresh one: after the issue it has in hand, or at once when now is set.
+func Recycle(ctx context.Context, r probe.Runner, m config.Machine, worker string, now bool) error {
+	mode := ""
+	if now {
+		mode = runlog.RecycleNow
+	}
+	return writeRemote(ctx, r, m, runlog.StateDir+"/"+runlog.RecycleDir+"/"+worker, []byte(mode), "644")
 }
 
 // Hook runs the owner's deploy hook on this machine (the watcher) for one

@@ -108,6 +108,9 @@ type Defaults struct {
 	// each machine it deploys to. It carries what shed does not know about:
 	// the files a worker's tool needs, such as agent definitions and skills.
 	DeployHook string `yaml:"deploy_hook"`
+	// Notify is a command the agent runs on its machine when something
+	// starts to need the owner. The message is in SHED_MESSAGE.
+	Notify string `yaml:"notify"`
 }
 
 type Machine struct {

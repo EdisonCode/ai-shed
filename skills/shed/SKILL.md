@@ -157,10 +157,21 @@ tokens.
 then brings every machine to the same version and restarts its agent. Workers
 keep running across that restart.
 
+A deploy is safe while workers are busy: the agent finishes a message it is
+typing before it restarts, and the new agent picks up from the check-in log
+without reviewing or messaging anyone again.
+
+A worker keeps the tools it started with. After a change to its tooling (an
+integration installed, an agent definition or skill changed), give it a fresh
+session: `shed recycle <machine> <worker>` waits for the issue in hand;
+`-now` does not, and loses whatever that issue had not yet written down. Use
+`-now` only on the owner's word.
+
 ## Do not
 
 - Do not type into a `shed` tmux window yourself while the agent runs, except
   to answer a prompt for the owner. The supervisor reads that terminal.
+- Do not end or restart a worker's session by hand. Use `shed recycle`.
 - Do not edit the fleet file on a worker machine. Edit the owner's copy and
   deploy.
 - Do not label an issue for a machine to "see what happens". A worker will

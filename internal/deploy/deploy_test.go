@@ -245,3 +245,17 @@ func TestInstallAgentReportsAServiceThatDidNotStart(t *testing.T) {
 		t.Fatal("a failed start must be an error")
 	}
 }
+
+func TestRecycleLeavesARequestForTheAgent(t *testing.T) {
+	for now, want := range map[bool]string{false: "", true: "now"} {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if err := Recycle(context.Background(), probe.ShellRunner{}, here, "app", now); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(home, ".local/state/shed/recycle/app"))
+		if err != nil || string(got) != want {
+			t.Errorf("now=%v: request = %q, %v; want %q", now, got, err, want)
+		}
+	}
+}

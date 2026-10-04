@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 const (
 	heartbeatEvery = 30 * time.Second
 	superviseEvery = 30 * time.Second
+	notifyTimeout  = 30 * time.Second
 	// outputTail is how much of a task's output a run record keeps.
 	outputTail = 2000
 	// exitNotRun is the exit code of a run that timed out or could not start.
@@ -115,13 +117,26 @@ func (a Agent) start(ctx context.Context, cfg *config.Config, m config.Machine) 
 
 	// A task that is still running when its next time comes is skipped.
 	scheduler := cron.New(cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)))
+	notify := a.notifier(cfg, m)
+	// failing holds the tasks whose last run failed, so the owner hears of a
+	// failure once and not at every run.
+	var mu sync.Mutex
+	failing := map[string]bool{}
 	for _, t := range m.Tasks {
 		// The config was validated when it was read.
 		schedule, _ := config.ParseSchedule(t.Schedule)
 		scheduler.Schedule(schedule, cron.FuncJob(func() {
 			start := time.Now()
-			if err := RunTask(ctx, a.StateDir, m, t, start, schedule.Next(start)); err != nil {
+			rec, err := RunTask(ctx, a.StateDir, m, t, start, schedule.Next(start))
+			if err != nil {
 				a.Logf("task %s: %v", t.Name, err)
+			}
+			mu.Lock()
+			wasFailing := failing[t.Name]
+			failing[t.Name] = rec.ExitCode != 0
+			mu.Unlock()
+			if rec.ExitCode != 0 && !wasFailing && notify != nil {
+				notify("", fmt.Sprintf("%s: task %s failed (exit %d)", m.Name, t.Name, rec.ExitCode))
 			}
 		}))
 	}
@@ -130,6 +145,7 @@ func (a Agent) start(ctx context.Context, cfg *config.Config, m config.Machine) 
 	stopSupervisor := func() {}
 	if len(m.Workers) > 0 {
 		sup := a.supervisor(cfg, m)
+		sup.Notify = notify
 		stopSupervisor = every(ctx, superviseEvery, sup.Tick)
 	}
 	a.Logf("machine %s: %d task(s) scheduled, %d worker(s) supervised", m.Name, len(m.Tasks), len(m.Workers))
@@ -179,6 +195,34 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 	}
 }
 
+// notifier returns the function that tells the owner something, or nil when
+// the fleet file has no notify command.
+func (a Agent) notifier(cfg *config.Config, m config.Machine) func(worker, message string) {
+	if cfg.Defaults.Notify == "" {
+		return nil
+	}
+	command := m.Command(cfg.Defaults.Notify)
+	return func(worker, message string) {
+		if err := Notify(command, m.Name, worker, message); err != nil {
+			a.Logf("notify: %v", err)
+		}
+	}
+}
+
+// Notify runs the owner's notify command. Where the message goes is the
+// command's business; shed passes it in SHED_MESSAGE, with SHED_MACHINE and
+// SHED_WORKER (empty when the message is not about a worker).
+func Notify(command, machine, worker, message string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Env = append(os.Environ(), "SHED_MESSAGE="+message, "SHED_MACHINE="+machine, "SHED_WORKER="+worker)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // adoptPath gives the agent the PATH that the machine's init line sets, so
 // tmux, gh and the reviewer resolve as they do in checks and tasks. A service
 // manager starts the agent with a much shorter PATH.
@@ -207,16 +251,17 @@ func (a Agent) beat() error {
 	return nil
 }
 
-// RunTask runs one task and appends its start and end records to the run log.
-// The returned error is about the log; a failing task is not an error here.
-func RunTask(ctx context.Context, stateDir string, m config.Machine, t config.Task, start, next time.Time) error {
+// RunTask runs one task, appends its start and end records to the run log and
+// returns the end record. The returned error is about the log; a failing task
+// is not an error here.
+func RunTask(ctx context.Context, stateDir string, m config.Machine, t config.Task, start, next time.Time) (runlog.Record, error) {
 	rec := runlog.Record{Task: t.Name, Start: start, Next: next}
 	if err := runlog.Append(stateDir, rec); err != nil {
-		return err
+		return rec, err
 	}
 	output, exit := execute(ctx, m.Command(t.Run), t.TimeoutOrDefault())
 	rec.End, rec.ExitCode, rec.Output = time.Now(), exit, tail(output, outputTail)
-	return runlog.Append(stateDir, rec)
+	return rec, runlog.Append(stateDir, rec)
 }
 
 // execute runs a shell script and returns its combined output and exit code.

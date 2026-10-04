@@ -26,7 +26,11 @@ type fakeTerminal struct {
 	closed []string
 }
 
-func (f *fakeTerminal) Close(window string) error { f.closed = append(f.closed, window); return nil }
+func (f *fakeTerminal) Close(window string) error {
+	f.closed = append(f.closed, window)
+	f.obs = Observation{}
+	return nil
+}
 
 func (f *fakeTerminal) Observe(string) (Observation, error) { return f.obs, nil }
 func (f *fakeTerminal) Capture(string, int) (string, error) { return f.screen, nil }
@@ -954,5 +958,119 @@ func TestWorkerWithItsOwnQueueSeesOnlyThat(t *testing.T) {
 	brief, _ := os.ReadFile(filepath.Join(f.Machine.Workers[1].Dir, BriefFile))
 	if !strings.Contains(string(brief), "label `area:docs`") || strings.Contains(string(brief), "machine:box") {
 		t.Fatalf("the docs worker's brief names the wrong queue:\n%s", brief)
+	}
+}
+
+func (f *fixture) requestRecycle(t *testing.T, mode string) string {
+	t.Helper()
+	path := filepath.Join(f.StateDir, runlog.RecycleDir, "app")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, []byte(mode), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRecycleWaitsForTheIssueInHand(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), nudge("The test still fails. Read its output."), assign(13))
+	f.lister.issues = append(f.lister.issues, labeled(13))
+	f.tick(2 * time.Minute) // handed #12
+	request := f.requestRecycle(t, "")
+
+	f.handOver() // mid-issue: a nudge about #12 goes through as usual
+	if len(f.term.closed) != 0 || !slices.Equal(f.term.sent, []string{"The test still fails. Read its output."}) {
+		t.Fatalf("closed %v, sent %q; a worker with an issue in hand must not be recycled", f.term.closed, f.term.sent)
+	}
+
+	f.handOver() // it finished #12; the reviewer would hand over #13
+	if !slices.Equal(f.term.closed, []string{"app"}) || len(f.term.sent) != 0 {
+		t.Fatalf("closed %v, sent %q; want the session ended and #13 held for the new one", f.term.closed, f.term.sent)
+	}
+	if _, err := os.Stat(request); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the recycle request was not cleared")
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictRecycled {
+		t.Fatalf("check-in = %+v", c)
+	}
+
+	f.tick(30 * time.Second) // the next tick starts a fresh session
+	if len(f.term.sent) != 1 || !strings.Contains(f.term.sent[0], startPrompt) {
+		t.Fatalf("sent = %q, want the worker's command", f.term.sent)
+	}
+	f.term.running(f.now)
+	f.term.sent = nil
+	f.tick(2 * time.Minute) // and the new session is handed #13
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Issue != 13 {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestRecycleNowDoesNotWait(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	f.tick(2 * time.Minute)
+	f.requestRecycle(t, runlog.RecycleNow)
+	f.term.running(f.now.Add(time.Minute)) // busy on #12
+	f.tick(time.Minute)
+	if !slices.Equal(f.term.closed, []string{"app"}) {
+		t.Fatalf("closed = %v", f.term.closed)
+	}
+}
+
+func TestRecycleOfAWorkerWithNothingInHandIsImmediate(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.requestRecycle(t, "")
+	f.tick(30 * time.Second)
+	if !slices.Equal(f.term.closed, []string{"app"}) || len(f.reviewer.prompts) != 0 {
+		t.Fatalf("closed = %v after %d review(s)", f.term.closed, len(f.reviewer.prompts))
+	}
+}
+
+func TestOwnerIsNotifiedOnceWhenAWorkerStartsToNeedThem(t *testing.T) {
+	needs := Verdict{Verdict: runlog.VerdictNeedsOwner, Reason: "a permission prompt is open"}
+	f := started(t, config.Supervisor{}, needs, needs, onTrack, needs)
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, worker+"|"+message) }
+
+	f.tick(2 * time.Minute)
+	f.term.running(f.now) // the screen changed, and it needs the owner still
+	f.tick(2 * time.Minute)
+	if want := []string{"app|box: worker app needs you: a permission prompt is open"}; !slices.Equal(notes, want) {
+		t.Fatalf("notifications = %q, want %q", notes, want)
+	}
+
+	f.term.running(f.now) // the owner answered; it works; later it needs them again
+	f.tick(2 * time.Minute)
+	f.term.running(f.now)
+	f.tick(2 * time.Minute)
+	if len(notes) != 2 {
+		t.Fatalf("notifications = %q, want a second one for the new problem", notes)
+	}
+}
+
+func TestOwnerIsNotNotifiedAboutWorkThatIsGoingWell(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12), Verdict{Verdict: runlog.VerdictDone, Reason: "r"}, limited(30))
+	notified := false
+	f.Notify = func(string, string) { notified = true }
+	f.tick(2 * time.Minute)
+	f.handOver()
+	f.handOver()
+	if notified {
+		t.Fatal("a nudge, a finished queue and a usage limit need nobody")
+	}
+}
+
+func TestOwnerIsNotifiedWhenAWorkerIsStuck(t *testing.T) {
+	f := started(t, config.Supervisor{}, nudge("Continue with #12."))
+	var notes []string
+	f.Notify = func(_, message string) { notes = append(notes, message) }
+	for range 5 {
+		f.term.running(f.now)
+		f.tick(2 * time.Minute)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "worker app is stuck") {
+		t.Fatalf("notifications = %q", notes)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,6 +82,9 @@ type WorkerStatus struct {
 	Tool string `json:"tool"`
 	// Issue is the issue the supervisor last handed it; 0 for none.
 	Issue int `json:"issue,omitempty"`
+	// RecyclePending is set when the owner asked for a fresh session and the
+	// supervisor waits for the issue in hand to finish.
+	RecyclePending bool `json:"recycle_pending,omitempty"`
 	// Last is the supervisor's latest check-in; nil before the first one.
 	Last *runlog.Checkin `json:"last,omitempty"`
 }
@@ -242,7 +246,7 @@ func assessAgent(m config.Machine, res probe.Result, attend func(string, ...any)
 func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, attend func(string, ...any)) {
 	latest := runlog.LatestCheckins(res.Checkins)
 	for _, w := range m.Workers {
-		st := WorkerStatus{Name: w.Name, Issue: runlog.IssueInHand(res.Checkins, w.Name)}
+		st := WorkerStatus{Name: w.Name, Issue: runlog.IssueInHand(res.Checkins, w.Name), RecyclePending: slices.Contains(res.Recycle, w.Name)}
 		if fields := strings.Fields(w.CommandOrDefault()); len(fields) > 0 {
 			st.Tool = fields[0]
 		}

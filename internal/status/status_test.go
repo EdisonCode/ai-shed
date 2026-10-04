@@ -343,3 +343,16 @@ func TestOldTriesDoNotCountAgainstAPullRequest(t *testing.T) {
 	res.Checkins = []runlog.Checkin{sentBack(7, 20*time.Hour), sentBack(7, 19*time.Hour), checkin(runlog.VerdictDone, "nothing left")}
 	wantAttention(t, Assess(appWorker, signals, res, []backlog.Issue{stalePR(7, "conflicts with the base branch")}))
 }
+
+func TestPendingRecycleIsShownAndNeedsNothing(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{handedOver(7)}
+	res.Recycle = []string{"app"}
+	r := Assess(appWorker, signals, res, nil)
+	wantAttention(t, r)
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r})
+	if !r.Workers[0].RecyclePending || !strings.Contains(out.String(), "[fresh session pending]") {
+		t.Fatalf("worker = %+v\n%s", r.Workers[0], out.String())
+	}
+}

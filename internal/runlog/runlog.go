@@ -14,8 +14,13 @@ import (
 
 // State files live in this directory under the machine user's home.
 const (
-	StateDir      = ".local/state/shed"
-	RunsFile      = "runs.jsonl"
+	StateDir = ".local/state/shed"
+	RunsFile = "runs.jsonl"
+	// RecycleDir holds one file per worker whose session the owner asked to
+	// replace. The file's content is RecycleNow, or empty to wait for the
+	// worker to finish the issue it has in hand.
+	RecycleDir    = "recycle"
+	RecycleNow    = "now"
 	CheckinsFile  = "checkins.jsonl"
 	HeartbeatFile = "heartbeat"
 )
@@ -83,6 +88,7 @@ const (
 	VerdictStuck      = "stuck"       // nudges or restarts did not get it moving
 	VerdictLimited    = "limited"     // at a usage limit; left alone until it resets
 	VerdictStarted    = "started"     // the supervisor started its session
+	VerdictRecycled   = "recycled"    // the supervisor ended its session to start a fresh one
 	VerdictError      = "error"       // the check-in itself failed
 )
 
@@ -160,7 +166,7 @@ func IssueInHand(checkins []Checkin, worker string) int {
 	for _, c := range checkins {
 		switch {
 		case c.Worker != worker:
-		case c.Verdict == VerdictStarted:
+		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled:
 			issue = 0
 		case c.Sent && c.Issue != 0:
 			issue = c.Issue
