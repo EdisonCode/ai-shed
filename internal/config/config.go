@@ -130,6 +130,10 @@ type Worker struct {
 	Command string `yaml:"command"`
 	// Brief is the worker's scope: what to work on and what to leave alone.
 	Brief string `yaml:"brief"`
+	// FreshPerIssue clears the worker's context each time it is handed a new
+	// issue, so one issue's conversation does not follow it into the next.
+	// Leave it off for themed work where the issues build on each other.
+	FreshPerIssue bool `yaml:"fresh_per_issue"`
 }
 
 // Check is a command that must exit 0 for the machine to be ready for work.

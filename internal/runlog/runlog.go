@@ -4,9 +4,11 @@ package runlog
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -119,4 +121,23 @@ func LatestCheckins(checkins []Checkin) map[string]Checkin {
 		latest[c.Worker] = c
 	}
 	return latest
+}
+
+// ReadCheckins returns the check-ins in the log, oldest first. A missing log
+// is no check-ins; a line that does not parse is skipped.
+func ReadCheckins(dir string) ([]Checkin, error) {
+	data, err := os.ReadFile(filepath.Join(dir, CheckinsFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read check-ins: %w", err)
+	}
+	var checkins []Checkin
+	for _, line := range strings.Split(string(data), "\n") {
+		if c, err := ParseCheckin(line); err == nil {
+			checkins = append(checkins, c)
+		}
+	}
+	return checkins, nil
 }

@@ -502,3 +502,90 @@ func TestOrchestratorIsToldTheModelAndNotSwitched(t *testing.T) {
 		t.Fatalf("check-in = %+v", c)
 	}
 }
+
+// handOver runs the worker through one more issue: it works, goes silent, and
+// the supervisor checks in. It returns what was typed.
+func (f *fixture) handOver() []string {
+	f.term.sent = nil
+	f.term.running(f.now.Add(40 * time.Minute))
+	f.tick(42 * time.Minute)
+	return f.term.sent
+}
+
+func freshWorker(t *testing.T, settings config.Supervisor, verdicts ...Verdict) *fixture {
+	t.Helper()
+	f := started(t, settings, verdicts...)
+	f.Machine.Workers[0].FreshPerIssue = true
+	f.lister.issues = append(f.lister.issues, backlog.Issue{Repo: "org/app", Number: 13, Title: "Another job"})
+	return f
+}
+
+func TestFreshWorkerStartsEachNewIssueOnAClearContext(t *testing.T) {
+	f := freshWorker(t, config.Supervisor{CacheTTL: "1h"}, assign(12), assign(13))
+	f.tick(2 * time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("first issue: sent = %q, want no clear on a session that has had no issue", f.term.sent)
+	}
+
+	sent := f.handOver()
+	if len(sent) != 2 || sent[0] != "/clear" || !strings.HasPrefix(sent[1], "Your context was cleared") {
+		t.Fatalf("second issue: sent = %q, want a clear and then the re-orienting message", sent)
+	}
+	if c := f.lastCheckin(t); c.Issue != 13 || c.Cold {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestNudgeAboutTheIssueInHandKeepsTheContext(t *testing.T) {
+	f := freshWorker(t, config.Supervisor{CacheTTL: "1h"}, assign(12))
+	f.tick(2 * time.Minute)
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q, want no clear: issue 12 is the issue in hand", sent)
+	}
+}
+
+func TestIssueInHandIsRememberedAcrossAnAgentRestart(t *testing.T) {
+	f := freshWorker(t, config.Supervisor{CacheTTL: "1h"}, assign(12), assign(12), assign(13))
+	f.tick(2 * time.Minute)
+	f.Supervisor.workers = nil // the agent restarted; the worker did not
+
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
+		t.Fatalf("after restart, same issue: sent = %q, want no clear", sent)
+	}
+	if sent := f.handOver(); len(sent) != 2 || sent[0] != "/clear" {
+		t.Fatalf("after restart, new issue: sent = %q, want a clear first", sent)
+	}
+}
+
+func TestRestartedSessionHasNoIssueInHand(t *testing.T) {
+	f := freshWorker(t, config.Supervisor{CacheTTL: "1h"}, assign(12), assign(13))
+	f.tick(2 * time.Minute)
+	f.term.exitedToShell(f.now)
+	f.tick(time.Minute) // the supervisor starts a new session
+	f.term.running(f.now)
+	f.term.sent = nil
+	f.tick(2 * time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q, want no clear: the new session's context is already empty", f.term.sent)
+	}
+}
+
+func TestFreshOrchestratorIsClearedAndToldTheModel(t *testing.T) {
+	tell := config.Models{Default: "sonnet", Apply: config.ModelTell}
+	f := freshWorker(t, config.Supervisor{CacheTTL: "1h", Models: tell}, assign(12), assign(13))
+	f.tick(2 * time.Minute)
+	sent := f.handOver()
+	if len(sent) != 2 || sent[0] != "/clear" || !strings.HasSuffix(sent[1], "Take the next issue. The model for this issue is sonnet.") {
+		t.Fatalf("sent = %q", sent)
+	}
+}
+
+func TestWorkerThatKeepsItsContextIsNotClearedBetweenIssues(t *testing.T) {
+	f := freshWorker(t, config.Supervisor{CacheTTL: "1h"}, assign(12), assign(13))
+	f.Machine.Workers[0].FreshPerIssue = false
+	f.tick(2 * time.Minute)
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q", sent)
+	}
+}
