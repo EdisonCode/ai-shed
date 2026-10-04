@@ -5,7 +5,12 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/edisoncode/ai-shed/internal/probe"
 )
+
+// workerSession is the tmux session that holds supervised workers.
+const workerSession = "shed"
 
 // Render writes the report for a terminal.
 func Render(w io.Writer, reports []MachineReport) {
@@ -44,7 +49,7 @@ func renderMachine(w io.Writer, r MachineReport) {
 	if r.Probe != nil && len(r.Probe.Windows) > 0 {
 		fmt.Fprintln(w, "  windows")
 		for _, win := range r.Probe.Windows {
-			fmt.Fprintf(tw, "    %s:%s\t%s\tactive %s ago\n", win.Session, win.Name, win.Command, Short(r.Probe.Now.Sub(win.LastActivity)))
+			fmt.Fprintf(tw, "    %s:%s\t%s\tactive %s ago\n", win.Session, win.Name, windowCommand(r, win), Short(r.Probe.Now.Sub(win.LastActivity)))
 		}
 		tw.Flush()
 	}
@@ -55,7 +60,7 @@ func renderMachine(w io.Writer, r MachineReport) {
 				fmt.Fprintf(tw, "    %s\tno check-in yet\n", wk.Name)
 				continue
 			}
-			fmt.Fprintf(tw, "    %s\t%s\t%s ago\t%s\n", wk.Name, wk.Last.Verdict, Short(r.Probe.Now.Sub(wk.Last.Time)), wk.Last.Reason)
+			fmt.Fprintf(tw, "    %s\t%s\t%s\t%s ago\t%s\n", wk.Name, inHand(wk), wk.Last.Verdict, Short(r.Probe.Now.Sub(wk.Last.Time)), wk.Last.Reason)
 		}
 		tw.Flush()
 	}
@@ -112,4 +117,29 @@ func lastRun(r MachineReport, t TaskStatus) string {
 		return "started " + Short(r.Probe.Now.Sub(t.Last.Start)) + " ago"
 	}
 	return fmt.Sprintf("%s ago, took %s", Short(r.Probe.Now.Sub(t.Last.End)), Short(t.Last.End.Sub(t.Last.Start)))
+}
+
+func inHand(w WorkerStatus) string {
+	if w.Issue == 0 {
+		return "no issue"
+	}
+	return fmt.Sprintf("#%d", w.Issue)
+}
+
+// shells are the programs a window shows when no tool runs in it.
+var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "fish": true, "dash": true, "ksh": true}
+
+// windowCommand names what runs in a window. tmux reports the process name,
+// and some tools set theirs to a version number; for a supervised worker's
+// window the fleet file knows the tool's real name.
+func windowCommand(r MachineReport, win probe.Window) string {
+	if win.Session != workerSession || shells[win.Command] {
+		return win.Command
+	}
+	for _, w := range r.Workers {
+		if w.Name == win.Name && w.Tool != "" {
+			return w.Tool
+		}
+	}
+	return win.Command
 }

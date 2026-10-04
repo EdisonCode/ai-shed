@@ -74,6 +74,10 @@ type TaskStatus struct {
 
 type WorkerStatus struct {
 	Name string `json:"name"`
+	// Tool is the program the worker runs, from its command in the fleet file.
+	Tool string `json:"tool"`
+	// Issue is the issue the supervisor last handed it; 0 for none.
+	Issue int `json:"issue,omitempty"`
 	// Last is the supervisor's latest check-in; nil before the first one.
 	Last *runlog.Checkin `json:"last,omitempty"`
 }
@@ -157,28 +161,49 @@ func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues
 	for _, issue := range issues {
 		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
 			State: Queued, Waiting: backlog.Waiting(issue, signals)}
-		worker, hasWorker := workerFor(issue.Number, windows)
-		if hasWorker {
-			st.Worker, st.State = worker.Name, Working
+		// A supervised worker has the issue its supervisor handed it. Any
+		// other worker is matched by the name of its tmux window.
+		supervised := supervisedOn(report.Workers, issue.Number)
+		window, hasWindow := workerFor(issue.Number, windows)
+		switch {
+		case supervised != "":
+			st.Worker, st.State = supervised, Working
+		case hasWindow:
+			st.Worker, st.State = window.Name, Working
 		}
 		switch {
 		case len(st.Waiting) > 0:
 			st.State = Waiting
 			attend("%s#%d waits on you (%s): %s", issue.Repo, issue.Number, strings.Join(st.Waiting, ", "), issue.Title)
-		case hasWorker:
+		case supervised != "":
+			// Its supervisor watches it; a quiet spell is the supervisor's to judge.
 			working++
-			if quiet := res.Now.Sub(worker.LastActivity); quiet > workerQuiet {
-				attend("worker %s on #%d has been quiet for %s: finished or stuck?", worker.Name, issue.Number, Short(quiet))
+		case hasWindow:
+			working++
+			if quiet := res.Now.Sub(window.LastActivity); quiet > workerQuiet {
+				attend("worker %s on #%d has been quiet for %s: finished or stuck?", window.Name, issue.Number, Short(quiet))
 			}
 		default:
 			queued++
 		}
 		report.Issues = append(report.Issues, st)
 	}
-	if res != nil && queued > 0 && working == 0 {
+	// On a machine with supervised workers the supervisor hands out the
+	// queue, and says so when it cannot.
+	if res != nil && queued > 0 && working == 0 && len(m.Workers) == 0 {
 		attend("%d issue(s) queued and no worker is running", queued)
 	}
 	return report
+}
+
+// supervisedOn returns the supervised worker that has this issue in hand.
+func supervisedOn(workers []WorkerStatus, issue int) string {
+	for _, w := range workers {
+		if w.Issue == issue {
+			return w.Name
+		}
+	}
+	return ""
 }
 
 // assessAgent reports whether the agent is alive. A machine with no tasks
@@ -203,7 +228,10 @@ func assessAgent(m config.Machine, res probe.Result, attend func(string, ...any)
 func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, attend func(string, ...any)) {
 	latest := runlog.LatestCheckins(res.Checkins)
 	for _, w := range m.Workers {
-		st := WorkerStatus{Name: w.Name}
+		st := WorkerStatus{Name: w.Name, Issue: runlog.IssueInHand(res.Checkins, w.Name)}
+		if fields := strings.Fields(w.CommandOrDefault()); len(fields) > 0 {
+			st.Tool = fields[0]
+		}
 		if c, ok := latest[w.Name]; ok {
 			st.Last = &c
 			switch c.Verdict {
