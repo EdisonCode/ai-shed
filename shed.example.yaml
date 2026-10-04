@@ -42,6 +42,14 @@ machines:
         # Optional. Issues with these labels go first, in this order; then
         # the oldest first.
         priority: ["urgent", "quick"]
+    # Optional. When the machine is busy with other work, no worker is handed
+    # a new issue; work in progress goes on. A hand-over waits max_wait at
+    # most, then goes through anyway.
+    capacity:
+      max_load: 1.5        # 1-minute load average per core
+      # Exit 0 means busy. Here: two or more CI jobs are running.
+      busy_when: '[ "$(pgrep -fc "Runner\.Worker")" -ge 2 ]'
+      max_wait: 20m
     workers:
       # A long-running agent session that the machine's agent starts, keeps
       # alive and checks in on. It runs in tmux window shed:app.

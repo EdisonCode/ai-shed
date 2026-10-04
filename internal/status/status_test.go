@@ -251,7 +251,7 @@ func TestWorkerVerdictsThatNeedOwner(t *testing.T) {
 }
 
 func TestWorkerThatIsOnTrackNeedsNothing(t *testing.T) {
-	for _, verdict := range []string{runlog.VerdictOnTrack, runlog.VerdictNudge, runlog.VerdictDone, runlog.VerdictStarted, runlog.VerdictLimited} {
+	for _, verdict := range []string{runlog.VerdictOnTrack, runlog.VerdictNudge, runlog.VerdictDone, runlog.VerdictStarted, runlog.VerdictLimited, runlog.VerdictHeld, runlog.VerdictRecycled} {
 		res := healthy()
 		res.Checkins = []runlog.Checkin{checkin(runlog.VerdictNeedsOwner, "older"), checkin(verdict, "fine")}
 		r := Assess(appWorker, signals, res, nil)

@@ -88,6 +88,7 @@ one verdict:
 | `nudge` | one message would get work moving: next issue, an answer the brief already gives, a pull back into scope | types the message |
 | `needs_owner` | nothing can move without you, or a permission prompt or menu is open | types nothing; `shed status` shows it |
 | `done` | nothing left that it can act on | leaves it idle |
+| `held` | (set by the agent, not the reviewer) its next issue waits for the machine to have room | delivers it when there is room, or after `max_wait` |
 | `limited` | it reached a usage limit and must wait for the reset | types nothing, looks again just after the reset (every 15 minutes when the screen names no time), then tells it to continue |
 
 The terminal is captured with its styles. Text that the worker's tool draws
@@ -153,6 +154,49 @@ machines:
 
 An issue that waits on you is skipped. An issue that one worker has in hand is
 never handed to another, whatever their queues.
+
+### Machine capacity
+
+A machine often has other work: CI runners, builds, a database. Tell shed how
+to see that the machine is busy, and it stops handing out new issues while it
+is.
+
+```yaml
+machines:
+  - name: linux-box
+    capacity:
+      max_load: 1.5        # 1-minute load average per core
+      busy_when: '[ "$(pgrep -fc "Runner\.Worker")" -ge 2 ]'   # exit 0 = busy
+      max_wait: 20m
+```
+
+- **Scaling down means not starting more.** A worker that finishes an issue on
+  a busy machine is not handed the next one. Work in progress is never
+  stopped, and a nudge about the issue in hand still goes through. As workers
+  finish, the machine sheds its load by itself.
+- **Scaling up is automatic.** The held hand-over is delivered at the first
+  30-second tick on which the machine has room. The reviewer is not asked a
+  second time.
+- **It resists; it does not refuse.** A hand-over is held for `max_wait` at
+  most (default 20 minutes) and then delivered whatever the load. A machine
+  that is never quiet still gets its work done, only more slowly.
+- **Either test is enough to be busy.** `max_load` covers CPU. `busy_when` is
+  any command of yours, run after the machine's `init` line, and it is the
+  place for what load does not show. Two examples for Linux:
+
+  ```sh
+  # two or more GitHub Actions jobs are running on this machine's runners
+  [ "$(pgrep -fc "Runner\.Worker")" -ge 2 ]
+  # disk or memory pressure: tasks stalled more than 20% of the last 10 seconds
+  awk -F'[ =]' '/^some/ && $3 > 20 {busy=1} END {exit !busy}' /proc/pressure/io /proc/pressure/memory
+  ```
+
+- A test that cannot run (the command is missing, the load cannot be read)
+  counts as room. A broken test must not stop a machine's work.
+
+`shed status` shows a worker whose next issue is waiting as `held`, with the
+reason. It needs nothing from you. With no `capacity` block a machine always
+has room.
 
 ### Prompt cache
 

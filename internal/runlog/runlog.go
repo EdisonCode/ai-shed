@@ -87,6 +87,7 @@ const (
 	VerdictDone       = "done"        // nothing left that it can act on
 	VerdictStuck      = "stuck"       // nudges or restarts did not get it moving
 	VerdictLimited    = "limited"     // at a usage limit; left alone until it resets
+	VerdictHeld       = "held"        // its next issue waits for the machine to have room
 	VerdictStarted    = "started"     // the supervisor started its session
 	VerdictRecycled   = "recycled"    // the supervisor ended its session to start a fresh one
 	VerdictError      = "error"       // the check-in itself failed

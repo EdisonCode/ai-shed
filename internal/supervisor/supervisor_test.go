@@ -1099,3 +1099,157 @@ func TestReviewerIsToldWhatTheLogSaysIsInHand(t *testing.T) {
 		t.Fatal("second review: the prompt does not name the issue in hand")
 	}
 }
+
+// busyMachine makes the fixture's machine busy until the returned flag is
+// set to false.
+func busyMachine(f *fixture) *bool {
+	busy := true
+	f.Busy = func(context.Context) string {
+		if busy {
+			return "the load is 2.50 per core, above the limit of 1.50"
+		}
+		return ""
+	}
+	return &busy
+}
+
+func TestHandOverIsHeldWhileTheMachineIsBusy(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12))
+	busy := busyMachine(f)
+	f.tick(2 * time.Minute)
+
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; the machine is busy", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictHeld || c.Issue != 12 || c.Sent || !strings.Contains(c.Reason, "#12 is held") {
+		t.Fatalf("check-in = %+v", c)
+	}
+
+	f.tick(time.Minute) // still busy: nothing happens, and the reviewer is not asked again
+	if len(f.term.sent) != 0 || len(f.reviewer.prompts) != 1 {
+		t.Fatalf("sent %q after %d review(s)", f.term.sent, len(f.reviewer.prompts))
+	}
+
+	*busy = false
+	f.tick(time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) || len(f.reviewer.prompts) != 1 {
+		t.Fatalf("sent %q after %d review(s); want the held hand-over delivered with no second review", f.term.sent, len(f.reviewer.prompts))
+	}
+	if c := f.lastCheckin(t); c.Kind != KindCapacity || c.Issue != 12 || !c.Sent || !strings.Contains(c.Reason, "room again") {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestMachineThatIsNeverQuietStillHandsOverAfterTheLongestWait(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12))
+	f.Machine.Capacity.MaxWait = "10m"
+	busyMachine(f)
+	f.tick(2 * time.Minute)
+	f.tick(9 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q before the longest wait was over", f.term.sent)
+	}
+	f.tick(2 * time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; a busy machine must resist new work, not refuse it for ever", f.term.sent)
+	}
+	if c := f.lastCheckin(t); !strings.Contains(c.Reason, "handed over after waiting") {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestBusyMachineDoesNotHoldANudgeAboutTheIssueInHand(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), assign(12))
+	f.tick(2 * time.Minute) // handed #12 while there is room
+	busyMachine(f)
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; work in progress goes on when the machine is busy", sent)
+	}
+}
+
+func TestHeldHandOverIsDroppedWhenTheWorkerMoves(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack)
+	busy := busyMachine(f)
+	f.tick(2 * time.Minute)
+	f.term.running(f.now.Add(time.Minute)) // the owner typed something; the worker is working
+	*busy = false
+	f.tick(time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; the choice was made for a screen that has since changed", f.term.sent)
+	}
+}
+
+func TestHeldIssueThatWasClosedMeanwhileIsNotHandedOver(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), Verdict{Verdict: runlog.VerdictDone, Reason: "nothing left"})
+	busy := busyMachine(f)
+	f.tick(2 * time.Minute)
+	f.lister.issues = nil // #12 was closed while it was held
+	*busy = false
+	f.tick(time.Minute)
+	f.tick(time.Minute)
+	if len(f.term.sent) != 0 || len(f.reviewer.prompts) != 2 {
+		t.Fatalf("sent %q after %d review(s); want nothing sent and the worker reviewed afresh", f.term.sent, len(f.reviewer.prompts))
+	}
+}
+
+func TestHeldWorkerIsReviewedAgainByANewAgent(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12))
+	busy := busyMachine(f)
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	*busy = false
+	f.tick(time.Minute)
+	if f.reviews() != 1 || !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("after a restart: %d review(s), sent %q; a held worker must not be forgotten", f.reviews(), f.term.sent)
+	}
+}
+
+func TestHeldHandOverDoesNotNotifyTheOwner(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	busyMachine(f)
+	notified := false
+	f.Notify = func(string, string) { notified = true }
+	f.tick(2 * time.Minute)
+	if notified {
+		t.Fatal("a busy machine needs nobody")
+	}
+}
+
+func TestMachineBusy(t *testing.T) {
+	load := func(l float64) func() (float64, error) { return func() (float64, error) { return l, nil } }
+	failing := func() (float64, error) { return 0, errors.New("no uptime") }
+	cases := []struct {
+		name     string
+		capacity config.Capacity
+		load     func() (float64, error)
+		want     string
+	}{
+		{"no test set", config.Capacity{}, load(99), ""},
+		{"load under the limit", config.Capacity{MaxLoad: 1.5}, load(8), ""},
+		{"load over the limit", config.Capacity{MaxLoad: 1.5}, load(16), "the load is 2.00 per core, above the limit of 1.50"},
+		{"load cannot be read: room", config.Capacity{MaxLoad: 1.5}, failing, ""},
+		{"busy_when exits 0: busy", config.Capacity{BusyWhen: "true"}, load(0), "the machine's busy_when check says it is busy"},
+		{"busy_when exits 1: room", config.Capacity{BusyWhen: "false"}, load(0), ""},
+		{"busy_when cannot run: room", config.Capacity{BusyWhen: "no-such-command-xyz"}, load(0), ""},
+		{"either test is enough", config.Capacity{MaxLoad: 1.5, BusyWhen: "false"}, load(16), "the load is 2.00 per core, above the limit of 1.50"},
+	}
+	for _, tc := range cases {
+		busy := MachineBusy(config.Machine{Capacity: tc.capacity}, tc.load, 8)
+		if got := busy(context.Background()); got != tc.want {
+			t.Errorf("%s: busy = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestBusyWhenRunsAfterTheMachinesInitLine(t *testing.T) {
+	m := config.Machine{Init: "export SHED_TEST_BUSY=yes", Capacity: config.Capacity{BusyWhen: `test "$SHED_TEST_BUSY" = yes`}}
+	if got := MachineBusy(m, nil, 8)(context.Background()); got == "" {
+		t.Fatal("the busy_when command did not see what the init line set")
+	}
+}
+
+func TestSystemLoadCanBeRead(t *testing.T) {
+	if l, err := systemLoad(); err != nil || l < 0 {
+		t.Fatalf("load = %v, %v", l, err)
+	}
+}
