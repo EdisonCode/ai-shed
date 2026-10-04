@@ -265,7 +265,7 @@ brief, deploy, and pick up the results. It is plain markdown.
 shed keeps workers moving; it does not make their work safe to accept.
 [`docs/REPO-RECIPE.md`](docs/REPO-RECIPE.md) is the author's recipe for a
 repository that unattended workers can work in: a protected main branch, pull
-requests only, exhaustive CI, staging with browser smoke tests, and owner
+requests only, pre-push gates, exhaustive CI, staging with browser smoke tests, and owner
 sign-off before production.
 
 ## About this project
@@ -295,5 +295,6 @@ author's direction.
 ## Development
 
 ```sh
+make hooks        # once per clone: the pre-push hook runs the gates below
 make lint test
 ```

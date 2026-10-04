@@ -16,6 +16,7 @@ defaults:
   standing_orders: |
     Open a pull request for every change. Never merge it yourself.
     Never deploy. Never weaken a test to make it pass.
+    Never push with --no-verify.
 
 machines:
   - name: linux-box

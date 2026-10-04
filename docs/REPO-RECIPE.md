@@ -11,6 +11,7 @@ wrong, and neither may be able to do damage by being wrong.**
 | --- | --- |
 | The main branch is protected. Nobody pushes to it, including the owner. | A worker that "just fixes it on main". |
 | All work merges through a pull request. | Work that nobody looked at. |
+| A pre-push hook runs the local gates (format, lint, unit tests, build), and a push needs all of them green. Nobody bypasses it with `--no-verify`. | CI minutes spent on a commit that already fails on the machine that made it. |
 | Every pull request runs exhaustive CI: static analysis, lint, unit tests, integration tests against real dependencies. Merging needs all of it green. | A worker that reports "tests pass" for the tests it chose to run. |
 | A merge deploys to staging, not to production. | A bad merge reaching users. |
 | Staging gets a smoke test in a real browser, with screenshots at each step. | Changes that pass every test and still look or behave wrong. |
@@ -19,7 +20,8 @@ wrong, and neither may be able to do damage by being wrong.**
 ## How it meets shed
 
 - **The worker's side of the recipe goes in `defaults.standing_orders`**:
-  open a pull request, never merge, never deploy, never weaken a test. The
+  open a pull request, never merge, never deploy, never weaken a test,
+  never push past a failing hook. The
   supervisor judges every check-in against those orders.
 - **The repository enforces what the orders ask.** Orders are a request.
   Branch protection and required checks are the guarantee. Give the worker
@@ -37,4 +39,5 @@ wrong, and neither may be able to do damage by being wrong.**
 
 1. Try to push to main from the worker machine. It must fail.
 2. Open a pull request with a failing test. Merging must be blocked.
-3. Confirm the worker machine has no production credentials.
+3. Push a commit that fails lint from the worker machine. The pre-push hook must stop it.
+4. Confirm the worker machine has no production credentials.
