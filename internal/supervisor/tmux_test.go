@@ -151,3 +151,22 @@ func TestTmuxCloseEndsTheWindow(t *testing.T) {
 		t.Fatalf("closed window exists = %v, other window exists = %v", gone.Exists, kept.Exists)
 	}
 }
+
+func TestTmuxCaptureMarksFaintText(t *testing.T) {
+	tm := privateTmux(t)
+	if err := tm.Open("portal", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	// The program prints a prompt mark, then a suggestion drawn faint.
+	if err := tm.Send("portal", `clear; printf '> \033[2mTake issue 12\033[0m\n'; sleep 30`); err != nil {
+		t.Fatal(err)
+	}
+	var screen string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		screen, _ = tm.Capture("portal", 20)
+		if strings.Contains(screen, "> [greyed out: Take issue 12]") {
+			return
+		}
+	}
+	t.Fatalf("the faint text was not marked:\n%s", screen)
+}

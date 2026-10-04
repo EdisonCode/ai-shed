@@ -90,6 +90,13 @@ one verdict:
 | `done` | nothing left that it can act on | leaves it idle |
 | `limited` | it reached a usage limit and must wait for the reset | types nothing, looks again just after the reset (every 15 minutes when the screen names no time), then tells it to continue |
 
+The terminal is captured with its styles. Text that the worker's tool draws
+faint, such as a placeholder or a suggestion of what to type next in an empty
+input line, reaches the reviewer marked `[greyed out: ...]`, so it is not
+taken for something that was typed or sent. The reviewer is also told which
+issue the supervisor's own log says the worker has in hand; the screen is not
+the record of what was handed over.
+
 The reviewer may not make your decisions. It tells the worker to write the
 question in the issue and take the next item. It never tells a worker to
 merge, deploy, or weaken a test.
