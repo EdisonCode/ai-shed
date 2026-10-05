@@ -32,12 +32,12 @@ func cmdStatus(args []string) int {
 		Looks: &looks.Reader{GitHub: looks.GH{}, Run: looks.Shell, Now: time.Now}}
 
 	for {
-		reports := collector.Collect(ctx, cfg)
-		repos := collector.CollectRepos(ctx, cfg)
+		report := collector.CollectAll(ctx, cfg)
+		reports, repos := report.Machines, report.Repos
 		if *asJSON {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
-			if err := enc.Encode(status.Report{Machines: reports, Repos: repos}); err != nil {
+			if err := enc.Encode(report); err != nil {
 				return fail(err)
 			}
 		} else {

@@ -531,3 +531,40 @@ func TestStatusShowsWhatEachWorkersToolReports(t *testing.T) {
 		}
 	}
 }
+
+func TestLookAWorkerWillDoIsNotTheOwnersBacklog(t *testing.T) {
+	// Merged work that asks for eyes: the pull request is closed, the ask is open.
+	merged := issue(7, "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders")
+	merged.OpenPRs = map[int]backlog.PR{}
+	state := looks.Report{Repo: "org/app", Looks: []looks.Look{{Repo: "org/app", Number: 7, PR: 41, State: looks.Due}}}
+
+	for _, tc := range []struct {
+		name          string
+		eyeChecks     bool
+		wantAttention []string
+		wantState     string
+		wantTotals    string
+	}{
+		{"a worker does eye checks", true, nil, Look, ""},
+		{"no worker does them", false, []string{"org/app#7 waits on you (eyes)"}, Waiting, "Waiting on you: 1 eyes."},
+	} {
+		c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{merged}}, Looks: &fakeLooks{report: state}}
+		report := c.CollectAll(context.Background(), withRepo(tc.eyeChecks))
+		machine := report.Machines[0]
+		var mine []string
+		for _, a := range machine.Attention {
+			if strings.Contains(a, "#7") {
+				mine = append(mine, a)
+			}
+		}
+		if len(mine) != len(tc.wantAttention) || (len(mine) == 1 && !strings.Contains(mine[0], tc.wantAttention[0])) {
+			t.Errorf("%s: attention = %q, want %q", tc.name, mine, tc.wantAttention)
+		}
+		if machine.Issues[0].State != tc.wantState {
+			t.Errorf("%s: state = %q, want %q", tc.name, machine.Issues[0].State, tc.wantState)
+		}
+		if got := waitingTotals(report.Machines); got != tc.wantTotals {
+			t.Errorf("%s: totals = %q, want %q", tc.name, got, tc.wantTotals)
+		}
+	}
+}
