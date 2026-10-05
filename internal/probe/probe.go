@@ -29,6 +29,8 @@ type Result struct {
 	Checkins []runlog.Checkin `json:"-"`
 	// Recycle names the workers whose session the owner asked to replace.
 	Recycle []string `json:"-"`
+	// Marks is what each worker's tool last reported about itself, by worker.
+	Marks map[string]runlog.Mark `json:"-"`
 }
 
 type CheckResult struct {
@@ -59,6 +61,7 @@ s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.RunsFile + `" ] && tail -n 200 "$s/` + runlog.RunsFile + `" | sed 's/^/@@run /'
 [ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 100 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
 [ -d "$s/` + runlog.RecycleDir + `" ] && ls "$s/` + runlog.RecycleDir + `" | sed 's/^/@@recycle /'
+for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
 echo "@@end"
 `
 
@@ -134,6 +137,15 @@ func Parse(out string, checks []config.Check) (Result, error) {
 			}
 		case "@@recycle":
 			res.Recycle = append(res.Recycle, strings.TrimSpace(rest))
+		case "@@mark":
+			// A mark the hook was still writing is skipped, not fatal.
+			worker, line, _ := strings.Cut(rest, " ")
+			if m, err := runlog.ParseMark(line); err == nil {
+				if res.Marks == nil {
+					res.Marks = map[string]runlog.Mark{}
+				}
+				res.Marks[worker] = m
+			}
 		case "@@end":
 			complete = true
 		default:

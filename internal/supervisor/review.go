@@ -64,6 +64,9 @@ type ReviewInput struct {
 	Brief  string
 	Queue  []QueueItem
 	Idle   time.Duration // zero when the worker is busy
+	// InTurn is set when the worker is silent but its tool reports a turn
+	// in progress.
+	InTurn bool
 	// Now is the machine's clock, so a reset time on the screen can be
 	// turned into minutes from now.
 	Now time.Time
@@ -140,9 +143,12 @@ func Prompt(in ReviewInput) string {
 		b.WriteString("none: you have not handed this worker an issue since its session started")
 	}
 	b.WriteString("</in_hand>\n\n<state>")
-	if in.Idle > 0 {
+	switch {
+	case in.InTurn:
+		fmt.Fprintf(&b, "silent for %s, but its tool reports a turn in progress: it is working, or it waits on a command it started", in.Idle.Round(time.Second))
+	case in.Idle > 0:
 		fmt.Fprintf(&b, "silent for %s: it is waiting for input or it has stopped", in.Idle.Round(time.Second))
-	} else {
+	default:
 		b.WriteString("printing output now: it is working")
 	}
 	if !in.LimitedUntil.IsZero() {

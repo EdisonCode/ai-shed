@@ -77,6 +77,7 @@ const (
 	KindLimit    = "limit"    // its usage limit was due to reset
 	KindRecycle  = "recycle"  // the owner asked for a fresh session
 	KindCapacity = "capacity" // a held hand-over was delivered
+	KindHook     = "hook"     // its tool said it waits for a person, or no longer does
 	KindError    = "error"
 )
 
@@ -149,8 +150,12 @@ type workerState struct {
 	// since its session started.
 	issue int
 	// look is set when that issue was handed over for an eye check.
-	look   bool
-	recent []runlog.Checkin
+	look bool
+	// markSeen is the time of the last mark of its tool that was acted on,
+	// and waiting is set while that mark says it waits for a person.
+	markSeen time.Time
+	waiting  bool
+	recent   []runlog.Checkin
 }
 
 // handsOver reports whether a nudge that names this queue item gives the
@@ -259,6 +264,27 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		return s.recycle(w, st, now)
 	}
 
+	// The worker's tool may say what state it is in. What it says needs no
+	// reviewer to read the screen.
+	mark, _ := runlog.ReadMark(s.StateDir, w.Name)
+	toolState := mark.StateAt(obs.LastActivity)
+	if toolState == runlog.MarkWaiting {
+		// Nothing moves until a person answers, whatever the queue holds.
+		if mark.Time.After(st.markSeen) {
+			st.markSeen, st.waiting = mark.Time, true
+			reason := "its tool waits for a person"
+			if mark.Detail != "" {
+				reason += ": " + mark.Detail
+			}
+			s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindHook, Verdict: runlog.VerdictNeedsOwner, Reason: reason})
+		}
+		return nil
+	}
+	if st.waiting {
+		st.waiting = false
+		s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindHook, Verdict: runlog.VerdictOnTrack, Reason: "its tool no longer waits for a person: the screen moved on"})
+	}
+
 	if st.held != nil {
 		if !obs.LastActivity.Equal(st.held.activity) {
 			// The worker did something. What was chosen for it is out of date.
@@ -285,7 +311,9 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		// The limit was due to reset. The screen has not changed, so only
 		// this makes the supervisor look again.
 		return s.review(ctx, w, st, obs, now, KindLimit, nil)
-	case idle < settle:
+	case idle < settle || toolState == runlog.MarkWorking:
+		// A turn in progress may print nothing for a long time: a test run, a
+		// build. It is busy, not idle.
 		if now.Sub(st.lastReview) < s.Settings.ScopeEveryOrDefault() {
 			return nil
 		}
@@ -342,6 +370,11 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 	}
 	st.starts = append(st.starts, now)
 	st.lastReview, st.model, st.issue, st.look = now, "", 0, false
+	// The last session's tool said nothing about this one.
+	if err := runlog.RemoveMark(s.StateDir, w.Name); err != nil {
+		return err
+	}
+	st.waiting = false
 	// What did not help the last session says nothing about this one.
 	st.nudges = nil
 	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: runlog.VerdictStarted, Message: command, Sent: true})
@@ -364,6 +397,8 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	in := ReviewInput{Worker: w.Name, Brief: s.scope(w), Queue: queue, Recent: st.recent, Terminal: terminal, Now: now, LimitedUntil: st.limitedUntil, InHand: st.issue}
 	if idle >= settle {
 		in.Idle = idle
+		mark, _ := runlog.ReadMark(s.StateDir, w.Name)
+		in.InTurn = mark.StateAt(obs.LastActivity) == runlog.MarkWorking
 	}
 	verdict, err := s.Reviewer.Review(ctx, Prompt(in))
 	if err != nil {
@@ -588,6 +623,8 @@ func (s *Supervisor) recover(worker string) *workerState {
 			st.issue, st.look, st.model, st.limitedUntil = 0, false, "", time.Time{}
 		case c.Kind == KindBrief:
 			st.briefStale = !c.Sent
+		case c.Kind == KindHook:
+			st.markSeen, st.waiting = c.Time, c.Verdict == runlog.VerdictNeedsOwner
 		case c.Verdict == runlog.VerdictLimited && c.Activity.IsZero():
 			// The reviewer was limited; the worker itself was not reviewed.
 		case c.Kind == KindIdle || c.Kind == KindScope || c.Kind == KindQueue || c.Kind == KindLimit || c.Kind == KindCapacity:
