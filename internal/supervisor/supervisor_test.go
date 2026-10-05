@@ -478,7 +478,10 @@ func TestParseVerdict(t *testing.T) {
 		{"unknown verdict", `{"verdict":"approve","reason":"r"}`, Verdict{}, "unknown verdict"},
 		{"no json", "I think it is fine.", Verdict{}, "no JSON"},
 		{"a remark after the answer is ignored", "{\"verdict\":\"done\",\"reason\":\"r\"}\n\nWhy: every item {in the queue} waits on the owner.", Verdict{Verdict: "done", Reason: "r"}, ""},
-		{"two answers are no answer", `{"verdict":"done","reason":"r"} Wait, the queue has #13. {"verdict":"nudge","message":"Take #13.","issue":13,"reason":"r"}`, Verdict{}, "more than one answer"},
+		{"the last of two answers is the one it means", `{"verdict":"done","reason":"r"} Wait, the queue has #13. {"verdict":"nudge","message":"Take #13.","issue":13,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #13.", Reason: "r", Issue: 13}, ""},
+		{"a second answer that was cut short does not count", `{"verdict":"done","reason":"r"} {"verdict":"nudge","message":"Take {the next`, Verdict{Verdict: "done", Reason: "r"}, ""},
+		{"an answer after a brace in a remark", `The queue {as shown} is empty. {"verdict":"done","reason":"r"}`, Verdict{Verdict: "done", Reason: "r"}, ""},
+		{"an object that was cut short", `{"verdict":"done","reason":"every item`, Verdict{}, "bad JSON"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

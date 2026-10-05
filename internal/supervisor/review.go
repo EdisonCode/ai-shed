@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -184,17 +185,12 @@ func Prompt(in ReviewInput) string {
 // second answer in that text is an error: nothing says which one it meant. A
 // verdict outside the choices is an error.
 func ParseVerdict(answer string) (Verdict, error) {
-	start := strings.Index(answer, "{")
-	if start < 0 {
+	if !strings.Contains(answer, "{") {
 		return Verdict{}, fmt.Errorf("reviewer gave no JSON object: %q", clip(answer, 200))
 	}
-	var v Verdict
-	dec := json.NewDecoder(strings.NewReader(answer[start:]))
-	if err := dec.Decode(&v); err != nil {
+	v, err := lastAnswer(answer)
+	if err != nil {
 		return Verdict{}, fmt.Errorf("reviewer gave bad JSON: %w: %q", err, clip(answer, 200))
-	}
-	if rest := answer[start+int(dec.InputOffset()):]; strings.Contains(rest, `"verdict"`) {
-		return Verdict{}, fmt.Errorf("reviewer gave more than one answer: %q", clip(answer, 300))
 	}
 	// A message is typed as one line: a newline would send it in pieces.
 	v.Message = clip(strings.Join(strings.Fields(v.Message), " "), maxMessage)
@@ -215,6 +211,38 @@ func ParseVerdict(answer string) (Verdict, error) {
 		return Verdict{}, fmt.Errorf("reviewer gave unknown verdict %q", v.Verdict)
 	}
 	return v, nil
+}
+
+// lastAnswer returns the last complete verdict in the reviewer's answer. A
+// reviewer may change its mind while it writes and give a second object: the
+// last one is the one it means. Rejecting both left the worker idle for as
+// long as the reviewer kept doing it. Text around the objects is ignored.
+func lastAnswer(answer string) (Verdict, error) {
+	var last Verdict
+	var firstErr error
+	for rest := answer; ; {
+		start := strings.Index(rest, "{")
+		if start < 0 {
+			break
+		}
+		rest = rest[start:]
+		var v Verdict
+		dec := json.NewDecoder(strings.NewReader(rest))
+		if err := dec.Decode(&v); err != nil {
+			// A brace in a remark, or an object that was cut short.
+			firstErr = cmp.Or(firstErr, err)
+			rest = rest[1:]
+			continue
+		}
+		rest = rest[dec.InputOffset():]
+		if v.Verdict != "" {
+			last, firstErr = v, nil
+		}
+	}
+	if last.Verdict == "" && firstErr != nil {
+		return Verdict{}, firstErr
+	}
+	return last, nil
 }
 
 func clip(s string, max int) string {
