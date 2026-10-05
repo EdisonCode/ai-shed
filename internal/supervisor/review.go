@@ -163,16 +163,22 @@ func Prompt(in ReviewInput) string {
 	return b.String()
 }
 
-// ParseVerdict reads the reviewer's answer. Text around the JSON object is
-// ignored; a verdict outside the choices is an error.
+// ParseVerdict reads the reviewer's answer: its first JSON object. Text
+// around it is ignored, since a model may add a remark after its answer. A
+// second answer in that text is an error: nothing says which one it meant. A
+// verdict outside the choices is an error.
 func ParseVerdict(answer string) (Verdict, error) {
-	start, end := strings.Index(answer, "{"), strings.LastIndex(answer, "}")
-	if start < 0 || end < start {
+	start := strings.Index(answer, "{")
+	if start < 0 {
 		return Verdict{}, fmt.Errorf("reviewer gave no JSON object: %q", clip(answer, 200))
 	}
 	var v Verdict
-	if err := json.Unmarshal([]byte(answer[start:end+1]), &v); err != nil {
-		return Verdict{}, fmt.Errorf("reviewer gave bad JSON: %w", err)
+	dec := json.NewDecoder(strings.NewReader(answer[start:]))
+	if err := dec.Decode(&v); err != nil {
+		return Verdict{}, fmt.Errorf("reviewer gave bad JSON: %w: %q", err, clip(answer, 200))
+	}
+	if rest := answer[start+int(dec.InputOffset()):]; strings.Contains(rest, `"verdict"`) {
+		return Verdict{}, fmt.Errorf("reviewer gave more than one answer: %q", clip(answer, 300))
 	}
 	// A message is typed as one line: a newline would send it in pieces.
 	v.Message = clip(strings.Join(strings.Fields(v.Message), " "), maxMessage)

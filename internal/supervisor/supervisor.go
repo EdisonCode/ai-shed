@@ -31,8 +31,9 @@ const (
 	// queueRecheck is how often a resting worker's queue is looked at for
 	// something new. This asks GitHub, not the reviewer.
 	queueRecheck = 5 * time.Minute
-	// A worker that takes maxNudges nudges or maxStarts starts inside
-	// loopWindow is not being helped by more of them.
+	// A worker that takes maxNudges nudges about the same work, or maxStarts
+	// starts, inside loopWindow is not being helped by more of them. Nudges
+	// are counted per session and per issue in hand.
 	loopWindow = 30 * time.Minute
 	maxNudges  = 3
 	maxStarts  = 3
@@ -341,6 +342,8 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 	}
 	st.starts = append(st.starts, now)
 	st.lastReview, st.model, st.issue, st.look = now, "", 0, false
+	// What did not help the last session says nothing about this one.
+	st.nudges = nil
 	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: runlog.VerdictStarted, Message: command, Sent: true})
 	return nil
 }
@@ -413,6 +416,13 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 // deliver types a nudge into the worker, unless nudges have stopped helping.
 // It fills in the check-in with what was sent.
 func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, idle time.Duration, kind string, verdict Verdict, item QueueItem, c *runlog.Checkin) error {
+	// A hand-over means the worker is done with what it had: the nudges
+	// before it got it moving. Only nudges about the same work, one after
+	// the other, show a worker that is not helped by more of them.
+	newIssue := st.handsOver(verdict.Issue, item)
+	if newIssue {
+		st.nudges = nil
+	}
 	st.nudges = within(st.nudges, now)
 	if len(st.nudges) >= maxNudges {
 		c.Verdict = runlog.VerdictStuck
@@ -426,7 +436,6 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 	// issue into the next. In each case a cleared context that
 	// re-reads the brief costs less.
 	c.Cold = idle > s.Settings.CacheTTLOrDefault()
-	newIssue := st.handsOver(verdict.Issue, item)
 	if newIssue && item.Look != "" {
 		verdict.Message, c.Look = fmt.Sprintf(lookOrder, verdict.Issue, item.Look), true
 	}
@@ -572,6 +581,7 @@ func (s *Supervisor) recover(worker string) *workerState {
 		case c.Verdict == runlog.VerdictStarted:
 			// A new session: nothing in hand, the model its command gave it.
 			st.issue, st.look, st.model, st.briefStale = 0, false, "", false
+			st.nudges = nil
 			st.starts = append(st.starts, c.Time)
 			st.lastReview = c.Time
 		case c.Verdict == runlog.VerdictRecycled:
@@ -595,11 +605,13 @@ func (s *Supervisor) recover(worker string) *workerState {
 			if !c.Sent {
 				continue
 			}
-			st.nudges = append(st.nudges, c.Time)
-			st.briefStale = false
-			if c.Issue != 0 {
+			if c.Issue != 0 && (c.Issue != st.issue || c.Look != st.look) {
+				// A hand-over: the count starts again, as in deliver.
+				st.nudges = nil
 				st.issue, st.look = c.Issue, c.Look
 			}
+			st.nudges = append(st.nudges, c.Time)
+			st.briefStale = false
 			if c.Model != "" {
 				st.model = c.Model
 			}

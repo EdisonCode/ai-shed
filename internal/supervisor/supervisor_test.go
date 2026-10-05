@@ -383,6 +383,48 @@ func TestNudgesThatDoNotHelpStop(t *testing.T) {
 	}
 }
 
+func TestWorkerThatFinishesShortIssuesIsNotStuck(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), assign(13), assign(14), assign(15))
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(13), labeled(14), labeled(15)}
+	for range 4 {
+		// It finishes each issue within minutes and waits for the next.
+		f.term.running(f.now)
+		f.tick(2 * time.Minute)
+	}
+	if len(f.term.sent) != 4 {
+		t.Fatalf("sent %d hand-overs, want 4: each one got the worker moving", len(f.term.sent))
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictNudge || c.Issue != 15 {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestNudgesToAnEndedSessionDoNotCountAgainstTheNewOne(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		f := started(t, config.Supervisor{}, nudge("Continue with #12."))
+		for range maxNudges + 1 {
+			f.term.running(f.now)
+			f.tick(2 * time.Minute)
+		}
+		if c := f.lastCheckin(t); c.Verdict != runlog.VerdictStuck {
+			t.Fatalf("check-in = %+v, want the old session stuck", c)
+		}
+		f.requestRecycle(t, runlog.RecycleNow)
+		f.tick(time.Minute) // the session is ended
+		f.tick(time.Minute) // and a new one starts
+		if restart {
+			f.restartAgent()
+		}
+		f.term.sent = nil
+		f.term.running(f.now)
+		f.tick(2 * time.Minute)
+
+		if !slices.Equal(f.term.sent, []string{"Continue with #12."}) {
+			t.Fatalf("agent restarted=%v: sent = %q; the new session has not been nudged before (%+v)", restart, f.term.sent, f.lastCheckin(t))
+		}
+	}
+}
+
 func TestReviewerFailureIsRecordedOnceAndRetriedLater(t *testing.T) {
 	f := started(t, config.Supervisor{}, onTrack)
 	f.reviewer.err = errors.New("exit status 1: not logged in")
@@ -435,6 +477,8 @@ func TestParseVerdict(t *testing.T) {
 		{"nudge without message", `{"verdict":"nudge","message":" ","reason":"r"}`, Verdict{}, "no message"},
 		{"unknown verdict", `{"verdict":"approve","reason":"r"}`, Verdict{}, "unknown verdict"},
 		{"no json", "I think it is fine.", Verdict{}, "no JSON"},
+		{"a remark after the answer is ignored", "{\"verdict\":\"done\",\"reason\":\"r\"}\n\nWhy: every item {in the queue} waits on the owner.", Verdict{Verdict: "done", Reason: "r"}, ""},
+		{"two answers are no answer", `{"verdict":"done","reason":"r"} Wait, the queue has #13. {"verdict":"nudge","message":"Take #13.","issue":13,"reason":"r"}`, Verdict{}, "more than one answer"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
