@@ -33,6 +33,9 @@ type Result struct {
 	Marks map[string]runlog.Mark `json:"-"`
 	// Tasks are the one-off tasks on the machine, waiting or handed over.
 	Tasks []Task `json:"-"`
+	// Bumps are the issues the owner put first in line, by number, each with
+	// the worker it goes to; "" for the workers whose queue it is in.
+	Bumps map[int]string `json:"-"`
 }
 
 // Task is a one-off task's file on the machine. Where is the worker it waits
@@ -71,6 +74,7 @@ s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 100 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
 [ -d "$s/` + runlog.RecycleDir + `" ] && ls "$s/` + runlog.RecycleDir + `" | sed 's/^/@@recycle /'
 for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(basename "$(dirname "$f")") $(basename "$f" .md)"; done
+for f in "$s/` + runlog.BumpsDir + `"/*; do [ -f "$f" ] && echo "@@bump $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
 echo "@@end"
 `
@@ -150,6 +154,15 @@ func Parse(out string, checks []config.Check) (Result, error) {
 		case "@@task":
 			if where, id, ok := strings.Cut(strings.TrimSpace(rest), " "); ok {
 				res.Tasks = append(res.Tasks, Task{Where: where, ID: id})
+			}
+		case "@@bump":
+			// A request that was still being written has another name.
+			number, worker, _ := strings.Cut(strings.TrimSpace(rest), " ")
+			if issue, err := strconv.Atoi(number); err == nil {
+				if res.Bumps == nil {
+					res.Bumps = map[int]string{}
+				}
+				res.Bumps[issue] = strings.TrimSpace(worker)
 			}
 		case "@@mark":
 			// A mark the hook was still writing is skipped, not fatal.

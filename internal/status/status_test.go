@@ -668,3 +668,20 @@ func TestStatusShowsWhereEachOneOffTaskStands(t *testing.T) {
 		t.Fatalf("a task the log no longer knows is listed:\n%s", out.String())
 	}
 }
+
+func TestBumpedIssueIsMarkedAndNeedsNothing(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{checkin(runlog.VerdictOnTrack, "working")}
+	res.Bumps = map[int]string{7: "", 8: "app", 9: "renamed-away"}
+	r := Assess(appWorker, signals, now, res, []backlog.Issue{issue(7), issue(8), issue(9), issue(10)})
+	wantAttention(t, r)
+
+	if i := r.Issues; !i[0].Bumped || i[0].BumpedTo != "" || i[1].BumpedTo != "app" || !i[2].Bumped || i[2].BumpedTo != "" || i[3].Bumped {
+		t.Fatalf("issues = %+v", i)
+	}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	if got := out.String(); strings.Count(got, "(bumped)") != 2 || strings.Count(got, "(bumped to app)") != 1 {
+		t.Fatalf("report:\n%s", got)
+	}
+}

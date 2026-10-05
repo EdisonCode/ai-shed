@@ -84,6 +84,10 @@ type IssueStatus struct {
 	Worker string        `json:"worker,omitempty"`
 	// Rework says why the issue's pull request cannot merge as it stands.
 	Rework string `json:"rework,omitempty"`
+	// Bumped is set when the owner put the issue first in line with
+	// `shed bump`, and BumpedTo names the worker it was moved to, if any.
+	Bumped   bool   `json:"bumped,omitempty"`
+	BumpedTo string `json:"bumped_to,omitempty"`
 }
 
 // One-off task states.
@@ -336,6 +340,14 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		}
 		for _, a := range st.Asks {
 			st.Waiting = append(st.Waiting, a.Name)
+		}
+		if res != nil {
+			// A bump to a worker the machine does not have moves nothing.
+			to, bumped := res.Bumps[issue.Number]
+			st.Bumped = bumped
+			if slices.ContainsFunc(m.Workers, func(w config.Worker) bool { return w.Name == to }) {
+				st.BumpedTo = to
+			}
 		}
 		// A supervised worker has the issue its supervisor handed it. Any
 		// other worker is matched by the name of its tmux window.
