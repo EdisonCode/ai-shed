@@ -568,3 +568,73 @@ func TestLookAWorkerWillDoIsNotTheOwnersBacklog(t *testing.T) {
 		}
 	}
 }
+
+type fakeMerged struct {
+	pulls map[int]looks.Pull
+	since time.Time
+	err   error
+}
+
+func (f *fakeMerged) MergedSince(_ context.Context, _ string, since time.Time) (map[int]looks.Pull, error) {
+	f.since = since
+	return f.pulls, f.err
+}
+
+func TestDigestSaysWhatMergedHowTheLooksWentAndWhatWaits(t *testing.T) {
+	ago := func(d time.Duration) time.Time { return now.Add(-d) }
+	state := releaseState()
+	state.Passed = []looks.Look{
+		{Repo: "org/app", Number: 3, PR: 43, State: looks.Passed, Since: ago(3 * time.Hour), Title: "Show the total"},
+		{Repo: "org/app", Number: 2, PR: 40, State: looks.Passed, Since: ago(40 * time.Hour), Title: "Looked at before this window"},
+	}
+	review := issue(8)
+	review.OpenPRs = map[int]backlog.PR{52: {}}
+	review.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** #52 (ready)", CreatedAt: ago(2 * time.Hour)}}
+	decision := issue(9)
+	decision.Comments = []backlog.Comment{{Body: "## Hand-back\nDecisions needed: 1. which one?", CreatedAt: ago(30 * time.Hour)}}
+
+	merged := &fakeMerged{pulls: map[int]looks.Pull{
+		51: {Number: 51, Title: "Paginate the audit log", MergedAt: ago(time.Hour)},
+		50: {Number: 50, Title: "Retry the export", MergedAt: ago(5 * time.Hour)},
+	}}
+	c := Collector{Runner: fakeRunner{err: errors.New("connection timed out")}, Lister: fakeLister{issues: []backlog.Issue{review, decision}}, Looks: &fakeLooks{report: state}}
+	since := ago(24 * time.Hour)
+	d := c.Digest(context.Background(), withRepo(true), merged, since, now)
+	if !merged.since.Equal(since) {
+		t.Fatalf("merged pull requests were asked for since %s, want %s", merged.since, since)
+	}
+	// The collector stamps the report with the real clock; the test's
+	// comments are dated by the test's.
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+
+	for _, want := range []string{
+		"shed digest: the last 24h",
+		"Merged: 2 pull request(s)",
+		"org/app#50  5h ago  Retry the export\n  org/app#51  1h ago  Paginate the audit log",
+		"Eye checks: org/app",
+		"1 passed in this window; now 2 not done (1 on staging, 1 wait for a staging deploy), 1 failed",
+		"#3  PR #43  passed  3h ago  Show the total",
+		"#4  PR #44  FAILED  1h ago  Fix the thing",
+		"Waiting on you: 2",
+		"30h  decision    org/app#9  Fix the thing\n  2h   review #52  org/app#8  Fix the thing",
+		"Also needs you: 1\n  ! box: unreachable: connection timed out",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("digest lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "Looked at before this window") {
+		t.Fatalf("a look that passed before the window is in the digest:\n%s", out.String())
+	}
+}
+
+func TestDigestSaysWhatItCouldNotRead(t *testing.T) {
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}}
+	d := c.Digest(context.Background(), oneMachine(), &fakeMerged{err: errors.New("gh: not logged in")}, now.Add(-time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	if !strings.Contains(out.String(), "! gh: not logged in") || !strings.Contains(out.String(), "Merged: 0 pull request(s)") {
+		t.Fatalf("digest:\n%s", out.String())
+	}
+}

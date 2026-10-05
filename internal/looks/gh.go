@@ -20,9 +20,9 @@ func (GH) ClosedSince(ctx context.Context, src config.IssueSource, since time.Ti
 	return backlog.GH{}.Closed(ctx, src, since)
 }
 
-func (GH) MergedSince(ctx context.Context, repo string, since time.Time) (map[int]string, error) {
+func (GH) MergedSince(ctx context.Context, repo string, since time.Time) (map[int]Pull, error) {
 	out, err := gh(ctx, "pr", "list", "--repo", repo, "--state", "merged", "--limit", "1000",
-		"--search", "merged:>="+since.UTC().Format("2006-01-02"), "--json", "number,mergedAt,mergeCommit")
+		"--search", "merged:>="+since.UTC().Format("2006-01-02"), "--json", "number,title,mergedAt,mergeCommit")
 	if err != nil {
 		return nil, err
 	}
@@ -31,9 +31,10 @@ func (GH) MergedSince(ctx context.Context, repo string, since time.Time) (map[in
 
 // parseMerged keeps the pull requests merged after since: the search is by
 // day, the window is to the second.
-func parseMerged(data []byte, since time.Time) (map[int]string, error) {
+func parseMerged(data []byte, since time.Time) (map[int]Pull, error) {
 	var prs []struct {
 		Number      int       `json:"number"`
+		Title       string    `json:"title"`
 		MergedAt    time.Time `json:"mergedAt"`
 		MergeCommit struct {
 			OID string `json:"oid"`
@@ -42,10 +43,10 @@ func parseMerged(data []byte, since time.Time) (map[int]string, error) {
 	if err := json.Unmarshal(data, &prs); err != nil {
 		return nil, fmt.Errorf("gh pr list: parse output: %w", err)
 	}
-	merged := map[int]string{}
+	merged := map[int]Pull{}
 	for _, pr := range prs {
 		if pr.MergedAt.After(since) && pr.MergeCommit.OID != "" {
-			merged[pr.Number] = pr.MergeCommit.OID
+			merged[pr.Number] = Pull{Number: pr.Number, Title: pr.Title, MergedAt: pr.MergedAt, Commit: pr.MergeCommit.OID}
 		}
 	}
 	return merged, nil

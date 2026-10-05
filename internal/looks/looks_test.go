@@ -34,8 +34,12 @@ func (f *fakeGitHub) ClosedSince(_ context.Context, _ config.IssueSource, since 
 	f.closedSince = since
 	return f.closed, nil
 }
-func (f *fakeGitHub) MergedSince(context.Context, string, time.Time) (map[int]string, error) {
-	return f.merged, nil
+func (f *fakeGitHub) MergedSince(context.Context, string, time.Time) (map[int]Pull, error) {
+	pulls := map[int]Pull{}
+	for number, commit := range f.merged {
+		pulls[number] = Pull{Number: number, Commit: commit}
+	}
+	return pulls, nil
 }
 func (f *fakeGitHub) CommitTime(context.Context, string, string) (time.Time, error) {
 	return f.deployed, nil
@@ -96,6 +100,9 @@ func TestMergedWorkOwesALookUntilSomeoneLooked(t *testing.T) {
 	}
 	if report.Merged != 5 || report.Staging != stagingCommit || report.Production != productionCommit {
 		t.Fatalf("report = %+v", report)
+	}
+	if len(report.Passed) != 1 || report.Passed[0].Number != 3 || report.Passed[0].State != Passed {
+		t.Fatalf("passed = %+v, want the look of #3", report.Passed)
 	}
 	if report.Looks[0].Number != 5 {
 		t.Fatalf("first look is #%d, want the one asked for longest ago", report.Looks[0].Number)
@@ -166,10 +173,10 @@ func TestWhatStagingContainsIsAskedOnce(t *testing.T) {
 }
 
 func TestParseMergedKeepsWhatWasMergedInTheWindow(t *testing.T) {
-	data := `[{"number":41,"mergedAt":"2026-10-04T10:00:00Z","mergeCommit":{"oid":"c41"}},
+	data := `[{"number":41,"title":"Retry the export","mergedAt":"2026-10-04T10:00:00Z","mergeCommit":{"oid":"c41"}},
 	          {"number":40,"mergedAt":"2026-10-04T01:00:00Z","mergeCommit":{"oid":"c40"}}]`
 	merged, err := parseMerged([]byte(data), time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC))
-	if err != nil || len(merged) != 1 || merged[41] != "c41" {
+	if err != nil || len(merged) != 1 || merged[41].Commit != "c41" || merged[41].Title != "Retry the export" {
 		t.Fatalf("merged = %v, %v", merged, err)
 	}
 }

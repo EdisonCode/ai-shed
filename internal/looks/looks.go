@@ -17,6 +17,7 @@ import (
 
 // Look states.
 const (
+	Passed   = "passed"   // someone looked on staging and said it is right
 	Awaiting = "awaiting" // merged, but staging does not serve it yet
 	Due      = "due"      // staging serves it and nobody has looked
 	Failed   = "failed"   // someone looked on staging and it did not pass
@@ -53,17 +54,28 @@ type Report struct {
 	// and not at the look-back limit.
 	SinceProduction bool `json:"since_production"`
 	// Merged counts the pull requests merged in the window.
-	Merged int    `json:"merged"`
+	Merged int `json:"merged"`
+	// Looks are the eye checks that are not done or failed. Passed are the
+	// ones that were done and passed, of work merged in the same window.
 	Looks  []Look `json:"looks"`
+	Passed []Look `json:"passed"`
+}
+
+// Pull is a merged pull request.
+type Pull struct {
+	Number   int       `json:"number"`
+	Title    string    `json:"title"`
+	MergedAt time.Time `json:"merged_at"`
+	// Commit is the commit the merge made on the base branch.
+	Commit string `json:"commit"`
 }
 
 // GitHub is what the reader asks about a repository.
 type GitHub interface {
 	// ClosedSince returns the source's issues that were closed after since.
 	ClosedSince(ctx context.Context, src config.IssueSource, since time.Time) ([]backlog.Issue, error)
-	// MergedSince returns the merge commit of each pull request merged after
-	// since, by pull request number.
-	MergedSince(ctx context.Context, repo string, since time.Time) (map[int]string, error)
+	// MergedSince returns the pull requests merged after since, by number.
+	MergedSince(ctx context.Context, repo string, since time.Time) (map[int]Pull, error)
 	CommitTime(ctx context.Context, repo, commit string) (time.Time, error)
 	// Contains reports whether head has commit in its history.
 	Contains(ctx context.Context, repo, head, commit string) (bool, error)
@@ -83,7 +95,7 @@ type Reader struct {
 // Read reports on one repository. open holds the open issues of sources;
 // issues of other repositories in it are ignored.
 func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.IssueSource, open []backlog.Issue, signals []config.Signal) (Report, error) {
-	report := Report{Repo: repo.Name, Since: r.Now().Add(-repo.LookBackOrDefault()), Looks: []Look{}}
+	report := Report{Repo: repo.Name, Since: r.Now().Add(-repo.LookBackOrDefault()), Looks: []Look{}, Passed: []Look{}}
 	var err error
 	if report.Staging, err = r.commit(ctx, repo.Name, "staging", repo.Staging.Commit); err != nil {
 		return report, err
@@ -125,14 +137,19 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 	seen := map[int]bool{}
 	for _, issue := range issues {
 		state, pr, since := backlog.EyeCheck(issue, signals)
-		commit, isMerged := merged[pr]
+		pull, isMerged := merged[pr]
 		if state == "" || !isMerged || seen[issue.Number] {
 			continue
 		}
 		seen[issue.Number] = true
 		look := Look{Repo: repo.Name, Number: issue.Number, Title: issue.Title, URL: issue.URL, PR: pr, State: Failed, Since: since}
+		if state == backlog.EyesPassed {
+			look.State = Passed
+			report.Passed = append(report.Passed, look)
+			continue
+		}
 		if state == backlog.EyesAsked {
-			onStaging, err := r.contains(ctx, repo.Name, report.Staging, commit)
+			onStaging, err := r.contains(ctx, repo.Name, report.Staging, pull.Commit)
 			if err != nil {
 				return report, err
 			}

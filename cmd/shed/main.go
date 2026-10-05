@@ -16,6 +16,7 @@ const usage = `shed watches the worker machines in your shed.
 
 Usage:
   shed status [-json] [-watch 1m]   report every machine; exit 1 when something needs you
+  shed digest [-since 24h] [-json]  what merged, how the eye checks went, what waits on you
   shed validate                     check the fleet file
   shed deploy [-install-agent] [machine...]
                                     send this version and the fleet file to machines
@@ -66,6 +67,8 @@ func main() {
 		code = cmdMark(args)
 	case "tidy":
 		code = cmdTidy(args)
+	case "digest":
+		code = cmdDigest(args)
 	case "template":
 		code = cmdTemplate(args)
 	case "version":
