@@ -1,6 +1,6 @@
 ---
 name: shed
-description: Operate an ai-shed fleet of worker machines for the owner. Use when the owner wants to queue GitHub issues for a worker machine, label issues for a machine or a model, write or change a worker's brief, deploy the fleet file, check what the machines did ("shed status", "what did the workers do", "what needs me"), answer a worker's question, or set up a new machine. Also read this when you are a worker and your directory has .shed/BRIEF.md.
+description: Operate an ai-shed fleet of worker machines for the owner. Use when the owner wants to queue GitHub issues for a worker machine, label issues for a machine or a model, move an urgent issue to the front of a queue or to a worker that is free ("bump"), write or change a worker's brief, deploy the fleet file, check what the machines did ("shed status", "what did the workers do", "what needs me"), answer a worker's question, or set up a new machine. Also read this when you are a worker and your directory has .shed/BRIEF.md.
 ---
 
 # Operating the shed
@@ -59,8 +59,9 @@ machine in the fleet file (a label, an assignee, or both).
 4. Order: an issue whose handed-back pull request cannot merge goes back to a
    worker first; then the labels in the source's `priority` list, in order;
    then the oldest. An issue that waits on the owner is skipped. To move an
-   issue up, give it a priority label from the fleet file. To hold one back,
-   remove its machine label.
+   issue up for good, give it a priority label from the fleet file. To put
+   one issue first now, bump it (next section). To hold one back, remove its
+   machine label.
 5. When a machine has two workers, give each its own `issues` in the fleet
    file. An issue in hand for one worker is never handed to another.
 
@@ -70,6 +71,26 @@ When you write on an issue yourself (a plan, a scope, instructions for the
 worker), you may use the signal phrases freely: they count only inside a
 worker's hand-back comment. Do not head your own comment with the hand-back
 phrase.
+
+## Put an issue first
+
+When an urgent issue waits behind other work, do not relabel it and do not
+type into a worker. Bump it:
+
+- `shed bump <machine> <issue>` puts it first in the queue it is in, ahead
+  of rework, eye checks and priority labels.
+- `shed bump -worker <name> <machine> <issue>` moves it to that worker and
+  out of the other workers' queues. Use it when `shed status` shows the
+  issue's own worker busy and another worker on the same machine with
+  nothing in hand. Say in the issue anything that worker needs and its brief
+  does not give it.
+- `shed bump -undo <machine> <issue>` takes it back.
+
+Nobody is interrupted: the issue is handed over when the worker next has
+nothing in progress, and a resting worker takes it within five minutes. An
+issue a worker already has in hand stays with it; a bump does not move
+started work. `shed status` shows `(bumped)` on the issue. A bump works
+inside one machine. To move an issue to another machine, change its label.
 
 ## Push a one-off task
 

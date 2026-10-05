@@ -23,6 +23,9 @@ Usage:
   shed task [-worker name] <machine> <brief-file|->
                                     push a one-off task with its own brief, ahead of the queue
   shed task -report <id> <machine>  print the report a worker wrote for a task
+  shed bump [-worker name] <machine> <issue>
+                                    put an open issue first in its queue, or in that worker's
+  shed bump -undo <machine> <issue> put it back in its usual place
   shed recycle [-now] <machine> <worker>
                                     give a worker a fresh session after its current issue
   shed tidy [-apply] <machine>      list the worktrees and branches whose pull request is merged;
@@ -72,6 +75,8 @@ func main() {
 		code = cmdTidy(args)
 	case "task":
 		code = cmdTask(args)
+	case "bump":
+		code = cmdBump(args)
 	case "digest":
 		code = cmdDigest(args)
 	case "template":

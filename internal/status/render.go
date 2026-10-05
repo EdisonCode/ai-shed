@@ -194,6 +194,12 @@ func renderMachine(w io.Writer, r MachineReport) {
 				state = strings.Join(i.Waiting, "+")
 			}
 			title := i.Title
+			switch {
+			case i.BumpedTo != "":
+				title += " (bumped to " + i.BumpedTo + ")"
+			case i.Bumped:
+				title += " (bumped)"
+			}
 			if i.Rework != "" {
 				title += " (" + i.Rework + ")"
 			}
