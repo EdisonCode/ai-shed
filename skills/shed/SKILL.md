@@ -98,6 +98,16 @@ go only when `eye checks:` shows none not done and none failed. Tell the owner
 the three numbers (merged since production, not done, failed) and what each
 outstanding look waits for. The deploy itself is the owner's call.
 
+## Reading the supervised lines
+
+When the workers' tool has the `shed mark` hooks, each supervised line has
+the tool's own state after the issue: `working 3m` (a turn is in progress),
+`idle 41m` (the turn ended and it waits for a message) or `waiting 6m` (it
+asked a person something). That column is a fact from the tool. The verdict
+and the reason after it are the supervisor's judgement at its last check-in,
+which may be older. When the two disagree, trust the state for what the
+worker is doing now and the verdict for why.
+
 ## Before the owner leaves
 
 Run this as a checklist and report each line.
@@ -150,6 +160,10 @@ Run this as a checklist and report each line.
      by itself when it is merged or closed. Read the diff and
      the checks yourself before you say it is good. A worker's report is a
      claim. Merging is the owner's call.
+   - `worker needs you: its tool waits for a person`: the worker's own tool
+     reported a prompt, and the line quotes it. This is certain, not the
+     reviewer's reading of the screen. The owner answers it at the keyboard,
+     by `tmux attach`, or from wherever their tool lets them.
    - `worker needs you` / `is stuck`: look at the terminal
      (`ssh <host> tmux capture-pane -p -t shed:<worker>`). A permission
      prompt or a menu needs the owner at the keyboard, or by `tmux attach`.

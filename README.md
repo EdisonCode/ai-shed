@@ -358,6 +358,72 @@ every machine, and the reviewer judges scope against it. Use it for the rules
 that do not change from task to task: your architecture principles, your
 definition of done, what a worker must never do.
 
+### State from the tool's own hooks
+
+The supervisor reads a worker's screen to learn what it is doing. An agent
+tool knows that itself: when a turn starts, when it ends, and when it stops
+to ask a person. If the tool has hooks, let them tell shed:
+
+```sh
+shed mark working    # a turn started
+shed mark idle       # the turn ended
+shed mark waiting    # it stopped to ask a person
+```
+
+For Claude Code, in `~/.claude/settings.json` on each worker machine:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "$HOME/.local/bin/shed mark working" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "$HOME/.local/bin/shed mark idle" }] }
+    ],
+    "StopFailure": [
+      { "hooks": [{ "type": "command", "command": "$HOME/.local/bin/shed mark idle" }] }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|elicitation_dialog",
+        "hooks": [{ "type": "command", "command": "$HOME/.local/bin/shed mark waiting" }]
+      }
+    ]
+  }
+}
+```
+
+What it changes:
+
+- **A worker that waits for a person is `needs_owner` at once**, with the
+  tool's own words as the reason ("Claude needs your permission to use
+  Bash") and with no reviewer call. When the prompt is answered and the
+  screen moves on, the worker is back on track by itself.
+- **A turn that prints nothing is not taken for idle.** A long test run or a
+  build is silent for minutes. Without a mark the worker is reviewed after
+  ninety seconds of silence; with one it is busy and gets only its scope
+  check.
+- **`shed status` shows it.** Each supervised worker gets the tool's state
+  and how long it has lasted:
+
+  ```
+    supervised
+      app   #130      working 3m   on_track     12m ago  working on the brief
+      docs  no issue  idle 41m     done         40m ago  the queue has nothing it can act on
+      ops   #127      waiting 6m   needs_owner  6m ago   its tool waits for a person: Claude needs your permission to use Bash
+  ```
+
+`shed mark` knows the worker from the tmux window the hook runs in, so the
+hooks can sit in the user's settings and serve every session on the machine:
+outside a worker's window the command does nothing. It reads the message of
+a notification from the hook's input. It never exits 2, which to Claude Code
+would block the prompt or keep the session from stopping.
+
+All of this is optional. A worker whose tool reports nothing is judged from
+its screen, as before. Set all four hooks or none: a tool that says when a
+turn starts but not when it ends looks busy until its next scope check.
+
 ### Settings
 
 ```yaml
