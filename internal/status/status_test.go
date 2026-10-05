@@ -531,3 +531,140 @@ func TestStatusShowsWhatEachWorkersToolReports(t *testing.T) {
 		}
 	}
 }
+
+func TestLookAWorkerWillDoIsNotTheOwnersBacklog(t *testing.T) {
+	// Merged work that asks for eyes: the pull request is closed, the ask is open.
+	merged := issue(7, "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders")
+	merged.OpenPRs = map[int]backlog.PR{}
+	state := looks.Report{Repo: "org/app", Looks: []looks.Look{{Repo: "org/app", Number: 7, PR: 41, State: looks.Due}}}
+
+	for _, tc := range []struct {
+		name          string
+		eyeChecks     bool
+		wantAttention []string
+		wantState     string
+		wantTotals    string
+	}{
+		{"a worker does eye checks", true, nil, Look, ""},
+		{"no worker does them", false, []string{"org/app#7 waits on you (eyes)"}, Waiting, "Waiting on you: 1 eyes."},
+	} {
+		c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{merged}}, Looks: &fakeLooks{report: state}}
+		report := c.CollectAll(context.Background(), withRepo(tc.eyeChecks))
+		machine := report.Machines[0]
+		var mine []string
+		for _, a := range machine.Attention {
+			if strings.Contains(a, "#7") {
+				mine = append(mine, a)
+			}
+		}
+		if len(mine) != len(tc.wantAttention) || (len(mine) == 1 && !strings.Contains(mine[0], tc.wantAttention[0])) {
+			t.Errorf("%s: attention = %q, want %q", tc.name, mine, tc.wantAttention)
+		}
+		if machine.Issues[0].State != tc.wantState {
+			t.Errorf("%s: state = %q, want %q", tc.name, machine.Issues[0].State, tc.wantState)
+		}
+		if got := waitingTotals(report.Machines); got != tc.wantTotals {
+			t.Errorf("%s: totals = %q, want %q", tc.name, got, tc.wantTotals)
+		}
+	}
+}
+
+type fakeMerged struct {
+	pulls map[int]looks.Pull
+	since time.Time
+	err   error
+}
+
+func (f *fakeMerged) MergedSince(_ context.Context, _ string, since time.Time) (map[int]looks.Pull, error) {
+	f.since = since
+	return f.pulls, f.err
+}
+
+func TestDigestSaysWhatMergedHowTheLooksWentAndWhatWaits(t *testing.T) {
+	ago := func(d time.Duration) time.Time { return now.Add(-d) }
+	state := releaseState()
+	state.Passed = []looks.Look{
+		{Repo: "org/app", Number: 3, PR: 43, State: looks.Passed, Since: ago(3 * time.Hour), Title: "Show the total"},
+		{Repo: "org/app", Number: 2, PR: 40, State: looks.Passed, Since: ago(40 * time.Hour), Title: "Looked at before this window"},
+	}
+	review := issue(8)
+	review.OpenPRs = map[int]backlog.PR{52: {}}
+	review.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** #52 (ready)", CreatedAt: ago(2 * time.Hour)}}
+	decision := issue(9)
+	decision.Comments = []backlog.Comment{{Body: "## Hand-back\nDecisions needed: 1. which one?", CreatedAt: ago(30 * time.Hour)}}
+
+	merged := &fakeMerged{pulls: map[int]looks.Pull{
+		51: {Number: 51, Title: "Paginate the audit log", MergedAt: ago(time.Hour)},
+		50: {Number: 50, Title: "Retry the export", MergedAt: ago(5 * time.Hour)},
+	}}
+	c := Collector{Runner: fakeRunner{err: errors.New("connection timed out")}, Lister: fakeLister{issues: []backlog.Issue{review, decision}}, Looks: &fakeLooks{report: state}}
+	since := ago(24 * time.Hour)
+	d := c.Digest(context.Background(), withRepo(true), merged, since, now)
+	if !merged.since.Equal(since) {
+		t.Fatalf("merged pull requests were asked for since %s, want %s", merged.since, since)
+	}
+	// The collector stamps the report with the real clock; the test's
+	// comments are dated by the test's.
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+
+	for _, want := range []string{
+		"shed digest: the last 24h",
+		"Merged: 2 pull request(s)",
+		"org/app#50  5h ago  Retry the export\n  org/app#51  1h ago  Paginate the audit log",
+		"Eye checks: org/app",
+		"1 passed in this window; now 2 not done (1 on staging, 1 wait for a staging deploy), 1 failed",
+		"#3  PR #43  passed  3h ago  Show the total",
+		"#4  PR #44  FAILED  1h ago  Fix the thing",
+		"Waiting on you: 2",
+		"30h  decision    org/app#9  Fix the thing\n  2h   review #52  org/app#8  Fix the thing",
+		"Also needs you: 1\n  ! box: unreachable: connection timed out",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("digest lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "Looked at before this window") {
+		t.Fatalf("a look that passed before the window is in the digest:\n%s", out.String())
+	}
+}
+
+func TestDigestSaysWhatItCouldNotRead(t *testing.T) {
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}}
+	d := c.Digest(context.Background(), oneMachine(), &fakeMerged{err: errors.New("gh: not logged in")}, now.Add(-time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	if !strings.Contains(out.String(), "! gh: not logged in") || !strings.Contains(out.String(), "Merged: 0 pull request(s)") {
+		t.Fatalf("digest:\n%s", out.String())
+	}
+}
+
+func TestStatusShowsWhereEachOneOffTaskStands(t *testing.T) {
+	res := healthy()
+	handed := func(worker, task string, ago time.Duration) runlog.Checkin {
+		return runlog.Checkin{Time: now.Add(-ago), Worker: worker, Kind: "task", Verdict: runlog.VerdictNudge, Sent: true, Task: task, Reason: "the owner pushed a one-off task"}
+	}
+	res.Checkins = []runlog.Checkin{
+		handed("app", "t-old", 3*time.Hour),
+		{Time: now.Add(-2 * time.Hour), Worker: "app", Kind: "idle", Verdict: runlog.VerdictDone, Reason: "it wrote its report"},
+		handed("app", "t-now", 10*time.Minute),
+	}
+	res.Tasks = []probe.Task{
+		{Where: runlog.TaskTaken, ID: "t-old"}, {Where: runlog.TaskTaken, ID: "t-now"}, {Where: runlog.TaskTaken, ID: "t-forgotten"},
+		{Where: "app", ID: "t-next"}, {Where: runlog.TaskAny, ID: "t-any"},
+	}
+	r := Assess(appWorker, signals, now, res, nil)
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	for _, want := range []string{
+		"app  task t-now  nudge  10m ago  the owner pushed a one-off task",
+		"one-off tasks\n    t-old   finished  app\n    t-now   in hand   app\n    t-next  queued    app\n    t-any   queued    any worker\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "t-forgotten") {
+		t.Fatalf("a task the log no longer knows is listed:\n%s", out.String())
+	}
+}

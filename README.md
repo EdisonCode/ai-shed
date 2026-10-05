@@ -237,6 +237,53 @@ The commit commands run on the watcher for `shed status` and on the worker's
 machine for the queue, after its `init` line, so both must reach the
 environments. `shed status -json` carries the release state under `repos`.
 
+### One-off tasks
+
+An issue is all a worker has to go on. Some work has a brief that is on no
+issue: the reasoning from a conversation, a comparison to make before
+anything is built, a job you want one worker in particular to do. Push it as
+a task:
+
+```sh
+shed task linux-box brief.md               # the first worker that is free
+shed task -worker app linux-box brief.md   # this worker
+some-command | shed task linux-box -       # the brief on standard input
+```
+
+- **It goes ahead of the queue**, at the first point where the worker has
+  nothing in progress. A worker is never interrupted for a task. A resting
+  worker gets it within a tick, with no reviewer call.
+- **The brief is the worker's whole instruction for it.** It lands in the
+  worker's directory as `.shed/tasks/<id>.md`, and one line tells the worker
+  to read it. Write it for a reader with no other context, and say where the
+  result should go: a pull request, a comment on an issue, or only the
+  report.
+- **It may go beyond the worker's brief**, where it says so. The reviewer is
+  shown the task's brief while the task is in hand and judges the worker
+  against it. Standing orders still hold.
+- **The worker writes a report** in `.shed/tasks/<id>.report.md`. Read it
+  with `shed task -report <id> linux-box`.
+- **Afterwards the worker goes back to its queue**, on a clear context when
+  it has `fresh_per_issue`.
+- A busy machine holds a task like any hand-over, for `max_wait` at most. A
+  session that ends in the middle gives the task to that worker's next
+  session.
+
+`shed status` lists each task as queued, in hand or finished, and shows the
+task in place of an issue for the worker that has it:
+
+```
+  supervised
+    app  task 20261004-143210-512  nudge  8m ago  the owner pushed a one-off task
+  one-off tasks
+    20261004-143210-512  in hand  app
+    20261004-150102-090  queued   any worker
+```
+
+A task has no issue behind it, so nothing in the queue rules applies to it:
+no rework, no signals, no retries. If it leads to a pull request, that pull
+request is reviewed like any other.
+
 ### Machine capacity
 
 A machine often has other work: CI runners, builds, a database. Tell shed how
@@ -489,6 +536,10 @@ answers (`Owner ruling`, `Eyes checked`) count in any comment.
 
 An issue with an open signal is not handed to a worker.
 
+An eye check that a worker will do on staging is not asked of you. Such an
+issue shows as `eye check` and is left out of the count; see *Eye checks on
+staging*.
+
 Each `waits on you` line says how long ago the worker asked and, for a review,
 which pull request: `(eyes 3h, review #41 3h)`. Under the report, one line
 totals what waits on you by kind with the age of the oldest. When the workers
@@ -687,6 +738,52 @@ What was left alone is listed with the reason, and the exit code is 1.
 
 Remote branches are not touched. `shed tidy` runs on the watcher and needs
 only `git` on the machine, so it works on a machine whose shed is older.
+
+### A digest
+
+```sh
+shed digest              # the last 24 hours
+shed digest -since 12h
+```
+
+One report of what merged in the window, how the eye checks went, and what
+waits on you now, oldest first:
+
+```
+shed digest: the last 24h, since Sat 09:00
+
+Merged: 3 pull request(s)
+  my-org/my-app#131  20h ago  Retry the export when the API times out
+  my-org/my-app#138  6h ago   Paginate the audit log
+  my-org/my-app#140  2h ago   Show the total on the order page
+
+Eye checks: my-org/my-app
+  1 passed in this window; now 1 not done (1 on staging, 0 wait for a staging deploy), 1 failed
+    #123  PR #131  passed  3h ago  Retry the export when the API times out
+    #125  PR #138  FAILED  1h ago  Paginate the audit log
+
+Waiting on you: 2
+  30h  decision     my-org/my-app#124  Drop the legacy column
+  2h   review #141  my-org/my-app#130  Split the importer
+
+Also needs you: 1
+  ! mac-mini: unreachable: me@mac-mini: exit status 255: Operation timed out
+```
+
+It changes nothing and exits 1 when something needs you. To get it every
+morning, run it from a scheduler on the watcher and send the output wherever
+you read. `-json` prints the same as data.
+
+### An issue template
+
+```sh
+shed template issue > .github/ISSUE_TEMPLATE/worker-task.md
+```
+
+A worker reads its issue and nothing else, and it cannot ask. The template
+has the sections such an issue needs: the goal, where the change belongs,
+acceptance a worker can run, what is out of scope, what was decided
+already, and what needs eyes. Edit it to your repository's vocabulary.
 
 ### Hearing about it
 

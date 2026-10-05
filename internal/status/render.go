@@ -175,6 +175,17 @@ func renderMachine(w io.Writer, r MachineReport) {
 		}
 		tw.Flush()
 	}
+	if len(r.OneOff) > 0 {
+		fmt.Fprintln(w, "  one-off tasks")
+		for _, t := range r.OneOff {
+			who := t.Worker
+			if who == "" {
+				who = "any worker"
+			}
+			fmt.Fprintf(tw, "    %s\t%s\t%s\n", t.ID, t.State, who)
+		}
+		tw.Flush()
+	}
 	if len(r.Issues) > 0 {
 		fmt.Fprintln(w, "  issues")
 		for _, i := range r.Issues {
@@ -247,6 +258,9 @@ func toolState(r MachineReport, w WorkerStatus) string {
 }
 
 func inHand(w WorkerStatus) string {
+	if w.Task != "" {
+		return "task " + w.Task
+	}
 	if w.Issue == 0 {
 		return "no issue"
 	}

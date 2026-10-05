@@ -16,13 +16,18 @@ const usage = `shed watches the worker machines in your shed.
 
 Usage:
   shed status [-json] [-watch 1m]   report every machine; exit 1 when something needs you
+  shed digest [-since 24h] [-json]  what merged, how the eye checks went, what waits on you
   shed validate                     check the fleet file
   shed deploy [-install-agent] [machine...]
                                     send this version and the fleet file to machines
+  shed task [-worker name] <machine> <brief-file|->
+                                    push a one-off task with its own brief, ahead of the queue
+  shed task -report <id> <machine>  print the report a worker wrote for a task
   shed recycle [-now] <machine> <worker>
                                     give a worker a fresh session after its current issue
   shed tidy [-apply] <machine>      list the worktrees and branches whose pull request is merged;
                                     with -apply, remove them
+  shed template issue               print an issue template for issues a worker can take
   shed update                       replace this shed with the latest release
   shed preflight [-machine name]    on a machine: check that each worker's command comes up ready
   shed agent [-machine name]        on a machine: supervise its workers and run its tasks
@@ -65,6 +70,12 @@ func main() {
 		code = cmdMark(args)
 	case "tidy":
 		code = cmdTidy(args)
+	case "task":
+		code = cmdTask(args)
+	case "digest":
+		code = cmdDigest(args)
+	case "template":
+		code = cmdTemplate(args)
 	case "version":
 		fmt.Println("shed", version)
 	case "help", "-h", "--help":

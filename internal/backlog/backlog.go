@@ -352,11 +352,13 @@ func failedIn(body string, s config.Signal) bool {
 const (
 	EyesAsked  = "asked"  // a worker asked for a look and nobody has looked
 	EyesFailed = "failed" // someone looked and the work did not pass
+	EyesPassed = "passed" // someone looked and said so
 )
 
 // EyeCheck reports whether the issue's handed-back work still owes a look
-// (EyesAsked), was looked at and failed (EyesFailed), or neither (""). pr is
-// the pull request of the last hand-back and since is when the state began.
+// (EyesAsked), was looked at and failed (EyesFailed) or passed (EyesPassed),
+// or never asked for one (""). pr is the pull request of the last hand-back
+// and since is when the state began.
 func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since time.Time) {
 	_, pr = lastHandBack(issue, signals)
 	if pr == 0 {
@@ -368,8 +370,9 @@ func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since
 		}
 		for _, c := range issue.Comments {
 			body := strings.ToLower(c.Body)
-			if s.AnsweredBy != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) {
-				state = ""
+			// An answer with no ask before it answers nothing.
+			if s.AnsweredBy != "" && state != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) {
+				state, since = EyesPassed, c.CreatedAt
 			}
 			if value, found := asked(body, s); found {
 				state, since = "", c.CreatedAt

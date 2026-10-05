@@ -1637,3 +1637,177 @@ func TestNewSessionStartsWithNoMarkOfTheLastOne(t *testing.T) {
 		t.Fatalf("mark = %+v after a new session started", m)
 	}
 }
+
+// pushTask queues a one-off task on the machine, for a worker or for any
+// (where = runlog.TaskAny), as `shed task` does.
+func (f *fixture) pushTask(t *testing.T, where, id, brief string) {
+	t.Helper()
+	path := filepath.Join(f.StateDir, runlog.TasksDir, where, id+".md")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, []byte(brief), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, f.now, f.now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const taskMessage = "One-off task from the owner, ahead of your queue: read .shed/tasks/t1.md in full and carry it out. When it is done, write your report in .shed/tasks/t1.report.md, say so here, and stop."
+
+var done = Verdict{Verdict: runlog.VerdictDone, Reason: "nothing it can act on"}
+
+func TestRestingWorkerIsHandedAOneOffTaskWithoutAReview(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, done)
+	f.tick(2 * time.Minute) // found done; it rests
+	f.pushTask(t, runlog.TaskAny, "t1", "# Audit the export\n\nRead only. Report what you find.")
+	f.tick(time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{taskMessage}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+	if len(f.reviewer.prompts) != 1 {
+		t.Fatalf("reviewed %d times; a resting worker needs no review to be handed a task", len(f.reviewer.prompts))
+	}
+	if brief, _ := os.ReadFile(filepath.Join(f.dir, TaskDir, "t1.md")); string(brief) != "# Audit the export\n\nRead only. Report what you find." {
+		t.Fatalf("the brief in the worker's directory = %q", brief)
+	}
+	if c := f.lastCheckin(t); c.Kind != KindTask || c.Task != "t1" || !c.Sent {
+		t.Fatalf("check-in = %+v", c)
+	}
+	if _, pending := runlog.PendingTask(f.StateDir, "app"); pending {
+		t.Fatal("the task still waits, and would be handed over again")
+	}
+}
+
+func TestTaskForAnotherWorkerIsLeftForIt(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	f.tick(2 * time.Minute)
+	f.pushTask(t, "docs", "t1", "Docs work.")
+	f.tick(time.Minute)
+
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; the task was pushed to another worker", f.term.sent)
+	}
+}
+
+func TestTaskWaitsForTheIssueInHandThenComesBeforeTheQueue(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack, assign(13))
+	f.lister.issues = append(f.lister.issues, labeled(13))
+	f.tick(2 * time.Minute) // handed #12
+	f.pushTask(t, "app", "t1", "Do this next.")
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute) // still on #12: left alone
+	if len(f.term.sent) != 1 {
+		t.Fatalf("sent = %q; a worker is not interrupted for a task", f.term.sent)
+	}
+
+	sent := f.handOver() // it finished #12 and the reviewer would hand over #13
+	if !slices.Equal(sent, []string{taskMessage}) {
+		t.Fatalf("sent = %q, want the task before the next issue", sent)
+	}
+}
+
+func TestReviewerJudgesAWorkerAgainstItsTasksBrief(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, done, onTrack)
+	f.tick(2 * time.Minute)
+	f.pushTask(t, runlog.TaskAny, "t1", "Compare the two export paths and say which to keep.")
+	f.tick(time.Minute)
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute)
+
+	prompt := f.reviewer.prompts[len(f.reviewer.prompts)-1]
+	want := "<in_hand>a one-off task from the owner (t1), not a queue item. The owner's brief for it:\nCompare the two export paths and say which to keep.\n</in_hand>"
+	if !strings.Contains(prompt, want) {
+		t.Fatalf("the reviewer was not shown the task:\n%s", prompt)
+	}
+}
+
+func TestAfterATaskTheWorkerGoesBackToItsQueueOnAClearContext(t *testing.T) {
+	f := freshWorker(t, config.Supervisor{CacheTTL: "1h"}, done, assign(12))
+	f.tick(2 * time.Minute)
+	f.pushTask(t, runlog.TaskAny, "t1", "A task.")
+	f.tick(time.Minute)
+
+	sent := f.handOver() // the task is done; the reviewer hands over #12
+	if len(sent) != 2 || sent[0] != "/clear" || !strings.HasSuffix(sent[1], "Take the next issue.") {
+		t.Fatalf("sent = %q; the task's conversation must not follow the worker into #12", sent)
+	}
+	if got := runlog.TaskInHand(f.checkins(t), "app"); got != "" {
+		t.Fatalf("task in hand = %q after the worker moved on", got)
+	}
+}
+
+func TestTaskInHandIsRememberedAcrossAnAgentRestart(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, done, onTrack)
+	f.tick(2 * time.Minute)
+	f.pushTask(t, runlog.TaskAny, "t1", "A task.")
+	f.tick(time.Minute)
+	f.restartAgent()
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute)
+
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q after a restart", f.term.sent)
+	}
+	if !strings.Contains(f.reviewer.prompts[len(f.reviewer.prompts)-1], "a one-off task from the owner (t1)") {
+		t.Fatal("the new agent does not know the worker has the task in hand")
+	}
+}
+
+func TestTaskOfASessionThatEndedIsHandedToTheNextOne(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, done, done)
+	f.tick(2 * time.Minute)
+	f.pushTask(t, runlog.TaskAny, "t1", "A task.")
+	f.tick(time.Minute) // handed over
+	f.term.exitedToShell(f.now)
+	f.tick(time.Minute) // the session ended; a new one is started
+	f.term.sent = nil
+	f.term.running(f.now)
+	f.tick(2 * time.Minute) // the new session is found with nothing to do
+	f.tick(time.Minute)
+
+	if !slices.Contains(f.term.sent, taskMessage) {
+		t.Fatalf("sent = %q; the task the old session did not finish is handed over again", f.term.sent)
+	}
+}
+
+func TestBusyMachineHoldsATaskLikeAHandOver(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, done)
+	f.Machine.Capacity = config.Capacity{MaxLoad: 1, MaxWait: "20m"}
+	f.Busy = func(context.Context) string { return "the load is high" }
+	f.tick(2 * time.Minute)
+	f.pushTask(t, runlog.TaskAny, "t1", "A task.")
+	f.tick(5 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q on a busy machine", f.term.sent)
+	}
+	f.tick(20 * time.Minute)
+	if !slices.Equal(f.term.sent, []string{taskMessage}) {
+		t.Fatalf("sent = %q; after max_wait the task goes through", f.term.sent)
+	}
+}
+
+func TestRecycleWaitsForATaskInHand(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, done, onTrack)
+	f.tick(2 * time.Minute)
+	f.pushTask(t, runlog.TaskAny, "t1", "A task.")
+	f.tick(time.Minute)
+	f.requestRecycle(t, "")
+	f.term.running(f.now.Add(30 * time.Second))
+	f.tick(time.Minute)
+
+	if len(f.term.closed) != 0 {
+		t.Fatalf("closed = %v; a fresh session waits for the task in hand", f.term.closed)
+	}
+}
+
+func TestBriefTellsAWorkerAboutOneOffTasks(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	f.tick(0)
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	for _, want := range []string{"## One-off tasks", "names a file under `.shed/tasks/`", "write a\nreport in the file the supervisor named"} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+}

@@ -29,10 +29,11 @@ const (
 
 // Issue states.
 const (
-	Working = "working" // a tmux window is named for the issue
-	Rework  = "rework"  // handed back, but its pull request cannot merge; a worker will be sent back to it
-	Queued  = "queued"  // nobody is on it
-	Waiting = "waiting" // it waits on the owner
+	Working = "working"   // a tmux window is named for the issue
+	Rework  = "rework"    // handed back, but its pull request cannot merge; a worker will be sent back to it
+	Queued  = "queued"    // nobody is on it
+	Waiting = "waiting"   // it waits on the owner
+	Look    = "eye check" // its merged work waits for a worker to look at it on staging
 )
 
 // Task states.
@@ -61,6 +62,9 @@ type MachineReport struct {
 	Tasks  []TaskStatus  `json:"tasks"`
 	// Workers are the supervised workers from the fleet file.
 	Workers []WorkerStatus `json:"workers"`
+	// OneOff lists the one-off tasks pushed to the machine: the ones that
+	// wait, the ones in hand, and the ones the check-in log still knows of.
+	OneOff []TaskState `json:"one_off,omitempty"`
 	// Attention lists what needs the owner. Empty means the machine is on track.
 	Attention []string `json:"attention"`
 	// Now is when the report was made, by the watcher's clock. The age of
@@ -82,6 +86,22 @@ type IssueStatus struct {
 	Rework string `json:"rework,omitempty"`
 }
 
+// One-off task states.
+const (
+	OneOffQueued   = "queued"   // it waits for a worker to have nothing in progress
+	OneOffInHand   = "in hand"  // a worker was handed it
+	OneOffFinished = "finished" // the worker it was handed to moved on
+)
+
+// TaskState is where a one-off task stands.
+type TaskState struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+	// Worker is the worker it waits for or was handed to; empty while it
+	// waits for any worker.
+	Worker string `json:"worker,omitempty"`
+}
+
 type TaskStatus struct {
 	Name     string         `json:"name"`
 	Schedule string         `json:"schedule"`
@@ -96,6 +116,8 @@ type WorkerStatus struct {
 	Tool string `json:"tool"`
 	// Issue is the issue the supervisor last handed it; 0 for none.
 	Issue int `json:"issue,omitempty"`
+	// Task is the one-off task it has in hand; empty for none.
+	Task string `json:"task,omitempty"`
 	// State is what the worker's own tool reports through its hooks:
 	// working, idle or waiting for a person. Empty when the tool has no
 	// hooks. StateSince is when it began; zero when that is not known.
@@ -203,16 +225,42 @@ func (r RepoReport) count(state string) int {
 // Collect reports on every machine, in config order. Machines are asked in
 // parallel; one slow or dead machine does not hold up the others.
 func (c Collector) Collect(ctx context.Context, cfg *config.Config) []MachineReport {
+	return c.collectMachines(ctx, cfg, nil)
+}
+
+// CollectAll reports on the repositories and then on the machines. The
+// release state comes first because it says which eye checks a worker will
+// do: those are not the owner's backlog.
+func (c Collector) CollectAll(ctx context.Context, cfg *config.Config) Report {
+	repos := c.CollectRepos(ctx, cfg)
+	workerLooks := map[string]bool{}
+	for _, r := range repos {
+		for _, l := range r.Looks {
+			// A look that is due is a worker's. One that waits for a staging
+			// deploy asks for no eyes yet.
+			if r.Lookers > 0 && l.State != looks.Failed {
+				workerLooks[issueKey(l.Repo, l.Number)] = true
+			}
+		}
+	}
+	return Report{Machines: c.collectMachines(ctx, cfg, workerLooks), Repos: repos}
+}
+
+func issueKey(repo string, number int) string {
+	return fmt.Sprintf("%s#%d", repo, number)
+}
+
+func (c Collector) collectMachines(ctx context.Context, cfg *config.Config, workerLooks map[string]bool) []MachineReport {
 	reports := make([]MachineReport, len(cfg.Machines))
 	var wg sync.WaitGroup
 	for i, m := range cfg.Machines {
-		wg.Go(func() { reports[i] = c.collectOne(ctx, cfg, m) })
+		wg.Go(func() { reports[i] = c.collectOne(ctx, cfg, m, workerLooks) })
 	}
 	wg.Wait()
 	return reports
 }
 
-func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.Machine) MachineReport {
+func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.Machine, workerLooks map[string]bool) MachineReport {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
@@ -235,7 +283,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 		issues = append(issues, found...)
 	}
 
-	report := Assess(m, cfg.Signals, time.Now(), res, issues)
+	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
 	if probeErr != nil {
 		report.Error = probeErr.Error()
 		report.Attention = append([]string{"unreachable: " + probeErr.Error()}, report.Attention...)
@@ -250,6 +298,12 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 // machine could not be probed; the issue rules still apply. now is the
 // watcher's clock.
 func Assess(m config.Machine, signals []config.Signal, now time.Time, res *probe.Result, issues []backlog.Issue) MachineReport {
+	return AssessWith(m, signals, now, res, issues, nil)
+}
+
+// AssessWith is Assess that knows which issues' eye checks a worker will do
+// on staging (by "owner/name#number"). Such a look is not asked of the owner.
+func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *probe.Result, issues []backlog.Issue, workerLooks map[string]bool) MachineReport {
 	report := MachineReport{Name: m.Name, Host: m.Host, Probe: res, Attention: []string{}, Now: now}
 	attend := func(format string, args ...any) {
 		report.Attention = append(report.Attention, fmt.Sprintf(format, args...))
@@ -269,12 +323,17 @@ func Assess(m config.Machine, signals []config.Signal, now time.Time, res *probe
 		agentUp := assessAgent(m, *res, attend)
 		assessTasks(m, *res, agentUp, &report, attend)
 		assessWorkers(m, *res, &report, attend)
+		assessOneOff(*res, &report)
 	}
 
 	queued, working := 0, 0
 	for _, issue := range issues {
 		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
 			State: Queued, Asks: backlog.Asks(issue, signals), Rework: backlog.Rework(issue, signals)}
+		workerLook := workerLooks[issueKey(issue.Repo, issue.Number)]
+		if workerLook {
+			st.Asks = slices.DeleteFunc(st.Asks, func(a backlog.Ask) bool { return a.Name == config.EyesSignal })
+		}
 		for _, a := range st.Asks {
 			st.Waiting = append(st.Waiting, a.Name)
 		}
@@ -306,6 +365,9 @@ func Assess(m config.Machine, signals []config.Signal, now time.Time, res *probe
 			if len(m.Workers) == 0 {
 				attend("%s#%d: %s: %s", issue.Repo, issue.Number, st.Rework, issue.Title)
 			}
+		case workerLook:
+			// Nobody builds it and nobody is asked: it waits for its look.
+			st.State = Look
 		case hasWindow:
 			working++
 			if quiet := res.Now.Sub(window.LastActivity); quiet > workerQuiet {
@@ -340,6 +402,30 @@ func askWords(asks []backlog.Ask, now time.Time) string {
 	return strings.Join(words, ", ")
 }
 
+// assessOneOff says where each one-off task on the machine stands. A task
+// that was handed over long ago is left out once the check-in log no longer
+// says who had it.
+func assessOneOff(res probe.Result, report *MachineReport) {
+	for _, t := range res.Tasks {
+		switch t.Where {
+		case runlog.TaskTaken:
+			worker := runlog.TaskWorker(res.Checkins, t.ID)
+			if worker == "" {
+				continue
+			}
+			state := OneOffFinished
+			if runlog.TaskInHand(res.Checkins, worker) == t.ID {
+				state = OneOffInHand
+			}
+			report.OneOff = append(report.OneOff, TaskState{ID: t.ID, State: state, Worker: worker})
+		case runlog.TaskAny:
+			report.OneOff = append(report.OneOff, TaskState{ID: t.ID, State: OneOffQueued})
+		default:
+			report.OneOff = append(report.OneOff, TaskState{ID: t.ID, State: OneOffQueued, Worker: t.Where})
+		}
+	}
+}
+
 // supervisedOn returns the supervised worker that has this issue in hand.
 func supervisedOn(workers []WorkerStatus, issue int) string {
 	for _, w := range workers {
@@ -372,7 +458,7 @@ func assessAgent(m config.Machine, res probe.Result, attend func(string, ...any)
 func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, attend func(string, ...any)) {
 	latest := runlog.LatestCheckins(res.Checkins)
 	for _, w := range m.Workers {
-		st := WorkerStatus{Name: w.Name, Issue: runlog.IssueInHand(res.Checkins, w.Name), RecyclePending: slices.Contains(res.Recycle, w.Name)}
+		st := WorkerStatus{Name: w.Name, Issue: runlog.IssueInHand(res.Checkins, w.Name), Task: runlog.TaskInHand(res.Checkins, w.Name), RecyclePending: slices.Contains(res.Recycle, w.Name)}
 		if fields := strings.Fields(w.CommandOrDefault()); len(fields) > 0 {
 			st.Tool = fields[0]
 		}

@@ -16,6 +16,9 @@ const (
 	reviewTimeout = 3 * time.Minute
 	// maxMessage keeps a nudge to something a person would type.
 	maxMessage = 600
+	// maxTaskBrief bounds how much of a one-off task's brief the reviewer
+	// is shown.
+	maxTaskBrief = 6000
 )
 
 // Verdict is the reviewer's judgement of one worker.
@@ -73,6 +76,10 @@ type ReviewInput struct {
 	// InHand is the issue the supervisor's own log says the worker was last
 	// handed; 0 for none since its session started.
 	InHand int
+	// Task is the one-off task the worker has in hand, and TaskBrief the
+	// owner's brief for it; empty for none.
+	Task      string
+	TaskBrief string
 	// LimitedUntil is set when the worker was at a usage limit that was
 	// expected to reset at this time.
 	LimitedUntil time.Time
@@ -96,6 +103,7 @@ Rules for the message of a nudge:
 - An item marked eye check is merged work that someone must look at on staging before it goes to production. It is not work to build. Hand it over like any other item; the worker's brief says how an eye check is done.
 - A worker that could not do an eye check is blocked: it could not sign in, staging was down, the description was too vague to judge, or the check needs an act its orders forbid. A blocked check has not passed. Choose needs_owner and say in the reason what blocked it. Do not hand the worker another item until the owner has acted.
 - A worker that was sent back to an item and says nothing needs to change has not finished until it hands back again. If its terminal does not show a new hand-back, tell it once to post a new hand-back that says so. Do not tell it to look for changes to make.
+- When <in_hand> shows a one-off task from the owner, its brief is the owner's own words for that task. Work it covers is in scope even where the worker's brief does not cover it. Judge the worker against it until the task is done and its report is written. Then hand over the first workable queue item, or choose done.
 - Keep the worker inside its brief. Work that the brief does not cover is out of scope, however useful.
 - Do not make a decision that belongs to the owner: product behaviour, money, scope beyond the brief, merging, deploying, production, credentials. Tell the worker to write the question and its recommendation in the issue, then take the next item.
 - Never tell the worker to skip or weaken a test, bypass a hook, merge, or deploy.
@@ -137,7 +145,9 @@ func Prompt(in ReviewInput) string {
 		b.WriteString("\n")
 	}
 	b.WriteString("</queue>\n\n<in_hand>")
-	if in.InHand != 0 {
+	if in.Task != "" {
+		fmt.Fprintf(&b, "a one-off task from the owner (%s), not a queue item. The owner's brief for it:\n%s\n", in.Task, clip(strings.TrimSpace(in.TaskBrief), maxTaskBrief))
+	} else if in.InHand != 0 {
 		fmt.Fprintf(&b, "#%d", in.InHand)
 	} else {
 		b.WriteString("none: you have not handed this worker an issue since its session started")
