@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/edisoncode/ai-shed/contrib"
 	"github.com/edisoncode/ai-shed/internal/config"
@@ -249,6 +250,34 @@ func Recycle(ctx context.Context, r probe.Runner, m config.Machine, worker strin
 		mode = runlog.RecycleNow
 	}
 	return writeRemote(ctx, r, m, runlog.StateDir+"/"+runlog.RecycleDir+"/"+worker, []byte(mode), "644")
+}
+
+// Pause tells the machine's agent to leave its workers alone for a while:
+// nothing is handed out and nobody is nudged. The time is counted by the
+// machine's own clock; until is when the pause ends by that clock.
+func Pause(ctx context.Context, r probe.Runner, m config.Machine, d time.Duration) (until time.Time, err error) {
+	command := fmt.Sprintf(`f="$HOME/%s/%s" && mkdir -p "$(dirname "$f")" && u=$(( $(date +%%s) + %d )) && echo "$u" > "$f.new" && mv "$f.new" "$f" && echo "$u"`,
+		runlog.StateDir, runlog.PauseFile, int(d.Seconds()))
+	out, err := r.Run(ctx, m, command, nil)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("pause %s: %w", m.Name, err)
+	}
+	until, ok := runlog.ParsePause(string(out))
+	if !ok {
+		return time.Time{}, fmt.Errorf("pause %s: the machine answered %q, not a time", m.Name, strings.TrimSpace(string(out)))
+	}
+	return until, nil
+}
+
+// Resume ends a pause. It reports false when the machine was not paused.
+func Resume(ctx context.Context, r probe.Runner, m config.Machine) (bool, error) {
+	command := fmt.Sprintf(`f="$HOME/%s/%s"; [ -f "$f" ] || { echo absent; exit 0; }; u=$(cat "$f"); rm "$f" || exit 1
+[ "$u" -gt "$(date +%%s)" ] 2>/dev/null && echo resumed || echo absent`, runlog.StateDir, runlog.PauseFile)
+	out, err := r.Run(ctx, m, command, nil)
+	if err != nil {
+		return false, fmt.Errorf("resume %s: %w", m.Name, err)
+	}
+	return strings.TrimSpace(string(out)) == "resumed", nil
 }
 
 // Bump asks the machine's agent to put an issue first in line: in the queue

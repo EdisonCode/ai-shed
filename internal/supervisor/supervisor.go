@@ -125,6 +125,9 @@ type Supervisor struct {
 	lookError string
 	// blockedTold holds the blocked looks the owner was told of.
 	blockedTold map[string]bool
+	// wasPaused is whether the last tick found the machine paused, so that
+	// a pause is logged when it starts and when it ends.
+	wasPaused bool
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.
@@ -202,6 +205,9 @@ type heldHandOver struct {
 // Tick checks every worker once. A failure on one worker is recorded and
 // does not stop the others.
 func (s *Supervisor) Tick(ctx context.Context) {
+	if s.paused() {
+		return
+	}
 	if s.workers == nil {
 		s.workers = make(map[string]*workerState)
 	}
@@ -240,6 +246,23 @@ func (s *Supervisor) Tick(ctx context.Context) {
 			s.record(st, c)
 		}
 	}
+}
+
+// paused reports whether the owner paused the machine. While it is paused
+// nothing is typed into a worker: no hand-over, no nudge, no start. A worker
+// goes on with the turn it is in and then waits. When the pause is over the
+// next tick finds each worker as it is and carries on from there.
+func (s *Supervisor) paused() bool {
+	until, paused := runlog.PausedUntil(s.StateDir, s.Now())
+	if paused != s.wasPaused {
+		s.wasPaused = paused
+		if paused {
+			s.Logf("the owner paused the machine until %s: nothing is handed out and nobody is nudged", until.Format("15:04:05"))
+		} else {
+			s.Logf("the pause is over")
+		}
+	}
+	return paused
 }
 
 func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState, now time.Time) error {

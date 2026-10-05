@@ -1985,3 +1985,51 @@ func TestReviewerIsToldABumpedIssueIsInScope(t *testing.T) {
 		t.Fatal("the reviewer would hold a moved issue against the worker's brief")
 	}
 }
+
+// pause pauses the machine for a while, as `shed pause` does.
+func (f *fixture) pause(t *testing.T, d time.Duration) string {
+	t.Helper()
+	path := filepath.Join(f.StateDir, runlog.PauseFile)
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("%d\n", f.now.Add(d).Unix())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestPausedMachineIsLeftAloneUntilThePauseRunsOut(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12))
+	f.pause(t, 30*time.Minute)
+	f.tick(2 * time.Minute)
+	f.tick(20 * time.Minute)
+	if len(f.term.sent) != 0 || len(f.reviewer.prompts) != 0 {
+		t.Fatalf("sent %q after %d review(s) on a paused machine", f.term.sent, len(f.reviewer.prompts))
+	}
+
+	f.tick(10 * time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; the pause ran out and the idle worker has work", f.term.sent)
+	}
+}
+
+func TestResumeEndsAPauseEarly(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12))
+	path := f.pause(t, 2*time.Hour)
+	f.tick(2 * time.Minute)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	f.tick(time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; the owner resumed the machine", f.term.sent)
+	}
+}
+
+func TestPausedMachineStartsNoWorker(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	f.pause(t, 30*time.Minute)
+	f.tick(0)
+	if len(f.term.opened) != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("opened %q, sent %q; a session that starts adds to the load", f.term.opened, f.term.sent)
+	}
+}
