@@ -64,8 +64,31 @@ type Lister interface {
 type GH struct{}
 
 func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
-	args := []string{"issue", "list", "--repo", src.Repo, "--state", "open", "--limit", "200",
-		"--json", "number,title,url,updatedAt,comments,labels"}
+	issues, err := issueList(ctx, src, "--state", "open")
+	if err != nil {
+		return nil, err
+	}
+	openPRs, err := openPRs(ctx, src.Repo)
+	if err != nil {
+		return nil, err
+	}
+	for i := range issues {
+		issues[i].OpenPRs = openPRs
+	}
+	return issues, nil
+}
+
+// Closed returns the source's issues that were closed after since. Their
+// open pull requests are not looked up.
+func (GH) Closed(ctx context.Context, src config.IssueSource, since time.Time) ([]Issue, error) {
+	// The search is by day; the caller's window is narrowed by what it does
+	// with each issue's pull request.
+	return issueList(ctx, src, "--state", "closed", "--search", "closed:>="+since.UTC().Format("2006-01-02"))
+}
+
+func issueList(ctx context.Context, src config.IssueSource, filter ...string) ([]Issue, error) {
+	args := append([]string{"issue", "list", "--repo", src.Repo, "--limit", "200",
+		"--json", "number,title,url,updatedAt,comments,labels"}, filter...)
 	if src.Label != "" {
 		args = append(args, "--label", src.Label)
 	}
@@ -83,12 +106,8 @@ func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 	if err := json.Unmarshal(out, &issues); err != nil {
 		return nil, fmt.Errorf("gh issue list %s: parse output: %w", src.Repo, err)
 	}
-	openPRs, err := openPRs(ctx, src.Repo)
-	if err != nil {
-		return nil, err
-	}
 	for i := range issues {
-		issues[i].Repo, issues[i].OpenPRs = src.Repo, openPRs
+		issues[i].Repo = src.Repo
 	}
 	return issues, nil
 }
