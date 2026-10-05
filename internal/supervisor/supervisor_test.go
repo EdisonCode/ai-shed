@@ -13,6 +13,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
@@ -1300,5 +1301,173 @@ func TestBusyWhenRunsAfterTheMachinesInitLine(t *testing.T) {
 func TestSystemLoadCanBeRead(t *testing.T) {
 	if l, err := systemLoad(); err != nil || l < 0 {
 		t.Fatalf("load = %v, %v", l, err)
+	}
+}
+
+// fakeLooks serves one report for every repository.
+type fakeLooks struct {
+	looks []looks.Look
+	err   error
+}
+
+func (f *fakeLooks) Read(context.Context, config.Repo, []config.IssueSource, []backlog.Issue, []config.Signal) (looks.Report, error) {
+	return looks.Report{Repo: "org/app", Looks: f.looks}, f.err
+}
+
+func look(number, pr int, state string) looks.Look {
+	return looks.Look{Repo: "org/app", Number: number, Title: "Merged work", PR: pr, State: state}
+}
+
+// withStaging gives the fixture's repository a staging environment and its
+// first worker a browser.
+func withStaging(f *fixture, found ...looks.Look) *fakeLooks {
+	reader := &fakeLooks{looks: found}
+	f.Looks = reader
+	f.Repos = []config.Repo{{Name: "org/app", Staging: config.Environment{Commit: "true", URL: "https://staging.example.com",
+		Orders: "Open pages and cancel a draft.\nNever send a message."}}}
+	f.Machine.Workers[0].EyeChecks = true
+	return reader
+}
+
+func TestLookOnStagingIsHandedToAWorkerThatDoesEyeChecks(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(7))
+	withStaging(f, look(7, 41, looks.Due), look(8, 42, looks.Awaiting), look(9, 43, looks.Failed))
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if got, want := queueShown(t, prompt), []int{7, 12}; !slices.Equal(got, want) {
+		t.Fatalf("queue = %v, want %v: the look that is due comes first, the others are not for a worker", got, want)
+	}
+	if !strings.Contains(prompt, "org/app#7 Merged work [eye check: pull request #41 is on staging]") {
+		t.Fatalf("the look is not marked in the queue:\n%s", prompt)
+	}
+	want := "Do the eye check of #7 on staging: pull request #41 is on staging. Follow the Eye checks section of .shed/BRIEF.md and change no code."
+	if !slices.Equal(f.term.sent, []string{want}) {
+		t.Fatalf("sent = %q, want the fixed eye-check order", f.term.sent)
+	}
+	if c := f.lastCheckin(t); !c.Look || c.Issue != 7 {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestWorkerWithoutABrowserIsNotShownLooks(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	withStaging(f, look(7, 41, looks.Due))
+	f.Machine.Workers[0].EyeChecks = false
+	f.tick(2 * time.Minute)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
+		t.Fatalf("queue = %v, want only the issue to build", got)
+	}
+}
+
+func TestLookGoesToAWorkerThatDidNotBuildTheWork(t *testing.T) {
+	done := Verdict{Verdict: runlog.VerdictDone, Reason: "nothing for it"}
+	for _, tc := range []struct {
+		name       string
+		bothLook   bool
+		wantForApp []int
+	}{
+		{"another worker can look: not the builder", true, nil},
+		{"the builder is the only one with a browser", false, []int{7}},
+	} {
+		f := twoWorkers(t, done)
+		f.lister.issues = nil
+		withStaging(f, look(7, 41, looks.Due))
+		f.Machine.Workers[1].EyeChecks = tc.bothLook
+		built := runlog.Checkin{Time: t0.Add(-3 * time.Hour), Worker: "app", Kind: KindIdle, Verdict: runlog.VerdictNudge, Issue: 7, Sent: true}
+		if err := runlog.AppendCheckin(f.StateDir, built); err != nil {
+			t.Fatal(err)
+		}
+		lookedByDocs := runlog.Checkin{Time: t0.Add(-time.Hour), Worker: "docs", Kind: KindIdle, Verdict: runlog.VerdictNudge, Issue: 8, Sent: true, Look: true}
+		if err := runlog.AppendCheckin(f.StateDir, lookedByDocs); err != nil {
+			t.Fatal(err)
+		}
+		f.tick(0)
+
+		if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, tc.wantForApp) {
+			t.Errorf("%s: the builder was shown %v, want %v", tc.name, got, tc.wantForApp)
+		}
+		if tc.bothLook {
+			if got := queueShown(t, f.reviewer.prompts[1]); !slices.Equal(got, []int{7}) {
+				t.Errorf("%s: the other worker was shown %v, want the look", tc.name, got)
+			}
+		}
+	}
+}
+
+func TestBuilderWithTheIssueStillInHandIsHandedItsLookAsNewWork(t *testing.T) {
+	f := freshWorker(t, config.Supervisor{}, assign(12), assign(12))
+	f.tick(2 * time.Minute) // it builds #12
+	f.lister.issues = nil   // merged and closed
+	withStaging(f, look(12, 41, looks.Due))
+
+	sent := f.handOver()
+	if len(sent) != 2 || sent[0] != "/clear" || !strings.Contains(sent[1], "Do the eye check of #12 on staging") {
+		t.Fatalf("sent = %q, want a clear context and the eye-check order", sent)
+	}
+}
+
+func TestRestingWorkerWakesWhenMergedWorkReachesStaging(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, Verdict{Verdict: runlog.VerdictDone, Reason: "nothing to do"}, assign(7))
+	f.lister.issues = nil
+	reader := withStaging(f, look(7, 41, looks.Awaiting))
+	f.tick(2 * time.Minute)
+	f.tick(queueRecheck + time.Minute)
+	if len(f.reviewer.prompts) != 1 {
+		t.Fatalf("reviewed %d times while the look waited for a staging deploy, want 1", len(f.reviewer.prompts))
+	}
+
+	reader.looks = []looks.Look{look(7, 41, looks.Due)}
+	f.tick(queueRecheck + time.Minute)
+	if len(f.term.sent) != 1 || !strings.HasSuffix(f.term.sent[0], "change no code.") {
+		t.Fatalf("sent = %q; staging now serves the work", f.term.sent)
+	}
+}
+
+func TestLooksThatCannotBeReadDoNotStopTheBuilding(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	withStaging(f).err = errors.New("org/app: read staging's commit: exit status 7")
+	f.tick(2 * time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; the queue of issues to build does not depend on staging", f.term.sent)
+	}
+}
+
+func TestBriefSaysHowAnEyeCheckPassesFailsAndIsBlocked(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	withStaging(f)
+	f.tick(0)
+
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	for _, want := range []string{
+		"## Eye checks",
+		"- org/app: staging is https://staging.example.com.",
+		"What you may do there: Open pages and cancel a draft.\n  Never send a message.",
+		"is after `Needs eyes:`",
+		"starts with `Eyes checked:`",
+		"headed `Hand-back`. Write `Eyes failed:`",
+		"then `Decisions needed:`",
+		"Say here `Blocked:` and why, and stop. A check you could not do has not passed.",
+	} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+}
+
+func TestBriefOfAWorkerWithoutABrowserHasNoEyeChecks(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	f.tick(0)
+
+	if brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile)); strings.Contains(string(brief), "Eye checks") {
+		t.Fatalf("brief:\n%s", brief)
+	}
+}
+
+func TestReviewerIsToldABlockedEyeCheckNeedsTheOwner(t *testing.T) {
+	if !strings.Contains(instructions, "A blocked check has not passed. Choose needs_owner") {
+		t.Fatal("the reviewer is not told what to do with an eye check that could not be done")
 	}
 }

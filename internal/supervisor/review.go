@@ -45,14 +45,17 @@ type QueueItem struct {
 	Model string
 	// Rework says why an issue that was handed back needs a worker again.
 	Rework string
+	// Look says why the item is an eye check on staging and not work to
+	// build: its pull request is merged and staging serves it.
+	Look string
 	// rank is the issue's place in its source's priority order.
 	rank int
 }
 
 // Workable reports whether a worker can act on the item: it needs a worker
-// again, or it does not wait on the owner.
+// again, it is an eye check, or it does not wait on the owner.
 func (q QueueItem) Workable() bool {
-	return q.Rework != "" || len(q.Waiting) == 0
+	return q.Rework != "" || q.Look != "" || len(q.Waiting) == 0
 }
 
 // ReviewInput is everything the reviewer is shown.
@@ -79,7 +82,7 @@ const instructions = `You supervise an unattended AI coding worker. Its owner is
 Choose one verdict:
 
 - on_track: the worker is doing work that its brief covers, or it waits on a command, a background task or a timer that it started itself. Say nothing.
-- nudge: one short message from you would get useful work moving. Use it when the worker has finished an item or waits for its first one and the queue has an item it can act on (give it the first workable item of the queue, which is in the order to work it, and put that number in "issue"; an item is workable when it is marked rework, or when it does not wait on the owner), when it asked a question that the brief already answers, when its work has left the brief, when it repeats an approach that keeps failing, or when it waits for something that will not come.
+- nudge: one short message from you would get useful work moving. Use it when the worker has finished an item or waits for its first one and the queue has an item it can act on (give it the first workable item of the queue, which is in the order to work it, and put that number in "issue"; an item is workable when it is marked rework or eye check, or when it does not wait on the owner), when it asked a question that the brief already answers, when its work has left the brief, when it repeats an approach that keeps failing, or when it waits for something that will not come.
 - needs_owner: nothing useful can move until the owner acts. Also use it when the terminal shows a permission prompt, a menu or any dialog: you must never type into one. A one-line survey from the tool itself (for example "How is this session going? 1: Bad 2: Fine 3: Good 0: Dismiss") is not a dialog and does not block the worker: ignore it.
 - done: the queue has no item the worker can act on and the worker has reported its work. Leave it idle; an idle worker costs nothing.
 - limited: the terminal shows that the worker reached a usage limit or a rate limit and must wait for it to reset. Nothing you type can help before then, and a message would be wasted. Set "resume_in_minutes" to the minutes from the current time until the reset the terminal names; 0 if it names none.
@@ -87,6 +90,8 @@ Choose one verdict:
 Rules for the message of a nudge:
 - One line, plain words, specific. Name the issue number, the file or the command.
 - An item marked rework was handed back with a pull request that cannot merge as it stands. Say what is wrong with the pull request and tell the worker to fix that and nothing else, even if the item also waits on the owner for something.
+- An item marked eye check is merged work that someone must look at on staging before it goes to production. It is not work to build. Hand it over like any other item; the worker's brief says how an eye check is done.
+- A worker that could not do an eye check is blocked: it could not sign in, staging was down, the description was too vague to judge, or the check needs an act its orders forbid. A blocked check has not passed. Choose needs_owner and say in the reason what blocked it. Do not hand the worker another item until the owner has acted.
 - Keep the worker inside its brief. Work that the brief does not cover is out of scope, however useful.
 - Do not make a decision that belongs to the owner: product behaviour, money, scope beyond the brief, merging, deploying, production, credentials. Tell the worker to write the question and its recommendation in the issue, then take the next item.
 - Never tell the worker to skip or weaken a test, bypass a hook, merge, or deploy.
@@ -118,6 +123,9 @@ func Prompt(in ReviewInput) string {
 		fmt.Fprintf(&b, "%s#%d %s", q.Repo, q.Number, q.Title)
 		if q.Rework != "" {
 			fmt.Fprintf(&b, " [rework: %s]", q.Rework)
+		}
+		if q.Look != "" {
+			fmt.Fprintf(&b, " [eye check: %s]", q.Look)
 		}
 		if len(q.Waiting) > 0 {
 			fmt.Fprintf(&b, " [waits on the owner: %s]", strings.Join(q.Waiting, ", "))

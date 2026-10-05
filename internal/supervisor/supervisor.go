@@ -19,6 +19,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
@@ -58,7 +59,10 @@ const (
 	briefChangedThen = "Your brief changed. Read " + BriefFile + " again. Then: "
 	reorient         = "Your context was cleared. Read " + BriefFile + " first, then check git status, git log and the issue comments to see where the work stands. Then: "
 	modelTold        = " The model for this issue is %s."
-	clearSettling    = 2 * time.Second
+	// lookOrder hands over an eye check. It is not left to the reviewer's
+	// words: a worker that took it for work to build would start a branch.
+	lookOrder     = "Do the eye check of #%d on staging: %s. Follow the Eye checks section of " + BriefFile + " and change no code."
+	clearSettling = 2 * time.Second
 )
 
 // Check-in kinds: why the supervisor looked.
@@ -86,8 +90,13 @@ type Supervisor struct {
 	Terminal       Terminal
 	Reviewer       Reviewer
 	Lister         backlog.Lister
-	StateDir       string
-	Now            func() time.Time
+	// Repos is what the fleet file says about each repository's deploys, and
+	// Looks reads the eye checks that merged work still owes. Looks may be
+	// nil: then no worker is handed one.
+	Repos    []config.Repo
+	Looks    LookReader
+	StateDir string
+	Now      func() time.Time
 	// Busy says why the machine has no room for new work, or "" when it
 	// has. Nil means it always has room.
 	Busy func(ctx context.Context) string
@@ -99,6 +108,14 @@ type Supervisor struct {
 	Logf  func(format string, args ...any)
 
 	workers map[string]*workerState
+	// lookError is the last failure to read the looks, so that it is logged
+	// once and not at every queue check.
+	lookError string
+}
+
+// LookReader reads the eye checks a repository's merged work still owes.
+type LookReader interface {
+	Read(ctx context.Context, repo config.Repo, sources []config.IssueSource, open []backlog.Issue, signals []config.Signal) (looks.Report, error)
 }
 
 // workerState is what the supervisor remembers between ticks. A new agent
@@ -129,8 +146,17 @@ type workerState struct {
 	model string
 	// issue is the issue the worker was last handed; 0 when it has had none
 	// since its session started.
-	issue  int
+	issue int
+	// look is set when that issue was handed over for an eye check.
+	look   bool
 	recent []runlog.Checkin
+}
+
+// handsOver reports whether a nudge that names this queue item gives the
+// worker new work. A nudge may name the issue the worker is already on. An
+// eye check of work it built earlier and still has in hand is new work.
+func (st *workerState) handsOver(issue int, item QueueItem) bool {
+	return issue != 0 && (issue != st.issue || (item.Look != "") != st.look)
 }
 
 // lastVerdict is the verdict of the worker's latest check-in.
@@ -314,7 +340,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 		return err
 	}
 	st.starts = append(st.starts, now)
-	st.lastReview, st.model, st.issue = now, "", 0
+	st.lastReview, st.model, st.issue, st.look = now, "", 0, false
 	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: runlog.VerdictStarted, Message: command, Sent: true})
 	return nil
 }
@@ -343,13 +369,13 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	// The worker has reached a point where nothing is in progress: it is done,
 	// or it is about to be given another issue. A fresh session that was
 	// asked for starts here; the hand-over happens in the new session.
+	item, inQueue := find(queue, verdict.Issue)
 	if pending, _ := s.recycleRequested(w.Name); pending {
-		handOver := verdict.Verdict == runlog.VerdictNudge && verdict.Issue != 0 && verdict.Issue != st.issue
+		handOver := verdict.Verdict == runlog.VerdictNudge && st.handsOver(verdict.Issue, item)
 		if handOver || verdict.Verdict == runlog.VerdictDone {
 			return s.recycle(w, st, now)
 		}
 	}
-	item, inQueue := find(queue, verdict.Issue)
 	if verdict.Issue != 0 && !inQueue {
 		// Another worker may have it in hand, or the reviewer made it up.
 		return fmt.Errorf("the reviewer handed over #%d, which is not in this worker's queue", verdict.Issue)
@@ -371,7 +397,7 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	if verdict.Verdict == runlog.VerdictNudge {
 		// A different issue is a hand-over: new work for the machine. It is
 		// held while the machine is busy with something else.
-		handOver := verdict.Issue != 0 && verdict.Issue != st.issue
+		handOver := st.handsOver(verdict.Issue, item)
 		if reason := s.busy(ctx); handOver && reason != "" {
 			st.held = &heldHandOver{verdict: verdict, since: now, activity: obs.LastActivity}
 			c.Verdict, c.Issue = runlog.VerdictHeld, verdict.Issue
@@ -400,10 +426,11 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 	// issue into the next. In each case a cleared context that
 	// re-reads the brief costs less.
 	c.Cold = idle > s.Settings.CacheTTLOrDefault()
+	newIssue := st.handsOver(verdict.Issue, item)
+	if newIssue && item.Look != "" {
+		verdict.Message, c.Look = fmt.Sprintf(lookOrder, verdict.Issue, item.Look), true
+	}
 	c.Message, c.Issue = verdict.Message, verdict.Issue
-	// A nudge may name the issue the worker is already on. Only a
-	// different issue is a hand-over.
-	newIssue := verdict.Issue != 0 && verdict.Issue != st.issue
 	model := item.Model
 	c.Rework = item.Rework
 	tellOnly := s.Settings.Models.TellOnly()
@@ -434,7 +461,7 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 		st.model, c.Model = model, model
 	}
 	if newIssue {
-		st.issue = verdict.Issue
+		st.issue, st.look = verdict.Issue, item.Look != ""
 	}
 	if tellOnly && model != "" {
 		c.Model = model
@@ -512,7 +539,7 @@ func (s *Supervisor) recycle(w config.Worker, st *workerState, now time.Time) er
 	if err := os.Remove(filepath.Join(s.StateDir, runlog.RecycleDir, w.Name)); err != nil {
 		return fmt.Errorf("worker %s: clear the recycle request: %w", w.Name, err)
 	}
-	st.issue, st.model, st.limitedUntil = 0, "", time.Time{}
+	st.issue, st.look, st.model, st.limitedUntil = 0, false, "", time.Time{}
 	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindRecycle, Verdict: runlog.VerdictRecycled, Reason: "its session was ended so that a fresh one starts"})
 	return nil
 }
@@ -544,11 +571,11 @@ func (s *Supervisor) recover(worker string) *workerState {
 		switch {
 		case c.Verdict == runlog.VerdictStarted:
 			// A new session: nothing in hand, the model its command gave it.
-			st.issue, st.model, st.briefStale = 0, "", false
+			st.issue, st.look, st.model, st.briefStale = 0, false, "", false
 			st.starts = append(st.starts, c.Time)
 			st.lastReview = c.Time
 		case c.Verdict == runlog.VerdictRecycled:
-			st.issue, st.model, st.limitedUntil = 0, "", time.Time{}
+			st.issue, st.look, st.model, st.limitedUntil = 0, false, "", time.Time{}
 		case c.Kind == KindBrief:
 			st.briefStale = !c.Sent
 		case c.Verdict == runlog.VerdictLimited && c.Activity.IsZero():
@@ -571,7 +598,7 @@ func (s *Supervisor) recover(worker string) *workerState {
 			st.nudges = append(st.nudges, c.Time)
 			st.briefStale = false
 			if c.Issue != 0 {
-				st.issue = c.Issue
+				st.issue, st.look = c.Issue, c.Look
 			}
 			if c.Model != "" {
 				st.model = c.Model
@@ -585,9 +612,9 @@ func (s *Supervisor) recover(worker string) *workerState {
 }
 
 // queue lists the worker's open issues in the order to work them: rework
-// first, since finishing started work beats starting more, then by the
-// owner's priority, then oldest first. An issue that another worker has in
-// hand is not in it.
+// first, since finishing started work beats starting more, then the eye
+// checks that are due on staging, then by the owner's priority, then oldest
+// first. An issue that another worker has in hand is not in it.
 func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, error) {
 	checkins, err := runlog.ReadCheckins(s.StateDir)
 	if err != nil {
@@ -600,11 +627,13 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		}
 	}
 	items := []QueueItem{}
+	var open []backlog.Issue
 	for _, src := range s.Machine.SourcesFor(w) {
 		issues, err := s.Lister.List(ctx, src)
 		if err != nil {
 			return nil, err
 		}
+		open = append(open, issues...)
 		for _, i := range issues {
 			if taken[i.Number] {
 				continue
@@ -621,11 +650,15 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 			items = append(items, item)
 		}
 	}
+	items = s.withLooks(ctx, w, items, open, checkins)
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
 		switch {
 		case (x.Rework != "") != (y.Rework != ""):
 			return x.Rework != ""
+		case (x.Look != "") != (y.Look != ""):
+			// Merged work that waits for a look holds up a release.
+			return x.Look != ""
 		case x.rank != y.rank:
 			return x.rank < y.rank
 		case x.Repo != y.Repo:
@@ -634,6 +667,59 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		return x.Number < y.Number
 	})
 	return items, nil
+}
+
+// withLooks adds the eye checks that are due on staging to the queue of a
+// worker that does them. A look replaces the issue's ordinary item. Where
+// another worker on the machine could do it, the look does not go to the
+// worker that built the work: a second reader catches a vague description.
+func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []QueueItem, open []backlog.Issue, checkins []runlog.Checkin) []QueueItem {
+	if !w.EyeChecks || s.Looks == nil {
+		return items
+	}
+	// A look is taken when another worker was handed it as a look. The
+	// worker that built the work may still have the issue in hand.
+	taken := map[int]bool{}
+	for _, other := range s.Machine.Workers {
+		if issue, look := runlog.InHand(checkins, other.Name); look && other.Name != w.Name {
+			taken[issue] = true
+		}
+	}
+	sources := s.Machine.SourcesFor(w)
+	inQueue := func(repo string) func(config.IssueSource) bool {
+		return func(src config.IssueSource) bool { return src.Repo == repo }
+	}
+	failure := ""
+	for _, repo := range s.Repos {
+		if !slices.ContainsFunc(sources, inQueue(repo.Name)) {
+			continue
+		}
+		report, err := s.Looks.Read(ctx, repo, sources, open, s.Signals)
+		if err != nil {
+			// Building goes on without the looks. They stay undone, which
+			// shed status shows; they are never taken as done.
+			failure = err.Error()
+			continue
+		}
+		choice := slices.ContainsFunc(s.Machine.Workers, func(other config.Worker) bool {
+			return other.Name != w.Name && other.EyeChecks && slices.ContainsFunc(s.Machine.SourcesFor(other), inQueue(repo.Name))
+		})
+		for _, look := range report.Looks {
+			if look.State != looks.Due || taken[look.Number] || (choice && runlog.Builder(checkins, look.Number) == w.Name) {
+				continue
+			}
+			items = slices.DeleteFunc(items, func(q QueueItem) bool { return q.Repo == look.Repo && q.Number == look.Number })
+			items = append(items, QueueItem{Repo: look.Repo, Number: look.Number, Title: look.Title,
+				Look: fmt.Sprintf("pull request #%d is on staging", look.PR), Model: s.Settings.Models.For(nil)})
+		}
+	}
+	if failure != s.lookError {
+		s.lookError = failure
+		if failure != "" {
+			s.Logf("eye checks cannot be read and are not handed out: %s", failure)
+		}
+	}
+	return items
 }
 
 // find returns the queue item with this number.
@@ -648,15 +734,15 @@ func find(queue []QueueItem, number int) (QueueItem, bool) {
 
 // fingerprint is a digest of what the queue holds for a worker to do: its
 // workable items. It changes when one joins or leaves, when the owner's
-// answer frees an issue, or when a handed-back pull request needs a worker
-// again. An issue that only waits on the owner is not in it: a label, a
+// answer frees an issue, when a handed-back pull request needs a worker
+// again, or when merged work reaches staging and is due a look. An issue that only waits on the owner is not in it: a label, a
 // comment or a new hand-back that gives a worker nothing to do must not cost
 // every resting worker a review.
 func fingerprint(queue []QueueItem) string {
 	h := sha256.New()
 	for _, q := range queue {
 		if q.Workable() {
-			fmt.Fprintf(h, "%s#%d:%s;", q.Repo, q.Number, q.Rework)
+			fmt.Fprintf(h, "%s#%d:%s:%s;", q.Repo, q.Number, q.Rework, q.Look)
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
@@ -727,6 +813,7 @@ func (s *Supervisor) briefText(w config.Worker) string {
 		}
 		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nBefore you start an issue, check whether an open pull request or an unmerged branch already covers it (`gh pr list --search <number>`, `git fetch` and `git branch -r`). If one does and the supervisor did not send you back to that pull request, do not start it: another worker has it. Report what you found in the issue as a decision for the owner, say so here, and stop.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\n")
 	}
+	s.eyeCheckBrief(&b, w)
 	b.WriteString(`
 ## You work unattended
 
@@ -747,6 +834,59 @@ new brief.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
 `)
 	return b.String()
+}
+
+// eyeCheckBrief tells a worker that does eye checks where staging is, what
+// it may do there, and what to write for a pass, a failure and a check it
+// could not do.
+func (s *Supervisor) eyeCheckBrief(b *strings.Builder, w config.Worker) {
+	if !w.EyeChecks {
+		return
+	}
+	eyes, decision := s.signal(config.EyesSignal), s.signal("decision")
+	b.WriteString(`
+## Eye checks
+
+Some hand-overs are eye checks, and the supervisor says so. The work is
+merged and staging serves it. Someone must look at it there before it goes to
+production, and that is you. It is not work to build.
+
+`)
+	for _, src := range s.Machine.SourcesFor(w) {
+		for _, repo := range s.Repos {
+			if repo.Name != src.Repo {
+				continue
+			}
+			fmt.Fprintf(b, "- %s: staging", repo.Name)
+			if repo.Staging.URL != "" {
+				fmt.Fprintf(b, " is %s", repo.Staging.URL)
+			}
+			b.WriteString(".\n")
+			if orders := strings.TrimSpace(repo.Staging.Orders); orders != "" {
+				fmt.Fprintf(b, "  What you may do there: %s\n", strings.ReplaceAll(orders, "\n", "\n  "))
+			}
+		}
+	}
+	fmt.Fprintf(b, `
+How to do one:
+
+- Read the issue's last hand-back. What to look at, and what a pass looks like, is after `+"`%s`"+`.
+- Look on staging only, in a browser. Change no code and open no branch.
+- On staging, do only what is allowed above. An act that is not named there is not allowed.
+- It passes: post a comment on the issue that starts with `+"`%s:`"+` and says what you saw.
+- It fails: reopen the issue (`+"`gh issue reopen`"+`) and post a comment headed `+"`%s`"+`. Write `+"`%s:`"+` with what you saw against what was expected, then `+"`%s`"+` with the question for the owner and your recommendation. Do not fix it.
+- You could not do it (you cannot sign in, staging is down, the description is too vague to judge, the check needs an act that is not allowed): you are blocked. Post nothing that says checked or failed. Say here `+"`Blocked:`"+` and why, and stop. A check you could not do has not passed.
+`, eyes.Ask, eyes.AnsweredBy, eyes.HandBack, eyes.FailedBy, decision.Ask)
+}
+
+// signal returns the signal with this name.
+func (s *Supervisor) signal(name string) config.Signal {
+	for _, sig := range s.Signals {
+		if sig.Name == name {
+			return sig
+		}
+	}
+	return config.Signal{}
 }
 
 // scope is what the worker must stay inside: its brief and the owner's
