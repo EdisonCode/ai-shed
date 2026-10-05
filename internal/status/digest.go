@@ -129,11 +129,7 @@ func RenderDigest(w io.Writer, d Digest) {
 					continue
 				}
 				seen[key] = true
-				what := a.Name
-				if a.PR != 0 {
-					what += fmt.Sprintf(" #%d", a.PR)
-				}
-				waiting = append(waiting, waitingItem{issue: i, what: what, since: a.Since})
+				waiting = append(waiting, waitingItem{issue: i, what: a.What(), since: a.Since})
 			}
 		}
 	}

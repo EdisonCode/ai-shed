@@ -323,7 +323,7 @@ func DefaultSignals() []Signal {
 	return withHandBack(DefaultHandBack, []Signal{
 		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true, Accept: []string{"accepted"}},
 		{Name: EyesSignal, Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked", FailedBy: "Eyes failed", BlockedBy: DefaultBlockedBy, UnblockedBy: DefaultUnblockedBy},
-		{Name: "review", Ask: "**PR:**", FollowsPR: true},
+		{Name: "review", Ask: "**PR:**", Clear: []string{"none"}, FollowsPR: true},
 	})
 }
 

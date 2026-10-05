@@ -309,6 +309,11 @@ func TestIssueInHandOfASupervisedWorkerIsWorking(t *testing.T) {
 	}
 }
 
+func TestWaitingReviewWithNoPullRequestSaysSo(t *testing.T) {
+	r := Assess(config.Machine{}, signals, now, healthy(), []backlog.Issue{issue(7, "## Hand-back\n**PR:** not opened yet, branch pushed")})
+	wantAttention(t, r, "org/app#7 waits on you (review (no pull request named)): Fix the thing")
+}
+
 func TestQueueBehindAnIdleSupervisedWorkerIsNotAnAlarm(t *testing.T) {
 	res := healthy()
 	res.Checkins = []runlog.Checkin{checkin(runlog.VerdictOnTrack, "waiting for its first issue")}

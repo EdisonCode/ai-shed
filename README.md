@@ -607,7 +607,7 @@ hand-back: a comment that contains the word `Hand-back` (configurable as
 | --- | --- | --- | --- |
 | decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker, unless it reads `Owner ruling: accepted`) |
 | eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked`, or `Eyes failed` from a worker that looked on staging |
-| review | `**PR:** #41` | | that pull request is merged or closed |
+| review | `**PR:** #41` | `none` | that pull request is merged or closed |
 
 While that pull request is open but cannot merge (a conflict, a failed check),
 the issue does not wait on you: it goes back to a worker. See *The queue*.
@@ -615,6 +615,14 @@ the issue does not wait on you: it goes back to a worker. See *The queue*.
 The review signal follows its pull request (`follows_pr`). An issue that takes
 several pull requests comes back into the queue each time one is merged, and
 the worker picks up the rest from what the issue says.
+
+A hand-back with no pull request, such as a plan for you to rule on, writes
+`**PR:** none`: there is nothing to review, so the review signal stays closed.
+Your `Owner ruling` then closes the decision and the issue is in the queue
+again like any other. It is not rework, which needs an open pull request, so
+it takes its turn by the queue order. A `**PR:**` line that says anything else
+without a number opens a review that no merge can close; `shed status` and
+`shed digest` show it as `review (no pull request named)`.
 
 An ask counts only in a hand-back comment. The same words in a plan, a brief
 or a discussion on the issue ask you nothing and hold nothing back. Your

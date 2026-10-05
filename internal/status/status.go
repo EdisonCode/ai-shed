@@ -416,10 +416,7 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 func askWords(asks []backlog.Ask, now time.Time) string {
 	words := make([]string, len(asks))
 	for i, a := range asks {
-		words[i] = a.Name
-		if a.PR != 0 {
-			words[i] += fmt.Sprintf(" #%d", a.PR)
-		}
+		words[i] = a.What()
 		if !a.Since.IsZero() {
 			words[i] += " " + Short(now.Sub(a.Since))
 		}
