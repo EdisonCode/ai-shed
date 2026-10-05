@@ -706,3 +706,15 @@ func TestBumpedIssueIsMarkedAndNeedsNothing(t *testing.T) {
 		t.Fatalf("report:\n%s", got)
 	}
 }
+
+func TestPausedMachineSaysSoAndNeedsNothing(t *testing.T) {
+	res := healthy()
+	res.PausedUntil = now.Add(22 * time.Minute)
+	r := Assess(config.Machine{Name: "box"}, signals, now, res, nil)
+	wantAttention(t, r)
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	if !strings.Contains(out.String(), "paused   for another 22m: nothing is handed out and no worker is nudged") {
+		t.Fatalf("report:\n%s", out.String())
+	}
+}

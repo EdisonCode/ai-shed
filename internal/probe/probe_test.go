@@ -172,3 +172,14 @@ func TestParseReadsTheIssuesTheOwnerPutFirst(t *testing.T) {
 		t.Fatalf("bumps = %v", res.Bumps)
 	}
 }
+
+func TestParseReadsAPauseThatStillHolds(t *testing.T) {
+	res, err := Parse("@@now 1790000000\n@@pause 1790001800\n@@end\n", nil)
+	if err != nil || res.PausedUntil.Unix() != 1790001800 {
+		t.Fatalf("paused until %v, %v", res.PausedUntil, err)
+	}
+	res, err = Parse("@@pause 1789999000\n@@now 1790000000\n@@end\n", nil)
+	if err != nil || !res.PausedUntil.IsZero() {
+		t.Fatalf("paused until %v, %v; that pause has run out", res.PausedUntil, err)
+	}
+}

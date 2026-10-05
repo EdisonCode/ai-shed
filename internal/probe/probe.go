@@ -33,6 +33,9 @@ type Result struct {
 	Marks map[string]runlog.Mark `json:"-"`
 	// Tasks are the one-off tasks on the machine, waiting or handed over.
 	Tasks []Task `json:"-"`
+	// PausedUntil is when the owner's pause of the machine ends, by the
+	// machine's clock; zero when it is not paused.
+	PausedUntil time.Time `json:"paused_until,omitzero"`
 	// Bumps are the issues the owner put first in line, by number, each with
 	// the worker it goes to; "" for the workers whose queue it is in.
 	Bumps map[int]string `json:"-"`
@@ -74,6 +77,7 @@ s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 100 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
 [ -d "$s/` + runlog.RecycleDir + `" ] && ls "$s/` + runlog.RecycleDir + `" | sed 's/^/@@recycle /'
 for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(basename "$(dirname "$f")") $(basename "$f" .md)"; done
+[ -f "$s/` + runlog.PauseFile + `" ] && echo "@@pause $(cat "$s/` + runlog.PauseFile + `")"
 for f in "$s/` + runlog.BumpsDir + `"/*; do [ -f "$f" ] && echo "@@bump $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
 echo "@@end"
@@ -111,6 +115,7 @@ func Parse(out string, checks []config.Check) (Result, error) {
 		res.Checks[i].Name = c.Name
 	}
 	complete := false
+	var pausedUntil time.Time
 	for _, line := range strings.Split(out, "\n") {
 		tag, rest, _ := strings.Cut(line, " ")
 		switch tag {
@@ -155,6 +160,8 @@ func Parse(out string, checks []config.Check) (Result, error) {
 			if where, id, ok := strings.Cut(strings.TrimSpace(rest), " "); ok {
 				res.Tasks = append(res.Tasks, Task{Where: where, ID: id})
 			}
+		case "@@pause":
+			pausedUntil, _ = runlog.ParsePause(rest)
 		case "@@bump":
 			// A request that was still being written has another name.
 			number, worker, _ := strings.Cut(strings.TrimSpace(rest), " ")
@@ -183,6 +190,10 @@ func Parse(out string, checks []config.Check) (Result, error) {
 	}
 	if !complete || res.Now.IsZero() {
 		return Result{}, fmt.Errorf("probe output is incomplete (%d bytes)", len(out))
+	}
+	// A pause that has run out is no pause.
+	if pausedUntil.After(res.Now) {
+		res.PausedUntil = pausedUntil
 	}
 	return res, nil
 }

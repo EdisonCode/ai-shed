@@ -291,6 +291,33 @@ func TestCancelRemovesOnlyATaskThatStillWaits(t *testing.T) {
 	}
 }
 
+func TestPauseHoldsTheMachineUntilItRunsOutOrIsResumed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ctx, r := context.Background(), probe.ShellRunner{}
+	state := filepath.Join(home, runlog.StateDir)
+
+	if resumed, err := Resume(ctx, r, here); err != nil || resumed {
+		t.Fatalf("resume of a machine that is not paused = %v, %v", resumed, err)
+	}
+	until, err := Pause(ctx, r, here, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left := time.Until(until); left < 29*time.Minute || left > 31*time.Minute {
+		t.Fatalf("paused for %s, want 30m", left)
+	}
+	if got, ok := runlog.PausedUntil(state, time.Now()); !ok || !got.Equal(until) {
+		t.Fatalf("the agent reads %v, %v; the command said %v", got, ok, until)
+	}
+	if resumed, err := Resume(ctx, r, here); err != nil || !resumed {
+		t.Fatalf("resume = %v, %v", resumed, err)
+	}
+	if _, ok := runlog.PausedUntil(state, time.Now()); ok {
+		t.Fatal("the machine is still paused")
+	}
+}
+
 func TestBumpLeavesARequestForTheAgentAndUnbumpTakesItBack(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

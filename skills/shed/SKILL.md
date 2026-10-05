@@ -1,6 +1,6 @@
 ---
 name: shed
-description: Operate an ai-shed fleet of worker machines for the owner. Use when the owner wants to queue GitHub issues for a worker machine, label issues for a machine or a model, move an urgent issue to the front of a queue or to a worker that is free ("bump"), write or change a worker's brief, deploy the fleet file, check what the machines did ("shed status", "what did the workers do", "what needs me"), answer a worker's question, or set up a new machine. Also read this when you are a worker and your directory has .shed/BRIEF.md.
+description: Operate an ai-shed fleet of worker machines for the owner. Use when the owner wants to queue GitHub issues for a worker machine, label issues for a machine or a model, move an urgent issue to the front of a queue or to a worker that is free ("bump"), pause a machine so a heavy job can finish, write or change a worker's brief, deploy the fleet file, check what the machines did ("shed status", "what did the workers do", "what needs me"), answer a worker's question, or set up a new machine. Also read this when you are a worker and your directory has .shed/BRIEF.md.
 ---
 
 # Operating the shed
@@ -91,6 +91,17 @@ nothing in progress, and a resting worker takes it within five minutes. An
 issue a worker already has in hand stays with it; a bump does not move
 started work. `shed status` shows `(bumped)` on the issue. A bump works
 inside one machine. To move an issue to another machine, change its label.
+
+## Pause a machine
+
+When something heavy on a worker machine must finish first (a deploy build
+that keeps timing out, a migration), `shed pause <machine>` makes the agent
+leave its workers alone for 30 minutes, or `-for 1h`. Nothing is handed out
+and nobody is nudged; a worker finishes the turn it is in and then waits, so
+the load falls gradually. It does not stop work in progress. `shed resume
+<machine>` ends it early, and it runs out by itself. Pause before you start
+the heavy job, not after it has failed. Do not stop a worker's session or
+type into it to free up the machine.
 
 ## Push a one-off task
 

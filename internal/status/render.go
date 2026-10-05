@@ -143,6 +143,9 @@ func renderMachine(w io.Writer, r MachineReport) {
 	} else {
 		p := r.Probe
 		fmt.Fprintf(w, "%s  %s  load %.2f/%d  disk %d%%  agent %s\n", r.Name, r.Host, p.Load1, p.Cores, p.DiskUsedPct, agentWord(r))
+		if !p.PausedUntil.IsZero() {
+			fmt.Fprintf(w, "  paused   for another %s: nothing is handed out and no worker is nudged\n", Short(p.PausedUntil.Sub(p.Now)))
+		}
 		if len(p.Checks) > 0 {
 			words := make([]string, len(p.Checks))
 			for i, c := range p.Checks {

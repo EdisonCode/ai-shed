@@ -341,6 +341,34 @@ A task has no issue behind it, so nothing in the queue rules applies to it:
 no rework, no signals, no retries. If it leads to a pull request, that pull
 request is reviewed like any other.
 
+### Pausing a machine
+
+Sometimes one heavy job on the machine has to finish first: a deploy build,
+a migration, a CI run that keeps timing out beside four busy workers. Tell
+the agent to leave the workers alone for a while:
+
+```sh
+shed pause linux-box            # for 30 minutes
+shed pause -for 1h linux-box
+shed resume linux-box           # end it early
+```
+
+- **Nothing is typed into any worker while it lasts.** No issue or task is
+  handed over, nobody is nudged, and a session that ended is not started.
+  The reviewer is not asked anything either.
+- **Work in progress is not stopped.** A worker goes on with the turn it is
+  in and then waits, so the load falls as the workers come to rest, not at
+  once. shed does not freeze or kill a worker's processes.
+- **A pause always runs out.** One you forgot must not idle the machine for
+  the whole of an absence. When it ends, or on `shed resume`, the next tick
+  finds each worker as it is and carries on: an idle one is reviewed and
+  given its next item.
+- Scheduled `tasks` still run. `shed status` shows how long the pause has
+  left.
+
+For load that comes and goes by itself, use the machine's `capacity`
+instead: it holds new work automatically and needs nobody to say so.
+
 ### Machine capacity
 
 A machine often has other work: CI runners, builds, a database. Tell shed how

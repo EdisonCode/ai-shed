@@ -27,6 +27,8 @@ Usage:
   shed bump [-worker name] <machine> <issue>
                                     put an open issue first in its queue, or in that worker's
   shed bump -undo <machine> <issue> put it back in its usual place
+  shed pause [-for 30m] <machine>   hand out nothing and nudge nobody for a while
+  shed resume <machine>             end a pause early
   shed recycle [-now] <machine> <worker>
                                     give a worker a fresh session after its current issue
   shed tidy [-apply] <machine>      list the worktrees and branches whose pull request is merged;
@@ -76,6 +78,10 @@ func main() {
 		code = cmdTidy(args)
 	case "task":
 		code = cmdTask(args)
+	case "pause":
+		code = cmdPause(args)
+	case "resume":
+		code = cmdResume(args)
 	case "bump":
 		code = cmdBump(args)
 	case "digest":
