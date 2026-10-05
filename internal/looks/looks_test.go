@@ -116,7 +116,7 @@ func TestWindowStartsAtProductionsCommitOrTheLookBackLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := now.Add(-tc.want); !report.Since.Equal(want) || !gh.closedSince.Equal(want) {
+		if want := now.Add(-tc.want); !report.Since.Equal(want) || !gh.closedSince.Equal(want) || report.SinceProduction != (tc.want == tc.deployed) {
 			t.Errorf("%s: window starts %s (closed issues asked since %s), want %s", tc.name, report.Since, gh.closedSince, want)
 		}
 	}

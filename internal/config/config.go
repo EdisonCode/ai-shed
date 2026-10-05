@@ -239,6 +239,14 @@ type IssueSource struct {
 	Priority []string `yaml:"priority"`
 }
 
+// IssueSourceKey says which issues a source selects. Two sources with the
+// same key list the same issues.
+type IssueSourceKey struct{ Repo, Label, Assignee string }
+
+func (s IssueSource) Key() IssueSourceKey {
+	return IssueSourceKey{s.Repo, s.Label, s.Assignee}
+}
+
 // Rank is the place of an issue with these labels in the source's priority
 // order: 0 is first. An issue with no priority label ranks after all of them.
 func (s IssueSource) Rank(labels []string) int {
@@ -566,12 +574,11 @@ func (m Machine) SourcesFor(w Worker) []IssueSource {
 // machine's and its workers'.
 func (m Machine) AllSources() []IssueSource {
 	var all []IssueSource
-	seen := map[string]bool{}
+	seen := map[IssueSourceKey]bool{}
 	add := func(sources []IssueSource) {
 		for _, src := range sources {
-			key := src.Repo + "\x00" + src.Label + "\x00" + src.Assignee
-			if !seen[key] {
-				seen[key] = true
+			if !seen[src.Key()] {
+				seen[src.Key()] = true
 				all = append(all, src)
 			}
 		}

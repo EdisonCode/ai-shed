@@ -11,6 +11,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/probe"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
@@ -133,7 +134,7 @@ func TestRenderTotalsWhatWaitsOnTheOwnerByKind(t *testing.T) {
 	}
 	var out bytes.Buffer
 	// The same issues are in the queue of two machines. They wait once.
-	Render(&out, []MachineReport{Assess(config.Machine{Name: "a"}, signals, now, healthy(), issues), Assess(config.Machine{Name: "b"}, signals, now, healthy(), issues)})
+	Render(&out, []MachineReport{Assess(config.Machine{Name: "a"}, signals, now, healthy(), issues), Assess(config.Machine{Name: "b"}, signals, now, healthy(), issues)}, nil)
 	want := "Waiting on you: 2 review (oldest 5h), 1 eyes (oldest 40m), 1 decision (oldest 2h)."
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("output lacks %q:\n%s", want, out.String())
@@ -238,7 +239,7 @@ func TestRenderSummarizesWhatNeedsTheOwner(t *testing.T) {
 	res := healthy()
 	res.Checks = []probe.CheckResult{{Name: "claude"}}
 	var out bytes.Buffer
-	Render(&out, []MachineReport{Assess(config.Machine{Name: "box", Host: "me@box"}, signals, now, res, nil)})
+	Render(&out, []MachineReport{Assess(config.Machine{Name: "box", Host: "me@box"}, signals, now, res, nil)}, nil)
 	for _, want := range []string{"box  me@box  load 0.50/8  disk 40%", "FAIL claude", "! check failed: claude", "1 item(s) need you."} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
@@ -248,7 +249,7 @@ func TestRenderSummarizesWhatNeedsTheOwner(t *testing.T) {
 
 func TestRenderSaysWhenAllIsWell(t *testing.T) {
 	var out bytes.Buffer
-	Render(&out, []MachineReport{Assess(config.Machine{Name: "box"}, signals, now, healthy(), nil)})
+	Render(&out, []MachineReport{Assess(config.Machine{Name: "box"}, signals, now, healthy(), nil)}, nil)
 	if !strings.Contains(out.String(), "All machines are on track.") {
 		t.Fatalf("output:\n%s", out.String())
 	}
@@ -329,7 +330,7 @@ func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
 	res.Checkins = []runlog.Checkin{handedOver(7)}
 	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b", Command: "claude --permission-mode auto"}}}
 	var out bytes.Buffer
-	Render(&out, []MachineReport{Assess(m, signals, now, res, nil)})
+	Render(&out, []MachineReport{Assess(m, signals, now, res, nil)}, nil)
 	for _, want := range []string{"shed:app    claude", "work:notes  2.1.289", "app  #7  nudge  20m ago"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
@@ -380,8 +381,76 @@ func TestPendingRecycleIsShownAndNeedsNothing(t *testing.T) {
 	r := Assess(appWorker, signals, now, res, nil)
 	wantAttention(t, r)
 	var out bytes.Buffer
-	Render(&out, []MachineReport{r})
+	Render(&out, []MachineReport{r}, nil)
 	if !r.Workers[0].RecyclePending || !strings.Contains(out.String(), "[fresh session pending]") {
 		t.Fatalf("worker = %+v\n%s", r.Workers[0], out.String())
+	}
+}
+
+type fakeLooks struct {
+	report looks.Report
+	err    error
+	open   []backlog.Issue
+}
+
+func (f *fakeLooks) Read(_ context.Context, _ config.Repo, _ []config.IssueSource, open []backlog.Issue, _ []config.Signal) (looks.Report, error) {
+	f.open = open
+	return f.report, f.err
+}
+
+func withRepo(eyeChecks bool) *config.Config {
+	cfg := oneMachine()
+	cfg.Machines[0].Workers = []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b", EyeChecks: eyeChecks}}
+	cfg.Repos = []config.Repo{{Name: "org/app", Staging: config.Environment{Commit: "true"}}}
+	return cfg
+}
+
+func releaseState() looks.Report {
+	asked := func(number, pr int, state string, ago time.Duration) looks.Look {
+		return looks.Look{Repo: "org/app", Number: number, Title: "Fix the thing", PR: pr, State: state, Since: now.Add(-ago)}
+	}
+	return looks.Report{Repo: "org/app", Staging: "aaaaaaa1111", Production: "bbbbbbb2222", Since: now.Add(-48 * time.Hour), SinceProduction: true, Merged: 14,
+		Looks: []looks.Look{asked(1, 41, looks.Due, 5*time.Hour), asked(2, 42, looks.Awaiting, 2*time.Hour), asked(4, 44, looks.Failed, time.Hour)}}
+}
+
+func TestRenderGivesTheGoOrNoGoForAProductionDeploy(t *testing.T) {
+	var out bytes.Buffer
+	Render(&out, nil, []RepoReport{{Report: releaseState(), Lookers: 1, Now: now}})
+	for _, want := range []string{
+		"org/app  staging aaaaaaa  production bbbbbbb",
+		"14 pull request(s) merged since production's commit, 2d ago",
+		"eye checks: 2 not done (1 on staging, 1 wait for a staging deploy), 1 failed",
+		"#1  PR #41  on staging         5h  Fix the thing",
+		"#2  PR #42  waits for staging  2h  Fix the thing",
+		"#4  PR #44  FAILED             1h  Fix the thing",
+		"All machines are on track.",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestLooksThatAreDueAreTheOwnersWhenNoWorkerDoesThem(t *testing.T) {
+	reader := &fakeLooks{report: releaseState()}
+	c := Collector{Lister: fakeLister{issues: []backlog.Issue{issue(7)}}, Looks: reader}
+
+	withBrowser := c.CollectRepos(context.Background(), withRepo(true))
+	if NeedsOwner(nil, withBrowser) || len(reader.open) != 1 {
+		t.Fatalf("attention = %q with a worker that does eye checks (open issues passed on: %d)", withBrowser[0].Attention(), len(reader.open))
+	}
+	without := c.CollectRepos(context.Background(), withRepo(false))
+	if got := without[0].Attention(); len(got) != 1 || !strings.Contains(got[0], "1 eye check(s) are due on staging and no worker does eye checks") {
+		t.Fatalf("attention = %q", got)
+	}
+}
+
+func TestReleaseStateThatCannotBeReadNeedsOwner(t *testing.T) {
+	c := Collector{Lister: fakeLister{}, Looks: &fakeLooks{err: errors.New("org/app: read staging's commit: exit status 7")}}
+	repos := c.CollectRepos(context.Background(), withRepo(true))
+	var out bytes.Buffer
+	Render(&out, nil, repos)
+	if !NeedsOwner(nil, repos) || !strings.Contains(out.String(), "! cannot read the release state: org/app: read staging's commit: exit status 7") {
+		t.Fatalf("output:\n%s", out.String())
 	}
 }

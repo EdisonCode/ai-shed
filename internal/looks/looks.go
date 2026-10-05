@@ -49,6 +49,9 @@ type Report struct {
 	// Since is where the window starts: production's commit, or the look-back
 	// limit when that is later.
 	Since time.Time `json:"since"`
+	// SinceProduction is set when the window starts at production's commit
+	// and not at the look-back limit.
+	SinceProduction bool `json:"since_production"`
 	// Merged counts the pull requests merged in the window.
 	Merged int    `json:"merged"`
 	Looks  []Look `json:"looks"`
@@ -94,7 +97,7 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 			return report, err
 		}
 		if deployed.After(report.Since) {
-			report.Since = deployed
+			report.Since, report.SinceProduction = deployed, true
 		}
 	}
 	merged, err := r.GitHub.MergedSince(ctx, repo.Name, report.Since)

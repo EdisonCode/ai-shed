@@ -14,6 +14,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/probe"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
@@ -97,6 +98,93 @@ type WorkerStatus struct {
 type Collector struct {
 	Runner probe.Runner
 	Lister backlog.Lister
+	// Looks reads the eye checks that merged work still owes. It is needed
+	// only for CollectRepos.
+	Looks LookReader
+}
+
+// LookReader reads the eye checks a repository's merged work still owes.
+type LookReader interface {
+	Read(ctx context.Context, repo config.Repo, sources []config.IssueSource, open []backlog.Issue, signals []config.Signal) (looks.Report, error)
+}
+
+// RepoReport is the release state of one repository: what is merged since
+// production and what of it nobody has looked at on staging.
+type RepoReport struct {
+	looks.Report
+	// Error is set when the state could not be read.
+	Error string `json:"error,omitempty"`
+	// Lookers counts the workers that do eye checks for the repository.
+	// With none, a look that is due is the owner's.
+	Lookers int `json:"lookers"`
+	// Now is when the report was made, by the watcher's clock.
+	Now time.Time `json:"now"`
+}
+
+// CollectRepos reports on every repository under `repos` in the fleet file.
+func (c Collector) CollectRepos(ctx context.Context, cfg *config.Config) []RepoReport {
+	reports := make([]RepoReport, len(cfg.Repos))
+	for i, repo := range cfg.Repos {
+		ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+		reports[i] = c.collectRepo(ctx, cfg, repo)
+		cancel()
+	}
+	return reports
+}
+
+func (c Collector) collectRepo(ctx context.Context, cfg *config.Config, repo config.Repo) RepoReport {
+	report := RepoReport{Report: looks.Report{Repo: repo.Name}, Now: time.Now()}
+	var sources []config.IssueSource
+	var open []backlog.Issue
+	seen := map[config.IssueSourceKey]bool{}
+	for _, m := range cfg.Machines {
+		for _, w := range m.Workers {
+			if w.EyeChecks && slices.ContainsFunc(m.SourcesFor(w), func(src config.IssueSource) bool { return src.Repo == repo.Name }) {
+				report.Lookers++
+			}
+		}
+		for _, src := range m.AllSources() {
+			if src.Repo != repo.Name || seen[src.Key()] {
+				continue
+			}
+			seen[src.Key()] = true
+			sources = append(sources, src)
+			issues, err := c.Lister.List(ctx, src)
+			if err != nil {
+				report.Error = err.Error()
+				return report
+			}
+			open = append(open, issues...)
+		}
+	}
+	read, err := c.Looks.Read(ctx, repo, sources, open, cfg.Signals)
+	if err != nil {
+		report.Error = err.Error()
+		return report
+	}
+	report.Report = read
+	return report
+}
+
+// Attention lists what a repository's release state needs from the owner.
+func (r RepoReport) Attention() []string {
+	if r.Error != "" {
+		return []string{"cannot read the release state: " + r.Error}
+	}
+	if due := r.count(looks.Due); due > 0 && r.Lookers == 0 {
+		return []string{fmt.Sprintf("%d eye check(s) are due on staging and no worker does eye checks: they are yours", due)}
+	}
+	return nil
+}
+
+func (r RepoReport) count(state string) int {
+	n := 0
+	for _, l := range r.Looks {
+		if l.State == state {
+			n++
+		}
+	}
+	return n
 }
 
 // Collect reports on every machine, in config order. Machines are asked in
@@ -355,10 +443,15 @@ func Short(d time.Duration) string {
 	}
 }
 
-// NeedsOwner reports whether any machine has an attention item.
-func NeedsOwner(reports []MachineReport) bool {
+// NeedsOwner reports whether any machine or repository has an attention item.
+func NeedsOwner(reports []MachineReport, repos []RepoReport) bool {
 	for _, r := range reports {
 		if len(r.Attention) > 0 {
+			return true
+		}
+	}
+	for _, r := range repos {
+		if len(r.Attention()) > 0 {
 			return true
 		}
 	}
