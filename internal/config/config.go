@@ -232,6 +232,10 @@ type Signal struct {
 	// must act on. When the answer comes after the worker handed back and its
 	// pull request is still open, the issue goes back to a worker.
 	SendsBack bool `yaml:"sends_back"`
+	// Accept lists the words that, right after the answering phrase, take
+	// the work as it stands ("Owner ruling: accepted"). Such an answer closes
+	// the signal and sends nothing back.
+	Accept []string `yaml:"accept"`
 	// HandBack is the config's hand-back phrase, copied onto each signal
 	// when the config is read.
 	HandBack string `yaml:"-"`
@@ -240,7 +244,7 @@ type Signal struct {
 // DefaultSignals returns the built-in signals, counted in hand-back comments.
 func DefaultSignals() []Signal {
 	return withHandBack(DefaultHandBack, []Signal{
-		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true},
+		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true, Accept: []string{"accepted"}},
 		{Name: "eyes", Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked"},
 		{Name: "review", Ask: "**PR:**", FollowsPR: true},
 	})

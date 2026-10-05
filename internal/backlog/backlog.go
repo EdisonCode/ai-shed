@@ -163,8 +163,9 @@ func Waiting(issue Issue, signals []config.Signal) []string {
 }
 
 // Rework says why an issue that was handed back needs a worker again while
-// its pull request is still open: the owner answered after the hand-back, or
-// the pull request cannot merge as it stands. Empty when it does not.
+// its pull request is still open: the owner answered after the hand-back with
+// something other than an acceptance, or the pull request cannot merge as it
+// stands. Empty when it does not.
 func Rework(issue Issue, signals []config.Signal) string {
 	handBack, pr := lastHandBack(issue, signals)
 	open, isOpen := issue.OpenPRs[pr]
@@ -173,7 +174,12 @@ func Rework(issue Issue, signals []config.Signal) string {
 	}
 	var reasons []string
 	for _, s := range signals {
-		if s.SendsBack && s.AnsweredBy != "" && lastComment(issue, s.AnsweredBy) > handBack {
+		if !s.SendsBack || s.AnsweredBy == "" {
+			continue
+		}
+		// The last answer rules: an acceptance after a change was asked for
+		// takes the change back.
+		if last := lastComment(issue, s.AnsweredBy); last > handBack && !accepts(issue.Comments[last].Body, s) {
 			reasons = append(reasons, fmt.Sprintf("the owner answered in the issue (%s) after pull request #%d was handed back; read the answer and apply it", s.AnsweredBy, pr))
 			break
 		}
@@ -182,6 +188,13 @@ func Rework(issue Issue, signals []config.Signal) string {
 		reasons = append(reasons, fmt.Sprintf("pull request #%d %s", pr, open.Problem))
 	}
 	return strings.Join(reasons, "; ")
+}
+
+// accepts reports whether an answer takes the work as it stands: the text
+// after the answering phrase starts with one of the signal's accept words.
+func accepts(body string, s config.Signal) bool {
+	value, _ := afterPhrase(strings.ToLower(body), strings.ToLower(s.AnsweredBy))
+	return isClear(strings.TrimLeft(value, ": \t\r\n*_`\"'"), s.Accept)
 }
 
 // lastHandBack returns the position of the last comment in which a worker

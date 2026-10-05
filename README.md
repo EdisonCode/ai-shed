@@ -122,7 +122,9 @@ at a time, in this order:
    - *You answered.* A comment with the answering phrase of a `sends_back`
      signal (by default `Owner ruling`) came after the hand-back. The worker
      is told to read your answer and apply it. So "yes, and also fix X" needs
-     no typing on the machine.
+     no typing on the machine. An answer that asks for no change says so
+     right after the phrase, `Owner ruling: accepted`: it closes the decision
+     and costs no worker turn.
    - *The pull request went stale.* It conflicts with its base branch, or a
      check failed. The worker is told what is wrong and to fix only that.
 
@@ -318,7 +320,7 @@ hand-back: a comment that contains the word `Hand-back` (configurable as
 
 | Signal | Opens when a comment has | Stays closed when followed by | Closes when a later comment has |
 | --- | --- | --- | --- |
-| decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker) |
+| decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker, unless it reads `Owner ruling: accepted`) |
 | eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked` |
 | review | `**PR:** #41` | | that pull request is merged or closed |
 

@@ -147,6 +147,11 @@ func TestOwnersAnswerAfterAHandBackSendsTheIssueBack(t *testing.T) {
 		{"an answer with no pull request open is not rework", []string{handBackAsking, ruling}, map[int]PR{}, nil, ""},
 		{"an eyes check that passed does not send it back", []string{handBackClean, "Eyes checked: looks right."}, map[int]PR{41: {}}, []string{"review"}, ""},
 		{"answered and conflicting: both reasons", []string{handBackAsking, ruling}, map[int]PR{41: {Problem: "conflicts with the base branch"}}, nil, sentBack + "; pull request #41 conflicts with the base branch"},
+		{"an answer that accepts the work does not send it back", []string{handBackAsking, "Owner ruling: accepted"}, map[int]PR{41: {}}, []string{"review"}, ""},
+		{"accepting in a heading with emphasis", []string{handBackAsking, "**Owner ruling:** Accepted as shipped."}, map[int]PR{41: {}}, []string{"review"}, ""},
+		{"a change asked for after an acceptance sends it back", []string{handBackAsking, "Owner ruling: accepted", ruling}, map[int]PR{41: {}}, nil, sentBack},
+		{"an acceptance after a change was asked for takes it back", []string{handBackAsking, ruling, "Owner ruling: accepted"}, map[int]PR{41: {}}, []string{"review"}, ""},
+		{"accepted but conflicting: only the conflict", []string{handBackAsking, "Owner ruling: accepted"}, map[int]PR{41: {Problem: "conflicts with the base branch"}}, nil, "pull request #41 conflicts with the base branch"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

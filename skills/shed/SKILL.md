@@ -113,7 +113,10 @@ Run this as a checklist and report each line.
      `answered_by` phrase of the `decision` signal. If the issue's pull
      request is still open, that sends the issue back to a worker, who reads
      the answer and applies it; nobody types on the machine. Write the answer
-     so that a worker with no other context can act on it.
+     so that a worker with no other context can act on it. When the owner
+     wants no change, put one of the signal's `accept` words right after the
+     phrase (`Owner ruling: accepted`): that closes the decision and sends
+     nothing back. Never write it when the answer asks for any change.
    - `issue waits on you (eyes)`: do the check the worker described, then
      post a comment that clears the signal: the `answered_by` phrase of the
      `eyes` signal if the fleet file has one, otherwise the ask phrase

@@ -116,7 +116,9 @@ supervisor:
 # pull request ("#41") and the signal closes when that pull request is merged
 # or closed. With `sends_back`, your answer is something a worker must act
 # on: an answer that comes after the worker handed back sends the issue back
-# to a worker while its pull request is open.
+# to a worker while its pull request is open. An answer that starts with one
+# of `accept` right after the phrase ("Owner ruling: accepted") takes the work
+# as it stands and sends nothing back.
 # A signal's ask counts only in a comment that contains this phrase: a
 # worker's hand-back. Set it to "" to count an ask in any comment.
 handback: "Hand-back"
@@ -127,6 +129,7 @@ signals:
     clear: ["none"]
     answered_by: "Owner ruling"
     sends_back: true
+    accept: ["accepted"]
   - name: eyes
     ask: "Needs eyes:"
     clear: ["nothing", "none"]
