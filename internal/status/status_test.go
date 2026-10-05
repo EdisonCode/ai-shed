@@ -3,6 +3,7 @@ package status
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/probe"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
@@ -56,25 +58,25 @@ func wantAttention(t *testing.T, r MachineReport, substrings ...string) {
 }
 
 func TestHealthyIdleMachineNeedsNothing(t *testing.T) {
-	wantAttention(t, Assess(config.Machine{Name: "box"}, signals, healthy(), nil))
+	wantAttention(t, Assess(config.Machine{Name: "box"}, signals, now, healthy(), nil))
 }
 
 func TestFailedCheckNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.Checks = []probe.CheckResult{{Name: "gh auth", OK: true}, {Name: "claude", Detail: "not found"}}
-	wantAttention(t, Assess(config.Machine{}, signals, res, nil), "check failed: claude (not found)")
+	wantAttention(t, Assess(config.Machine{}, signals, now, res, nil), "check failed: claude (not found)")
 }
 
 func TestFullDiskNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.DiskUsedPct = 93
-	wantAttention(t, Assess(config.Machine{}, signals, res, nil), "disk is 93% full")
+	wantAttention(t, Assess(config.Machine{}, signals, now, res, nil), "disk is 93% full")
 }
 
 func TestIssueWithWorkerIsWorking(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{window("app-123", time.Minute)}
-	r := Assess(config.Machine{}, signals, res, []backlog.Issue{issue(123)})
+	r := Assess(config.Machine{}, signals, now, res, []backlog.Issue{issue(123)})
 	wantAttention(t, r)
 	if r.Issues[0].State != Working || r.Issues[0].Worker != "app-123" {
 		t.Fatalf("issue = %+v", r.Issues[0])
@@ -84,50 +86,79 @@ func TestIssueWithWorkerIsWorking(t *testing.T) {
 func TestWorkerMatchNeedsTheWholeNumber(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{window("app-1234", time.Minute)}
-	r := Assess(config.Machine{}, signals, res, []backlog.Issue{issue(123)})
+	r := Assess(config.Machine{}, signals, now, res, []backlog.Issue{issue(123)})
 	if r.Issues[0].State != Queued {
 		t.Fatalf("issue 123 matched window app-1234: %+v", r.Issues[0])
 	}
 }
 
 func TestQueuedIssuesWithNoWorkerNeedOwner(t *testing.T) {
-	r := Assess(config.Machine{}, signals, healthy(), []backlog.Issue{issue(1), issue(2)})
+	r := Assess(config.Machine{}, signals, now, healthy(), []backlog.Issue{issue(1), issue(2)})
 	wantAttention(t, r, "2 issue(s) queued and no worker is running")
 }
 
 func TestQueuedIssuesBehindABusyWorkerAreFine(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{window("app-1", time.Minute)}
-	wantAttention(t, Assess(config.Machine{}, signals, res, []backlog.Issue{issue(1), issue(2)}))
+	wantAttention(t, Assess(config.Machine{}, signals, now, res, []backlog.Issue{issue(1), issue(2)}))
 }
 
 func TestIssueWaitingOnDecisionNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{window("app-7", 3*time.Hour)}
-	r := Assess(config.Machine{}, signals, res, []backlog.Issue{issue(7, "## Hand-back\nDecisions needed: 1. which one?")})
+	r := Assess(config.Machine{}, signals, now, res, []backlog.Issue{issue(7, "## Hand-back\nDecisions needed: 1. which one?")})
 	wantAttention(t, r, "org/app#7 waits on you (decision)")
 	if r.Issues[0].State != Waiting {
 		t.Fatalf("state = %s", r.Issues[0].State)
 	}
 }
 
+func TestWaitingIssueSaysHowLongAndWhichPullRequest(t *testing.T) {
+	handedBack := issue(7)
+	handedBack.OpenPRs = map[int]backlog.PR{41: {}}
+	handedBack.Comments = []backlog.Comment{
+		{Body: "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders", CreatedAt: now.Add(-3 * time.Hour)}}
+	r := Assess(config.Machine{}, signals, now, healthy(), []backlog.Issue{handedBack})
+	wantAttention(t, r, "org/app#7 waits on you (eyes 3h, review #41 3h): Fix the thing")
+}
+
+func TestRenderTotalsWhatWaitsOnTheOwnerByKind(t *testing.T) {
+	asked := func(number int, ago time.Duration, body string) backlog.Issue {
+		i := issue(number)
+		i.Comments = []backlog.Comment{{Body: "## Hand-back\n" + body, CreatedAt: now.Add(-ago)}}
+		return i
+	}
+	issues := []backlog.Issue{
+		asked(7, 5*time.Hour, "**PR:** #41 (ready)"),
+		asked(8, 40*time.Minute, "**PR:** #42 (ready)\n**Needs eyes:** open /orders"),
+		asked(9, 2*time.Hour, "Decisions needed: 1. which one?"),
+	}
+	var out bytes.Buffer
+	// The same issues are in the queue of two machines. They wait once.
+	Render(&out, []MachineReport{Assess(config.Machine{Name: "a"}, signals, now, healthy(), issues), Assess(config.Machine{Name: "b"}, signals, now, healthy(), issues)}, nil)
+	want := "Waiting on you: 2 review (oldest 5h), 1 eyes (oldest 40m), 1 decision (oldest 2h)."
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}
+
 func TestQuietWorkerNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{window("app-9", 2*time.Hour)}
-	wantAttention(t, Assess(config.Machine{}, signals, res, []backlog.Issue{issue(9)}), "worker app-9 on #9 has been quiet for 2h")
+	wantAttention(t, Assess(config.Machine{}, signals, now, res, []backlog.Issue{issue(9)}), "worker app-9 on #9 has been quiet for 2h")
 }
 
 func TestTasksWithoutAgentNeedOwner(t *testing.T) {
 	res := healthy()
 	res.Heartbeat = time.Time{}
-	wantAttention(t, Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, res, nil), "agent is not running")
+	wantAttention(t, Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, now, res, nil), "agent is not running")
 }
 
 func TestStaleHeartbeatNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.Heartbeat = now.Add(-2 * time.Hour)
 	res.Runs = []runlog.Record{ran(0, 30*time.Hour)}
-	r := Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, res, nil)
+	r := Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, now, res, nil)
 	wantAttention(t, r, "agent stopped 2h ago: 1 task(s) will not run")
 	if !r.Tasks[0].Missed {
 		t.Fatal("the task is late and must be marked missed")
@@ -137,11 +168,11 @@ func TestStaleHeartbeatNeedsOwner(t *testing.T) {
 func TestMachineWithoutTasksNeedsNoAgent(t *testing.T) {
 	res := healthy()
 	res.Heartbeat = time.Time{}
-	wantAttention(t, Assess(config.Machine{}, signals, res, nil))
+	wantAttention(t, Assess(config.Machine{}, signals, now, res, nil))
 }
 
 func TestTaskThatNeverRanIsNotAnAlarm(t *testing.T) {
-	r := Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, healthy(), nil)
+	r := Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, now, healthy(), nil)
 	wantAttention(t, r)
 	if r.Tasks[0].State != TaskNever {
 		t.Fatalf("state = %s", r.Tasks[0].State)
@@ -151,19 +182,19 @@ func TestTaskThatNeverRanIsNotAnAlarm(t *testing.T) {
 func TestFailedTaskNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.Runs = []runlog.Record{ran(0, 30*time.Hour), ran(2, 9*time.Hour)}
-	wantAttention(t, Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, res, nil), "task nightly failed (exit 2) 8h ago (boom)")
+	wantAttention(t, Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, now, res, nil), "task nightly failed (exit 2) 8h ago (boom)")
 }
 
 func TestMissedTaskNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.Runs = []runlog.Record{ran(0, 30*time.Hour)}
-	wantAttention(t, Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, res, nil), "task nightly missed its")
+	wantAttention(t, Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, now, res, nil), "task nightly missed its")
 }
 
 func TestTaskOnScheduleIsFine(t *testing.T) {
 	res := healthy()
 	res.Runs = []runlog.Record{ran(0, 9*time.Hour)}
-	r := Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, res, nil)
+	r := Assess(config.Machine{Tasks: []config.Task{nightly}}, signals, now, res, nil)
 	wantAttention(t, r)
 	if r.Tasks[0].State != TaskOK {
 		t.Fatalf("state = %s", r.Tasks[0].State)
@@ -209,7 +240,7 @@ func TestRenderSummarizesWhatNeedsTheOwner(t *testing.T) {
 	res := healthy()
 	res.Checks = []probe.CheckResult{{Name: "claude"}}
 	var out bytes.Buffer
-	Render(&out, []MachineReport{Assess(config.Machine{Name: "box", Host: "me@box"}, signals, res, nil)})
+	Render(&out, []MachineReport{Assess(config.Machine{Name: "box", Host: "me@box"}, signals, now, res, nil)}, nil)
 	for _, want := range []string{"box  me@box  load 0.50/8  disk 40%", "FAIL claude", "! check failed: claude", "1 item(s) need you."} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
@@ -219,7 +250,7 @@ func TestRenderSummarizesWhatNeedsTheOwner(t *testing.T) {
 
 func TestRenderSaysWhenAllIsWell(t *testing.T) {
 	var out bytes.Buffer
-	Render(&out, []MachineReport{Assess(config.Machine{Name: "box"}, signals, healthy(), nil)})
+	Render(&out, []MachineReport{Assess(config.Machine{Name: "box"}, signals, now, healthy(), nil)}, nil)
 	if !strings.Contains(out.String(), "All machines are on track.") {
 		t.Fatalf("output:\n%s", out.String())
 	}
@@ -234,7 +265,7 @@ func checkin(verdict, reason string) runlog.Checkin {
 func TestWorkersWithoutAgentNeedOwner(t *testing.T) {
 	res := healthy()
 	res.Heartbeat = time.Time{}
-	wantAttention(t, Assess(appWorker, signals, res, nil), "agent is not running: 0 task(s) will not run and 1 worker(s) are not supervised")
+	wantAttention(t, Assess(appWorker, signals, now, res, nil), "agent is not running: 0 task(s) will not run and 1 worker(s) are not supervised")
 }
 
 func TestWorkerVerdictsThatNeedOwner(t *testing.T) {
@@ -246,7 +277,7 @@ func TestWorkerVerdictsThatNeedOwner(t *testing.T) {
 	for verdict, want := range cases {
 		res := healthy()
 		res.Checkins = []runlog.Checkin{checkin(runlog.VerdictNudge, "older"), checkin(verdict, "a permission prompt is open")}
-		wantAttention(t, Assess(appWorker, signals, res, nil), want)
+		wantAttention(t, Assess(appWorker, signals, now, res, nil), want)
 	}
 }
 
@@ -254,7 +285,7 @@ func TestWorkerThatIsOnTrackNeedsNothing(t *testing.T) {
 	for _, verdict := range []string{runlog.VerdictOnTrack, runlog.VerdictNudge, runlog.VerdictDone, runlog.VerdictStarted, runlog.VerdictLimited, runlog.VerdictHeld, runlog.VerdictRecycled} {
 		res := healthy()
 		res.Checkins = []runlog.Checkin{checkin(runlog.VerdictNeedsOwner, "older"), checkin(verdict, "fine")}
-		r := Assess(appWorker, signals, res, nil)
+		r := Assess(appWorker, signals, now, res, nil)
 		wantAttention(t, r)
 		if r.Workers[0].Last == nil || r.Workers[0].Last.Verdict != verdict {
 			t.Fatalf("worker = %+v", r.Workers[0])
@@ -270,7 +301,7 @@ func TestIssueInHandOfASupervisedWorkerIsWorking(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{{Session: "shed", Name: "app", Command: "2.1.289", LastActivity: now.Add(-2 * time.Hour)}}
 	res.Checkins = []runlog.Checkin{handedOver(7)}
-	r := Assess(appWorker, signals, res, []backlog.Issue{issue(7), issue(8)})
+	r := Assess(appWorker, signals, now, res, []backlog.Issue{issue(7), issue(8)})
 
 	wantAttention(t, r) // no "queued and no worker", and no "quiet" alarm: the supervisor owns both
 	if r.Issues[0].State != Working || r.Issues[0].Worker != "app" || r.Issues[1].State != Queued {
@@ -281,14 +312,14 @@ func TestIssueInHandOfASupervisedWorkerIsWorking(t *testing.T) {
 func TestQueueBehindAnIdleSupervisedWorkerIsNotAnAlarm(t *testing.T) {
 	res := healthy()
 	res.Checkins = []runlog.Checkin{checkin(runlog.VerdictOnTrack, "waiting for its first issue")}
-	wantAttention(t, Assess(appWorker, signals, res, []backlog.Issue{issue(7), issue(8)}))
+	wantAttention(t, Assess(appWorker, signals, now, res, []backlog.Issue{issue(7), issue(8)}))
 }
 
 func TestHandedBackIssueWaitsOnOwnerEvenWhileInHand(t *testing.T) {
 	res := healthy()
 	res.Checkins = []runlog.Checkin{handedOver(7)}
-	r := Assess(appWorker, signals, res, []backlog.Issue{issue(7, "## Hand-back\n**PR:** #41 (ready)")})
-	wantAttention(t, r, "#7 waits on you (review)")
+	r := Assess(appWorker, signals, now, res, []backlog.Issue{issue(7, "## Hand-back\n**PR:** #41 (ready)")})
+	wantAttention(t, r, "#7 waits on you (review #41)")
 }
 
 func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
@@ -300,7 +331,7 @@ func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
 	res.Checkins = []runlog.Checkin{handedOver(7)}
 	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b", Command: "claude --permission-mode auto"}}}
 	var out bytes.Buffer
-	Render(&out, []MachineReport{Assess(m, signals, res, nil)})
+	Render(&out, []MachineReport{Assess(m, signals, now, res, nil)}, nil)
 	for _, want := range []string{"shed:app    claude", "work:notes  2.1.289", "app  #7  nudge  20m ago"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
@@ -319,7 +350,7 @@ func sentBack(issueNumber int, ago time.Duration) runlog.Checkin {
 }
 
 func TestStalePullRequestOnASupervisedMachineIsTheSupervisors(t *testing.T) {
-	r := Assess(appWorker, signals, healthy(), []backlog.Issue{stalePR(7, "conflicts with the base branch")})
+	r := Assess(appWorker, signals, now, healthy(), []backlog.Issue{stalePR(7, "conflicts with the base branch")})
 	wantAttention(t, r)
 	if r.Issues[0].State != Rework || r.Issues[0].Rework != "pull request #41 conflicts with the base branch" {
 		t.Fatalf("issue = %+v", r.Issues[0])
@@ -327,32 +358,131 @@ func TestStalePullRequestOnASupervisedMachineIsTheSupervisors(t *testing.T) {
 }
 
 func TestStalePullRequestWithNoSupervisorNeedsOwner(t *testing.T) {
-	r := Assess(config.Machine{}, signals, healthy(), []backlog.Issue{stalePR(7, "has a failed check (integration)")})
+	r := Assess(config.Machine{}, signals, now, healthy(), []backlog.Issue{stalePR(7, "has a failed check (integration)")})
 	wantAttention(t, r, "org/app#7: pull request #41 has a failed check (integration)")
 }
 
 func TestPullRequestStillStaleAfterTheAllowedTriesNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.Checkins = []runlog.Checkin{sentBack(7, 3*time.Hour), sentBack(7, time.Hour), checkin(runlog.VerdictDone, "nothing left")}
-	r := Assess(appWorker, signals, res, []backlog.Issue{stalePR(7, "conflicts with the base branch")})
+	r := Assess(appWorker, signals, now, res, []backlog.Issue{stalePR(7, "conflicts with the base branch")})
 	wantAttention(t, r, "org/app#7: pull request #41 conflicts with the base branch after 2 tries by a worker")
 }
 
 func TestOldTriesDoNotCountAgainstAPullRequest(t *testing.T) {
 	res := healthy()
 	res.Checkins = []runlog.Checkin{sentBack(7, 20*time.Hour), sentBack(7, 19*time.Hour), checkin(runlog.VerdictDone, "nothing left")}
-	wantAttention(t, Assess(appWorker, signals, res, []backlog.Issue{stalePR(7, "conflicts with the base branch")}))
+	wantAttention(t, Assess(appWorker, signals, now, res, []backlog.Issue{stalePR(7, "conflicts with the base branch")}))
 }
 
 func TestPendingRecycleIsShownAndNeedsNothing(t *testing.T) {
 	res := healthy()
 	res.Checkins = []runlog.Checkin{handedOver(7)}
 	res.Recycle = []string{"app"}
-	r := Assess(appWorker, signals, res, nil)
+	r := Assess(appWorker, signals, now, res, nil)
 	wantAttention(t, r)
 	var out bytes.Buffer
-	Render(&out, []MachineReport{r})
+	Render(&out, []MachineReport{r}, nil)
 	if !r.Workers[0].RecyclePending || !strings.Contains(out.String(), "[fresh session pending]") {
 		t.Fatalf("worker = %+v\n%s", r.Workers[0], out.String())
+	}
+}
+
+type fakeLooks struct {
+	report looks.Report
+	err    error
+	open   []backlog.Issue
+}
+
+func (f *fakeLooks) Read(_ context.Context, _ config.Repo, _ []config.IssueSource, open []backlog.Issue, _ []config.Signal) (looks.Report, error) {
+	f.open = open
+	return f.report, f.err
+}
+
+func withRepo(eyeChecks bool) *config.Config {
+	cfg := oneMachine()
+	cfg.Machines[0].Workers = []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b", EyeChecks: eyeChecks}}
+	cfg.Repos = []config.Repo{{Name: "org/app", Staging: config.Environment{Commit: "true"}}}
+	return cfg
+}
+
+func releaseState() looks.Report {
+	asked := func(number, pr int, state string, ago time.Duration) looks.Look {
+		return looks.Look{Repo: "org/app", Number: number, Title: "Fix the thing", PR: pr, State: state, Since: now.Add(-ago)}
+	}
+	return looks.Report{Repo: "org/app", Staging: "aaaaaaa1111", Production: "bbbbbbb2222", Since: now.Add(-48 * time.Hour), SinceProduction: true, Merged: 14,
+		Looks: []looks.Look{asked(1, 41, looks.Due, 5*time.Hour), asked(2, 42, looks.Awaiting, 2*time.Hour), asked(4, 44, looks.Failed, time.Hour)}}
+}
+
+func TestRenderGivesTheGoOrNoGoForAProductionDeploy(t *testing.T) {
+	var out bytes.Buffer
+	Render(&out, nil, []RepoReport{{Report: releaseState(), Lookers: 1, Now: now}})
+	for _, want := range []string{
+		"org/app  staging aaaaaaa  production bbbbbbb",
+		"14 pull request(s) merged since production's commit, 2d ago",
+		"eye checks: 2 not done (1 on staging, 1 wait for a staging deploy), 1 failed",
+		"#1  PR #41  on staging         5h  Fix the thing",
+		"#2  PR #42  waits for staging  2h  Fix the thing",
+		"#4  PR #44  FAILED             1h  Fix the thing",
+		"All machines are on track.",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestLooksThatAreDueAreTheOwnersWhenNoWorkerDoesThem(t *testing.T) {
+	reader := &fakeLooks{report: releaseState()}
+	c := Collector{Lister: fakeLister{issues: []backlog.Issue{issue(7)}}, Looks: reader}
+
+	withBrowser := c.CollectRepos(context.Background(), withRepo(true))
+	if NeedsOwner(nil, withBrowser) || len(reader.open) != 1 {
+		t.Fatalf("attention = %q with a worker that does eye checks (open issues passed on: %d)", withBrowser[0].Attention(), len(reader.open))
+	}
+	without := c.CollectRepos(context.Background(), withRepo(false))
+	if got := without[0].Attention(); len(got) != 1 || !strings.Contains(got[0], "1 eye check(s) are due on staging and no worker does eye checks") {
+		t.Fatalf("attention = %q", got)
+	}
+}
+
+func TestReleaseStateThatCannotBeReadNeedsOwner(t *testing.T) {
+	c := Collector{Lister: fakeLister{}, Looks: &fakeLooks{err: errors.New("org/app: read staging's commit: exit status 7")}}
+	repos := c.CollectRepos(context.Background(), withRepo(true))
+	var out bytes.Buffer
+	Render(&out, nil, repos)
+	if !NeedsOwner(nil, repos) || !strings.Contains(out.String(), "! cannot read the release state: org/app: read staging's commit: exit status 7") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+func TestJSONReportCarriesTheMachinesAndTheReleaseState(t *testing.T) {
+	report := Report{
+		Machines: []MachineReport{Assess(config.Machine{Name: "box"}, signals, now, healthy(), nil)},
+		Repos:    []RepoReport{{Report: releaseState(), Lookers: 1, Now: now}},
+	}
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Machines []struct{ Name string }
+		Repos    []struct {
+			Repo, Staging, Production string
+			Merged                    int
+			Looks                     []struct {
+				Number, PR int
+				State      string
+			}
+		}
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Machines) != 1 || got.Machines[0].Name != "box" {
+		t.Fatalf("machines = %+v in %s", got.Machines, data)
+	}
+	if r := got.Repos[0]; r.Repo != "org/app" || r.Staging != "aaaaaaa1111" || r.Merged != 14 || len(r.Looks) != 3 || r.Looks[0].State != looks.Due || r.Looks[0].PR != 41 {
+		t.Fatalf("repos = %+v in %s", got.Repos, data)
 	}
 }

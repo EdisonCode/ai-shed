@@ -14,6 +14,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/probe"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
@@ -42,6 +43,14 @@ const (
 	TaskFailed  = "failed"
 )
 
+// Report is the whole answer, as `shed status -json` prints it.
+type Report struct {
+	Machines []MachineReport `json:"machines"`
+	// Repos is the release state of each repository under `repos` in the
+	// fleet file; empty when it has none.
+	Repos []RepoReport `json:"repos"`
+}
+
 type MachineReport struct {
 	Name string `json:"name"`
 	Host string `json:"host"`
@@ -54,6 +63,9 @@ type MachineReport struct {
 	Workers []WorkerStatus `json:"workers"`
 	// Attention lists what needs the owner. Empty means the machine is on track.
 	Attention []string `json:"attention"`
+	// Now is when the report was made, by the watcher's clock. The age of
+	// what waits on the owner is counted from it.
+	Now time.Time `json:"now"`
 }
 
 type IssueStatus struct {
@@ -63,7 +75,9 @@ type IssueStatus struct {
 	URL     string   `json:"url"`
 	State   string   `json:"state"`
 	Waiting []string `json:"waiting,omitempty"`
-	Worker  string   `json:"worker,omitempty"`
+	// Asks are the open signals behind Waiting, with when each was asked.
+	Asks   []backlog.Ask `json:"asks,omitempty"`
+	Worker string        `json:"worker,omitempty"`
 	// Rework says why the issue's pull request cannot merge as it stands.
 	Rework string `json:"rework,omitempty"`
 }
@@ -92,6 +106,93 @@ type WorkerStatus struct {
 type Collector struct {
 	Runner probe.Runner
 	Lister backlog.Lister
+	// Looks reads the eye checks that merged work still owes. It is needed
+	// only for CollectRepos.
+	Looks LookReader
+}
+
+// LookReader reads the eye checks a repository's merged work still owes.
+type LookReader interface {
+	Read(ctx context.Context, repo config.Repo, sources []config.IssueSource, open []backlog.Issue, signals []config.Signal) (looks.Report, error)
+}
+
+// RepoReport is the release state of one repository: what is merged since
+// production and what of it nobody has looked at on staging.
+type RepoReport struct {
+	looks.Report
+	// Error is set when the state could not be read.
+	Error string `json:"error,omitempty"`
+	// Lookers counts the workers that do eye checks for the repository.
+	// With none, a look that is due is the owner's.
+	Lookers int `json:"lookers"`
+	// Now is when the report was made, by the watcher's clock.
+	Now time.Time `json:"now"`
+}
+
+// CollectRepos reports on every repository under `repos` in the fleet file.
+func (c Collector) CollectRepos(ctx context.Context, cfg *config.Config) []RepoReport {
+	reports := make([]RepoReport, len(cfg.Repos))
+	for i, repo := range cfg.Repos {
+		ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+		reports[i] = c.collectRepo(ctx, cfg, repo)
+		cancel()
+	}
+	return reports
+}
+
+func (c Collector) collectRepo(ctx context.Context, cfg *config.Config, repo config.Repo) RepoReport {
+	report := RepoReport{Report: looks.Report{Repo: repo.Name}, Now: time.Now()}
+	var sources []config.IssueSource
+	var open []backlog.Issue
+	seen := map[config.IssueSourceKey]bool{}
+	for _, m := range cfg.Machines {
+		for _, w := range m.Workers {
+			if w.EyeChecks && slices.ContainsFunc(m.SourcesFor(w), func(src config.IssueSource) bool { return src.Repo == repo.Name }) {
+				report.Lookers++
+			}
+		}
+		for _, src := range m.AllSources() {
+			if src.Repo != repo.Name || seen[src.Key()] {
+				continue
+			}
+			seen[src.Key()] = true
+			sources = append(sources, src)
+			issues, err := c.Lister.List(ctx, src)
+			if err != nil {
+				report.Error = err.Error()
+				return report
+			}
+			open = append(open, issues...)
+		}
+	}
+	read, err := c.Looks.Read(ctx, repo, sources, open, cfg.Signals)
+	if err != nil {
+		report.Error = err.Error()
+		return report
+	}
+	report.Report = read
+	return report
+}
+
+// Attention lists what a repository's release state needs from the owner.
+func (r RepoReport) Attention() []string {
+	if r.Error != "" {
+		return []string{"cannot read the release state: " + r.Error}
+	}
+	if due := r.count(looks.Due); due > 0 && r.Lookers == 0 {
+		return []string{fmt.Sprintf("%d eye check(s) are due on staging and no worker does eye checks: they are yours", due)}
+	}
+	return nil
+}
+
+func (r RepoReport) count(state string) int {
+	n := 0
+	for _, l := range r.Looks {
+		if l.State == state {
+			n++
+		}
+	}
+	return n
 }
 
 // Collect reports on every machine, in config order. Machines are asked in
@@ -129,7 +230,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 		issues = append(issues, found...)
 	}
 
-	report := Assess(m, cfg.Signals, res, issues)
+	report := Assess(m, cfg.Signals, time.Now(), res, issues)
 	if probeErr != nil {
 		report.Error = probeErr.Error()
 		report.Attention = append([]string{"unreachable: " + probeErr.Error()}, report.Attention...)
@@ -141,9 +242,10 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 }
 
 // Assess applies the attention rules to one machine. res is nil when the
-// machine could not be probed; the issue rules still apply.
-func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues []backlog.Issue) MachineReport {
-	report := MachineReport{Name: m.Name, Host: m.Host, Probe: res, Attention: []string{}}
+// machine could not be probed; the issue rules still apply. now is the
+// watcher's clock.
+func Assess(m config.Machine, signals []config.Signal, now time.Time, res *probe.Result, issues []backlog.Issue) MachineReport {
+	report := MachineReport{Name: m.Name, Host: m.Host, Probe: res, Attention: []string{}, Now: now}
 	attend := func(format string, args ...any) {
 		report.Attention = append(report.Attention, fmt.Sprintf(format, args...))
 	}
@@ -167,7 +269,10 @@ func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues
 	queued, working := 0, 0
 	for _, issue := range issues {
 		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
-			State: Queued, Waiting: backlog.Waiting(issue, signals), Rework: backlog.Rework(issue, signals)}
+			State: Queued, Asks: backlog.Asks(issue, signals), Rework: backlog.Rework(issue, signals)}
+		for _, a := range st.Asks {
+			st.Waiting = append(st.Waiting, a.Name)
+		}
 		// A supervised worker has the issue its supervisor handed it. Any
 		// other worker is matched by the name of its tmux window.
 		supervised := supervisedOn(report.Workers, issue.Number)
@@ -181,7 +286,7 @@ func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues
 		switch {
 		case len(st.Waiting) > 0:
 			st.State = Waiting
-			attend("%s#%d waits on you (%s): %s", issue.Repo, issue.Number, strings.Join(st.Waiting, ", "), issue.Title)
+			attend("%s#%d waits on you (%s): %s", issue.Repo, issue.Number, askWords(st.Asks, now), issue.Title)
 		case st.Rework != "" && res != nil && runlog.ReworkSpent(res.Checkins, issue.Number, res.Now):
 			// A worker was sent back to it as often as allowed. It is the
 			// owner's now, whoever has it in hand.
@@ -212,6 +317,22 @@ func Assess(m config.Machine, signals []config.Signal, res *probe.Result, issues
 		attend("%d issue(s) queued and no worker is running", queued)
 	}
 	return report
+}
+
+// askWords says what an issue asks of the owner and for how long, as in
+// "eyes 3h, review #41 3h".
+func askWords(asks []backlog.Ask, now time.Time) string {
+	words := make([]string, len(asks))
+	for i, a := range asks {
+		words[i] = a.Name
+		if a.PR != 0 {
+			words[i] += fmt.Sprintf(" #%d", a.PR)
+		}
+		if !a.Since.IsZero() {
+			words[i] += " " + Short(now.Sub(a.Since))
+		}
+	}
+	return strings.Join(words, ", ")
 }
 
 // supervisedOn returns the supervised worker that has this issue in hand.
@@ -330,10 +451,15 @@ func Short(d time.Duration) string {
 	}
 }
 
-// NeedsOwner reports whether any machine has an attention item.
-func NeedsOwner(reports []MachineReport) bool {
+// NeedsOwner reports whether any machine or repository has an attention item.
+func NeedsOwner(reports []MachineReport, repos []RepoReport) bool {
 	for _, r := range reports {
 		if len(r.Attention) > 0 {
+			return true
+		}
+	}
+	for _, r := range repos {
+		if len(r.Attention()) > 0 {
 			return true
 		}
 	}

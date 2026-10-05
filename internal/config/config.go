@@ -31,6 +31,46 @@ type Config struct {
 	// plan, a brief or a discussion do not hold an issue back. Omitted, it is
 	// DefaultHandBack; set to "" to count an ask in any comment.
 	HandBack *string `yaml:"handback"`
+	// Repos says, per repository, how to see what is deployed. With it a
+	// worker can do the eye checks of merged work on staging.
+	Repos []Repo `yaml:"repos"`
+}
+
+// Repo is what shed knows about a repository's deploys.
+type Repo struct {
+	Name       string      `yaml:"repo"`
+	Staging    Environment `yaml:"staging"`
+	Production Environment `yaml:"production"`
+	// LookBack is how far back merged work is looked for when production's
+	// commit is older than that, or is not known.
+	LookBack string `yaml:"look_back"`
+}
+
+// Environment is one place a repository is deployed to.
+type Environment struct {
+	// Commit is a command that prints the commit the environment serves.
+	Commit string `yaml:"commit"`
+	// URL is where a worker opens the environment in a browser.
+	URL string `yaml:"url"`
+	// Orders say what a worker may and may not do there during an eye check.
+	Orders string `yaml:"orders"`
+}
+
+// DefaultLookBack is how far back merged work is looked for.
+const DefaultLookBack = 14 * 24 * time.Hour
+
+func (r Repo) LookBackOrDefault() time.Duration {
+	return durationOr(r.LookBack, DefaultLookBack)
+}
+
+// Repo returns what shed knows about the repository's deploys.
+func (c *Config) Repo(name string) (Repo, bool) {
+	for _, r := range c.Repos {
+		if r.Name == name {
+			return r, true
+		}
+	}
+	return Repo{}, false
 }
 
 // DefaultHandBack is the phrase that marks a hand-back comment.
@@ -177,6 +217,9 @@ type Worker struct {
 	// issue, so one issue's conversation does not follow it into the next.
 	// Leave it off for themed work where the issues build on each other.
 	FreshPerIssue bool `yaml:"fresh_per_issue"`
+	// EyeChecks says the worker has a browser and may do the eye checks of
+	// merged work on staging. Its queue's repositories need a `repos` entry.
+	EyeChecks bool `yaml:"eye_checks"`
 }
 
 // Check is a command that must exit 0 for the machine to be ready for work.
@@ -194,6 +237,14 @@ type IssueSource struct {
 	// worked before an issue with a later one or with none; within one
 	// priority the oldest issue goes first.
 	Priority []string `yaml:"priority"`
+}
+
+// IssueSourceKey says which issues a source selects. Two sources with the
+// same key list the same issues.
+type IssueSourceKey struct{ Repo, Label, Assignee string }
+
+func (s IssueSource) Key() IssueSourceKey {
+	return IssueSourceKey{s.Repo, s.Label, s.Assignee}
 }
 
 // Rank is the place of an issue with these labels in the source's priority
@@ -232,16 +283,28 @@ type Signal struct {
 	// must act on. When the answer comes after the worker handed back and its
 	// pull request is still open, the issue goes back to a worker.
 	SendsBack bool `yaml:"sends_back"`
+	// Accept lists the words that, right after the answering phrase, take
+	// the work as it stands ("Owner ruling: accepted"). Such an answer closes
+	// the signal and sends nothing back.
+	Accept []string `yaml:"accept"`
+	// FailedBy is the phrase a worker writes when it did the check the
+	// signal asks for and the work did not pass. It closes the signal: the
+	// look was done. What to do about it is a decision the worker asks for.
+	FailedBy string `yaml:"failed_by"`
 	// HandBack is the config's hand-back phrase, copied onto each signal
 	// when the config is read.
 	HandBack string `yaml:"-"`
 }
 
+// EyesSignal is the name of the signal that asks for an eye check. A worker
+// with eye_checks answers it on staging.
+const EyesSignal = "eyes"
+
 // DefaultSignals returns the built-in signals, counted in hand-back comments.
 func DefaultSignals() []Signal {
 	return withHandBack(DefaultHandBack, []Signal{
-		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true},
-		{Name: "eyes", Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked"},
+		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true, Accept: []string{"accepted"}},
+		{Name: EyesSignal, Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked", FailedBy: "Eyes failed"},
 		{Name: "review", Ask: "**PR:**", FollowsPR: true},
 	})
 }
@@ -307,7 +370,39 @@ func Parse(data []byte) (*Config, error) {
 		handBack = *cfg.HandBack
 	}
 	withHandBack(handBack, cfg.Signals)
+	if err := cfg.validateEyeChecks(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// validateEyeChecks runs after the default signals are in place: a worker
+// that does eye checks needs to know where staging is and what to write.
+func (c *Config) validateEyeChecks() error {
+	var errs []error
+	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+	for _, m := range c.Machines {
+		for _, w := range m.Workers {
+			if !w.EyeChecks {
+				continue
+			}
+			for _, src := range m.SourcesFor(w) {
+				if _, ok := c.Repo(src.Repo); !ok {
+					fail("machine %q: worker %q has eye_checks, but %s has no entry under repos", m.Name, w.Name, src.Repo)
+				}
+			}
+			eyes := false
+			for _, s := range c.Signals {
+				if s.Name == EyesSignal {
+					eyes = s.AnsweredBy != "" && s.FailedBy != ""
+				}
+			}
+			if !eyes {
+				fail("machine %q: worker %q has eye_checks, but no signal named %q has answered_by and failed_by", m.Name, w.Name, EyesSignal)
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c *Config) validate() error {
@@ -425,6 +520,28 @@ func (c *Config) validate() error {
 			fail("a signal needs name and ask")
 		}
 	}
+	repos := map[string]bool{}
+	for _, r := range c.Repos {
+		where := fmt.Sprintf("repos: %s", r.Name)
+		if !repoRE.MatchString(r.Name) {
+			fail("repos: repo %q must be owner/name", r.Name)
+		}
+		if repos[r.Name] {
+			fail("%s: duplicate entry", where)
+		}
+		repos[r.Name] = true
+		if r.Staging.Commit == "" {
+			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
+		}
+		if r.Production.URL != "" || r.Production.Orders != "" {
+			fail("%s: production takes only commit; no worker goes there", where)
+		}
+		if r.LookBack != "" {
+			if d, err := time.ParseDuration(r.LookBack); err != nil || d <= 0 {
+				fail("%s: look_back %q is not a positive duration such as 336h", where, r.LookBack)
+			}
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -457,12 +574,11 @@ func (m Machine) SourcesFor(w Worker) []IssueSource {
 // machine's and its workers'.
 func (m Machine) AllSources() []IssueSource {
 	var all []IssueSource
-	seen := map[string]bool{}
+	seen := map[IssueSourceKey]bool{}
 	add := func(sources []IssueSource) {
 		for _, src := range sources {
-			key := src.Repo + "\x00" + src.Label + "\x00" + src.Assignee
-			if !seen[key] {
-				seen[key] = true
+			if !seen[src.Key()] {
+				seen[src.Key()] = true
 				all = append(all, src)
 			}
 		}

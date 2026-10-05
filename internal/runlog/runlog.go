@@ -118,6 +118,9 @@ type Checkin struct {
 	// Rework is set when the issue was handed back to a worker because its
 	// pull request could not merge; it says why.
 	Rework string `json:"rework,omitempty"`
+	// Look is set when the issue was handed over for an eye check on
+	// staging, not to be built.
+	Look bool `json:"look,omitempty"`
 }
 
 func AppendCheckin(dir string, c Checkin) error {
@@ -163,17 +166,35 @@ func ReadCheckins(dir string) ([]Checkin, error) {
 // IssueInHand returns the issue the worker was last handed since its session
 // last started, or 0. Check-ins are in log order.
 func IssueInHand(checkins []Checkin, worker string) int {
-	issue := 0
+	issue, _ := InHand(checkins, worker)
+	return issue
+}
+
+// InHand is IssueInHand that also says whether the worker was handed the
+// issue for an eye check and not to build it.
+func InHand(checkins []Checkin, worker string) (issue int, look bool) {
 	for _, c := range checkins {
 		switch {
 		case c.Worker != worker:
 		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled:
-			issue = 0
+			issue, look = 0, false
 		case c.Sent && c.Issue != 0:
-			issue = c.Issue
+			issue, look = c.Issue, c.Look
 		}
 	}
-	return issue
+	return issue, look
+}
+
+// Builder returns the worker that was last handed the issue to build it, or
+// "" when the log knows none. A hand-over for an eye check does not count.
+func Builder(checkins []Checkin, issue int) string {
+	worker := ""
+	for _, c := range checkins {
+		if c.Sent && c.Issue == issue && !c.Look {
+			worker = c.Worker
+		}
+	}
+	return worker
 }
 
 // An issue is sent back to a worker over its pull request at most

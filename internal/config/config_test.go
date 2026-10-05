@@ -57,6 +57,12 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"negative max_load", minimal + "    capacity: {max_load: -1}\n", "max_load"},
 		{"bad max_wait", minimal + "    capacity: {max_wait: later}\n", "max_wait"},
 		{"bad models.apply", minimal + "supervisor: {models: {apply: maybe}}\n", "models.apply"},
+		{"repo without a staging commit", minimal + "repos: [{repo: org/app}]\n", "staging.commit is required"},
+		{"duplicate repo", minimal + "repos: [{repo: org/app, staging: {commit: x}}, {repo: org/app, staging: {commit: x}}]\n", "duplicate entry"},
+		{"bad look_back", minimal + "repos: [{repo: org/app, staging: {commit: x}, look_back: 14d}]\n", "look_back"},
+		{"production with a url", minimal + "repos: [{repo: org/app, staging: {commit: x}, production: {commit: y, url: https://example.com}}]\n", "production takes only commit"},
+		{"eye checks without a repo entry", minimal + "    issues: [{repo: org/app, label: x}]\n    workers:\n      - {name: w, dir: /tmp, brief: b, eye_checks: true}\n", "has no entry under repos"},
+		{"eye checks without a failure phrase", minimal + "    issues: [{repo: org/app, label: x}]\n    workers:\n      - {name: w, dir: /tmp, brief: b, eye_checks: true}\nrepos: [{repo: org/app, staging: {commit: x}}]\nsignals: [{name: eyes, ask: \"Needs eyes:\", answered_by: Eyes checked}]\n", "answered_by and failed_by"},
 		{"bad when_cold", minimal + "supervisor: {when_cold: maybe}\n", "when_cold"},
 	}
 	for _, tc := range cases {
@@ -135,7 +141,7 @@ func TestModelIsPickedFromIssueLabels(t *testing.T) {
 		want   string
 	}{
 		{nil, "sonnet"},
-		{[]string{"bug", "machine:pc"}, "sonnet"},
+		{[]string{"bug", "machine:box"}, "sonnet"},
 		{[]string{"bug", "model:opus"}, "opus"},
 		{[]string{"model:fable"}, "fable"},
 	}
@@ -217,5 +223,26 @@ func TestCapacity(t *testing.T) {
 	}
 	if got := (Capacity{MaxWait: "5m"}).MaxWaitOrDefault(); got != 5*time.Minute {
 		t.Errorf("max wait = %v", got)
+	}
+}
+
+func TestRepoDeploysAndEyeCheckWorkers(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + `    issues: [{repo: org/app, label: x}]
+    workers:
+      - {name: w, dir: /tmp, brief: b, eye_checks: true}
+repos:
+  - repo: org/app
+    staging: {commit: "echo abc1234", url: "https://staging.example.com", orders: "Read only."}
+    production: {commit: "echo def5678"}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, ok := cfg.Repo("org/app")
+	if !ok || repo.Staging.URL != "https://staging.example.com" || repo.LookBackOrDefault() != DefaultLookBack {
+		t.Fatalf("repo = %+v", repo)
+	}
+	if !cfg.Machines[0].Workers[0].EyeChecks {
+		t.Fatal("the worker does not do eye checks")
 	}
 }

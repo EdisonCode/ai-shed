@@ -5,19 +5,27 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+	"time"
 
+	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/probe"
 )
 
 // workerSession is the tmux session that holds supervised workers.
 const workerSession = "shed"
 
-// Render writes the report for a terminal.
-func Render(w io.Writer, reports []MachineReport) {
+// Render writes the report for a terminal: each machine, then the release
+// state of each repository the fleet file knows the deploys of.
+func Render(w io.Writer, reports []MachineReport, repos []RepoReport) {
 	total := 0
 	for _, r := range reports {
 		renderMachine(w, r)
 		total += len(r.Attention)
+		fmt.Fprintln(w)
+	}
+	for _, r := range repos {
+		renderRepo(w, r)
+		total += len(r.Attention())
 		fmt.Fprintln(w)
 	}
 	if total == 0 {
@@ -25,6 +33,97 @@ func Render(w io.Writer, reports []MachineReport) {
 		return
 	}
 	fmt.Fprintf(w, "%d item(s) need you.\n", total)
+	if line := waitingTotals(reports); line != "" {
+		fmt.Fprintln(w, line)
+	}
+}
+
+// lookWords says each look state the way the report prints it.
+var lookWords = map[string]string{looks.Due: "on staging", looks.Awaiting: "waits for staging", looks.Failed: "FAILED"}
+
+// renderRepo writes what is merged and not yet in production, and how much
+// of it nobody has looked at: the go or no-go for a production deploy.
+func renderRepo(w io.Writer, r RepoReport) {
+	if r.Error != "" {
+		fmt.Fprintf(w, "%s\n", r.Repo)
+	} else {
+		fmt.Fprintf(w, "%s  staging %s", r.Repo, clip(r.Staging, 7))
+		if r.Production != "" {
+			fmt.Fprintf(w, "  production %s", clip(r.Production, 7))
+		}
+		window := "in the last " + Short(r.Now.Sub(r.Since))
+		if r.SinceProduction {
+			window = "since production's commit, " + Short(r.Now.Sub(r.Since)) + " ago"
+		}
+		fmt.Fprintf(w, "\n  %d pull request(s) merged %s\n", r.Merged, window)
+		due, awaiting, failed := r.count(looks.Due), r.count(looks.Awaiting), r.count(looks.Failed)
+		switch {
+		case len(r.Looks) == 0:
+			fmt.Fprintln(w, "  eye checks: none outstanding")
+		default:
+			fmt.Fprintf(w, "  eye checks: %d not done (%d on staging, %d wait for a staging deploy), %d failed\n", due+awaiting, due, awaiting, failed)
+		}
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		for _, l := range r.Looks {
+			fmt.Fprintf(tw, "    #%d\tPR #%d\t%s\t%s\t%s\n", l.Number, l.PR, lookWords[l.State], Short(r.Now.Sub(l.Since)), l.Title)
+		}
+		tw.Flush()
+	}
+	for _, a := range r.Attention() {
+		fmt.Fprintf(w, "  ! %s\n", a)
+	}
+}
+
+func clip(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
+}
+
+// waitingTotals counts what waits on the owner by kind, with the age of the
+// oldest: the owner's own backlog. An issue in the queue of two machines
+// waits once.
+func waitingTotals(reports []MachineReport) string {
+	type total struct {
+		count  int
+		oldest time.Duration
+	}
+	var kinds []string
+	totals := map[string]*total{}
+	counted := map[string]bool{}
+	for _, r := range reports {
+		for _, i := range r.Issues {
+			for _, a := range i.Asks {
+				key := fmt.Sprintf("%s#%d %s", i.Repo, i.Number, a.Name)
+				if counted[key] {
+					continue
+				}
+				counted[key] = true
+				t := totals[a.Name]
+				if t == nil {
+					t = &total{}
+					totals[a.Name] = t
+					kinds = append(kinds, a.Name)
+				}
+				t.count++
+				if !a.Since.IsZero() {
+					t.oldest = max(t.oldest, r.Now.Sub(a.Since))
+				}
+			}
+		}
+	}
+	if len(kinds) == 0 {
+		return ""
+	}
+	words := make([]string, len(kinds))
+	for n, kind := range kinds {
+		words[n] = fmt.Sprintf("%d %s", totals[kind].count, kind)
+		if totals[kind].oldest > 0 {
+			words[n] += fmt.Sprintf(" (oldest %s)", Short(totals[kind].oldest))
+		}
+	}
+	return "Waiting on you: " + strings.Join(words, ", ") + "."
 }
 
 func renderMachine(w io.Writer, r MachineReport) {

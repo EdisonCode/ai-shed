@@ -11,17 +11,17 @@ import (
 const idleWithSuggestion = "  Ready for the supervisor to name the issue.\n\n" +
 	"\x1b[38;5;246m✻\x1b[39m \x1b[38;5;246mCogitated for 21s · done 1:29 PM\x1b[39m\n\n" +
 	"\x1b[38;5;244m────────\n" +
-	"\x1b[39m❯ \x1b[2mYour issue is #5228: apply the owner ruling\x1b[0m\n" +
+	"\x1b[39m❯ \x1b[2mYour issue is #128: apply the owner ruling\x1b[0m\n" +
 	"\x1b[38;5;244m────────\n" +
-	"\x1b[39m  \x1b[38;5;220m⏵⏵ auto mode on\x1b[38;5;246m (shift+tab to cycle) · PR\x1b[39m \x1b[4m\x1b[38;5;246m\x1b]8;id=9s6rs2;https://github.com/org/app/pull/5231\x1b\\#5231\x1b[0m\x1b[38;5;246m\x1b]8;;\x1b\\ · ← for agents\x1b[39m\n"
+	"\x1b[39m  \x1b[38;5;220m⏵⏵ auto mode on\x1b[38;5;246m (shift+tab to cycle) · PR\x1b[39m \x1b[4m\x1b[38;5;246m\x1b]8;id=9s6rs2;https://github.com/org/app/pull/131\x1b\\#131\x1b[0m\x1b[38;5;246m\x1b]8;;\x1b\\ · ← for agents\x1b[39m\n"
 
 func TestPlainMarksTheGreyedSuggestionAndNothingElse(t *testing.T) {
 	want := "  Ready for the supervisor to name the issue.\n\n" +
 		"✻ Cogitated for 21s · done 1:29 PM\n\n" +
 		"────────\n" +
-		"❯ [greyed out: Your issue is #5228: apply the owner ruling]\n" +
+		"❯ [greyed out: Your issue is #128: apply the owner ruling]\n" +
 		"────────\n" +
-		"  ⏵⏵ auto mode on (shift+tab to cycle) · PR #5231 · ← for agents\n"
+		"  ⏵⏵ auto mode on (shift+tab to cycle) · PR #131 · ← for agents\n"
 	if got := plain(idleWithSuggestion); got != want {
 		t.Fatalf("plain =\n%s\nwant\n%s", got, want)
 	}

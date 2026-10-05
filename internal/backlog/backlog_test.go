@@ -3,6 +3,7 @@ package backlog
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
 )
@@ -147,6 +148,11 @@ func TestOwnersAnswerAfterAHandBackSendsTheIssueBack(t *testing.T) {
 		{"an answer with no pull request open is not rework", []string{handBackAsking, ruling}, map[int]PR{}, nil, ""},
 		{"an eyes check that passed does not send it back", []string{handBackClean, "Eyes checked: looks right."}, map[int]PR{41: {}}, []string{"review"}, ""},
 		{"answered and conflicting: both reasons", []string{handBackAsking, ruling}, map[int]PR{41: {Problem: "conflicts with the base branch"}}, nil, sentBack + "; pull request #41 conflicts with the base branch"},
+		{"an answer that accepts the work does not send it back", []string{handBackAsking, "Owner ruling: accepted"}, map[int]PR{41: {}}, []string{"review"}, ""},
+		{"accepting in a heading with emphasis", []string{handBackAsking, "**Owner ruling:** Accepted as shipped."}, map[int]PR{41: {}}, []string{"review"}, ""},
+		{"a change asked for after an acceptance sends it back", []string{handBackAsking, "Owner ruling: accepted", ruling}, map[int]PR{41: {}}, nil, sentBack},
+		{"an acceptance after a change was asked for takes it back", []string{handBackAsking, ruling, "Owner ruling: accepted"}, map[int]PR{41: {}}, []string{"review"}, ""},
+		{"accepted but conflicting: only the conflict", []string{handBackAsking, "Owner ruling: accepted"}, map[int]PR{41: {Problem: "conflicts with the base branch"}}, nil, "pull request #41 conflicts with the base branch"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,6 +167,18 @@ func TestOwnersAnswerAfterAHandBackSendsTheIssueBack(t *testing.T) {
 				t.Errorf("rework = %q, want %q", got, tc.wantRework)
 			}
 		})
+	}
+}
+
+func TestAsksSayHowLongTheOwnerHasBeenAskedAndForWhichPullRequest(t *testing.T) {
+	first, second := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 4, 11, 0, 0, 0, time.UTC)
+	issue := Issue{OpenPRs: map[int]PR{41: {}}, Comments: []Comment{
+		{Body: "## Hand-back\n**PR:** #41 (draft)\n**Decisions needed:**\n1. Keep the column? See #3.", CreatedAt: first},
+		{Body: "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders", CreatedAt: second},
+	}}
+	want := []Ask{{Name: "decision", Since: first}, {Name: "eyes", Since: second}, {Name: "review", Since: second, PR: 41}}
+	if got := Asks(issue, config.DefaultSignals()); !slices.Equal(got, want) {
+		t.Fatalf("asks = %+v, want %+v", got, want)
 	}
 }
 
@@ -205,5 +223,41 @@ func TestWithNoHandBackPhraseAnAskCountsAnywhere(t *testing.T) {
 	issue := Issue{Comments: []Comment{{Body: "Decisions needed: which one?"}}}
 	if got := Waiting(issue, signals); !slices.Equal(got, []string{"decision"}) {
 		t.Fatalf("waiting = %v", got)
+	}
+}
+
+func TestEyeCheckOfHandedBackWork(t *testing.T) {
+	asks := "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders and check the total"
+	failed := "## Hand-back\n**Eyes failed:** the total is blank on staging\n**Decisions needed:**\n1. Fix now or ship without?"
+	fixed := "## Hand-back\n**PR:** #58 (ready)\n**Needs eyes:** open /orders again"
+	cases := []struct {
+		name        string
+		comments    []string
+		wantState   string
+		wantPR      int
+		wantWaiting []string
+	}{
+		{"asked", []string{asks}, EyesAsked, 41, []string{"eyes"}},
+		{"nothing to look at", []string{handBackClean}, "", 41, nil},
+		{"looked at and passed", []string{asks, "Eyes checked: the total is right."}, "", 41, nil},
+		{"looked at and failed: the look is done, the decision is open", []string{asks, failed}, EyesFailed, 41, []string{"decision"}},
+		{"failed, ruled on: free for a worker", []string{asks, failed, ruling}, EyesFailed, 41, nil},
+		{"the fix asks for a new look", []string{asks, failed, ruling, fixed}, EyesAsked, 58, []string{"eyes"}},
+		{"an ask with no pull request owes no look on staging", []string{"## Hand-back\n**Needs eyes:** open /orders"}, "", 0, []string{"eyes"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issue := Issue{OpenPRs: map[int]PR{}} // every pull request is merged
+			for _, body := range tc.comments {
+				issue.Comments = append(issue.Comments, Comment{Body: body})
+			}
+			state, pr, _ := EyeCheck(issue, config.DefaultSignals())
+			if state != tc.wantState || pr != tc.wantPR {
+				t.Errorf("eye check = %q of #%d, want %q of #%d", state, pr, tc.wantState, tc.wantPR)
+			}
+			if got := Waiting(issue, config.DefaultSignals()); !slices.Equal(got, tc.wantWaiting) {
+				t.Errorf("waiting = %v, want %v", got, tc.wantWaiting)
+			}
+		})
 	}
 }

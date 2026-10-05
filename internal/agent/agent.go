@@ -20,6 +20,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 	"github.com/edisoncode/ai-shed/internal/supervisor"
 )
@@ -184,7 +185,14 @@ func every(ctx context.Context, interval time.Duration, tick func(context.Contex
 }
 
 func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supervisor {
+	// The owner's commit commands run like the machine's checks and tasks:
+	// after its init line.
+	reader := &looks.Reader{GitHub: looks.GH{}, Now: time.Now, Run: func(ctx context.Context, command string) (string, error) {
+		return looks.Shell(ctx, m.Command(command))
+	}}
 	return &supervisor.Supervisor{
+		Repos:          cfg.Repos,
+		Looks:          reader,
 		Machine:        m,
 		Settings:       cfg.Supervisor,
 		Signals:        cfg.Signals,

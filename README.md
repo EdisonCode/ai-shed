@@ -21,12 +21,14 @@ linux-box  me@linux-box  load 0.52/8  disk 42%  agent ok
   tasks
     nightly-deps  0 3 * * *  ok  9h ago, took 41s
   ! check failed: docker (Cannot connect to the Docker daemon)
-  ! my-org/my-app#124 waits on you (decision): Drop the legacy column
+  ! my-org/my-app#123 waits on you (review #131 5h): Retry the export when the API times out
+  ! my-org/my-app#124 waits on you (decision 2h): Drop the legacy column
 
 mac-mini  me@mac-mini  UNREACHABLE
   ! unreachable: me@mac-mini: exit status 255: Operation timed out
 
-3 item(s) need you.
+4 item(s) need you.
+Waiting on you: 1 review (oldest 5h), 1 decision (oldest 2h).
 ```
 
 The exit code is 1 when anything needs you, so a script or a notifier can act on it.
@@ -109,6 +111,7 @@ Guards against wasted tokens:
 - A failed check-in (`gh` is logged out, the reviewer command is broken) is retried after 10 minutes, not every tick.
 - A usage limit costs no nudges. A limited worker is left alone until its reset. A reviewer that is itself at its limit is tried again after 15 minutes and is not reported as a failure.
 - An idle worker is reviewed once per silence, not once per tick.
+- A resting worker is reviewed again only when its queue has something new it can act on. A label, a comment or a hand-back that leaves an issue waiting on you costs no review.
 
 ### The queue
 
@@ -122,7 +125,9 @@ at a time, in this order:
    - *You answered.* A comment with the answering phrase of a `sends_back`
      signal (by default `Owner ruling`) came after the hand-back. The worker
      is told to read your answer and apply it. So "yes, and also fix X" needs
-     no typing on the machine.
+     no typing on the machine. An answer that asks for no change says so
+     right after the phrase, `Owner ruling: accepted`: it closes the decision
+     and costs no worker turn.
    - *The pull request went stale.* It conflicts with its base branch, or a
      check failed. The worker is told what is wrong and to fix only that.
 
@@ -153,7 +158,83 @@ machines:
 ```
 
 An issue that waits on you is skipped. An issue that one worker has in hand is
-never handed to another, whatever their queues.
+never handed to another, whatever their queues. A worker's brief also tells it
+to look, before it starts an issue, for an open pull request or an unmerged
+branch that already covers it. If it finds one that it was not sent back to,
+it does not start: it reports the overlap in the issue as a decision for you.
+
+### Eye checks on staging
+
+A worker tests what it builds, and some work still needs someone to look at
+it running: a page, a flow, a number on a screen. The worker asks for that in
+its hand-back with `Needs eyes:`. You merge on the diff, staging is deployed
+when you deploy it, and by then the issue is usually closed. Tell shed how to
+see what staging and production serve, and a worker with a browser does the
+look on staging before the work goes to production.
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    staging:
+      url: https://staging.example.com
+      # Any command that prints the commit staging serves.
+      commit: "curl -fsS https://staging.example.com/healthz | jq -r .commit"
+      orders: |
+        You may sign in as the test user, open any page and save a draft.
+        Never place an order, send a message or change another user's data.
+    production:
+      commit: "curl -fsS https://app.example.com/healthz | jq -r .commit"
+    look_back: 336h      # the default: 14 days
+
+machines:
+  - name: mac-mini
+    workers:
+      - name: app
+        eye_checks: true   # this worker has a browser
+```
+
+- **What owes a look.** An issue, open or closed, whose last hand-back names
+  a pull request and asks for eyes, when that pull request was merged after
+  production's commit. Work that production already serves is not looked at:
+  it is too late to gate. With no `production` command, or when production is
+  older than `look_back`, the window is `look_back`.
+- **When it is due.** When staging's commit has the pull request's merge
+  commit in its history. Until then the look waits for a staging deploy, and
+  nothing is asked of anyone.
+- **Who does it.** A worker with `eye_checks: true`, ahead of new issues.
+  Where another such worker shares the queue, not the worker that built the
+  work: a second reader catches a hand-back that is too vague to check.
+- **What the worker may do.** Its brief gets the staging address and your
+  `orders`. An act the orders do not name is not allowed. Name the writes a
+  check needs and the ones that must never happen.
+- **A pass.** The worker comments `Eyes checked:` with what it saw.
+- **A failure.** The worker reopens the issue and hands it back with
+  `Eyes failed:` and a `Decisions needed:` for you. It does not fix it: a
+  failed look is new information, and whether it is a regression, an older
+  defect or the feature working as specified but wrong is yours to scope.
+  Your `Owner ruling` then sends the issue to a worker as usual.
+- **A check that could not be done.** The browser is signed out, staging is
+  down, the description cannot be judged, or the check needs an act the
+  orders forbid. The worker posts nothing and says it is blocked, and the
+  supervisor reports `needs_owner`. A blocked look never counts as passed.
+- **When staging's commit cannot be read**, no look is handed out, the
+  building goes on, and `shed status` says so.
+
+`shed status` ends with each repository's release state, the go or no-go for
+a production deploy:
+
+```
+my-org/my-app  staging 3f2a1c9  production 9b1e0d4
+  14 pull request(s) merged since production's commit, 2d ago
+  eye checks: 2 not done (1 on staging, 1 wait for a staging deploy), 1 failed
+    #123  PR #131  on staging         5h  Retry the export when the API times out
+    #127  PR #140  waits for staging  2h  Show the total on the order page
+    #125  PR #138  FAILED             1h  Paginate the audit log
+```
+
+The commit commands run on the watcher for `shed status` and on the worker's
+machine for the queue, after its `init` line, so both must reach the
+environments. `shed status -json` carries the release state under `repos`.
 
 ### Machine capacity
 
@@ -166,7 +247,7 @@ machines:
   - name: linux-box
     capacity:
       max_load: 1.5        # 1-minute load average per core
-      busy_when: '[ "$(pgrep -fc "Runner\.Worker")" -ge 2 ]'   # exit 0 = busy
+      busy_when: '[ "$(pgrep -c -x "Runner\.Worker")" -ge 2 ]'   # exit 0 = busy
       max_wait: 20m
 ```
 
@@ -184,9 +265,13 @@ machines:
   any command of yours, run after the machine's `init` line, and it is the
   place for what load does not show. Two examples for Linux:
 
+  Match a process by its exact name (`pgrep -x`), not by its command line
+  (`pgrep -f`): `-f` also counts any shell or script whose arguments happen
+  to contain the pattern, and the machine then looks busier than it is.
+
   ```sh
   # two or more GitHub Actions jobs are running on this machine's runners
-  [ "$(pgrep -fc "Runner\.Worker")" -ge 2 ]
+  [ "$(pgrep -c -x "Runner\.Worker")" -ge 2 ]
   # disk or memory pressure: tasks stalled more than 20% of the last 10 seconds
   awk -F'[ =]' '/^some/ && $3 > 20 {busy=1} END {exit !busy}' /proc/pressure/io /proc/pressure/memory
   ```
@@ -303,6 +388,8 @@ and the two typed commands to what that tool understands.
 | task failed | the last run exited non-zero |
 | task missed its run | a scheduled time passed with no run |
 | issue waits on you | a comment asks for a decision, a look or a review, and nothing answers it |
+| cannot read the release state | a `repos` commit command failed or did not print a commit, or GitHub could not be asked |
+| eye checks are due on staging | merged work is on staging, owes a look, and no worker has `eye_checks` |
 | issues queued and no worker is running | there is a backlog and nobody is on it |
 | worker has been quiet | an issue's window had no output for 30 minutes |
 
@@ -318,8 +405,8 @@ hand-back: a comment that contains the word `Hand-back` (configurable as
 
 | Signal | Opens when a comment has | Stays closed when followed by | Closes when a later comment has |
 | --- | --- | --- | --- |
-| decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker) |
-| eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked` |
+| decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker, unless it reads `Owner ruling: accepted`) |
+| eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked`, or `Eyes failed` from a worker that looked on staging |
 | review | `**PR:** #41` | | that pull request is merged or closed |
 
 While that pull request is open but cannot merge (a conflict, a failed check),
@@ -334,6 +421,11 @@ or a discussion on the issue ask you nothing and hold nothing back. Your
 answers (`Owner ruling`, `Eyes checked`) count in any comment.
 
 An issue with an open signal is not handed to a worker.
+
+Each `waits on you` line says how long ago the worker asked and, for a review,
+which pull request: `(eyes 3h, review #41 3h)`. Under the report, one line
+totals what waits on you by kind with the age of the oldest. When the workers
+are idle, that line is where the work is.
 
 ## Setup
 
@@ -356,7 +448,7 @@ gh api repos/EdisonCode/ai-shed/contents/shed.example.yaml --jq .content | base6
 shed validate
 shed status
 shed status -watch 1m                       # live view
-shed status -json                           # for scripts
+shed status -json                           # for scripts: {"machines": [...], "repos": [...]}
 ```
 
 To update: `shed update` replaces the binary with the latest release, checked
@@ -472,8 +564,8 @@ To get a worker onto new tooling (an integration you installed, a changed
 agent definition), ask for a fresh session:
 
 ```sh
-shed recycle mini app        # after the issue it has in hand
-shed recycle -now mini app   # at once
+shed recycle linux-box app        # after the issue it has in hand
+shed recycle -now linux-box app   # at once
 ```
 
 The agent ends the session at the next point where nothing is in progress and

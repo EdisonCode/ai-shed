@@ -64,8 +64,31 @@ type Lister interface {
 type GH struct{}
 
 func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
-	args := []string{"issue", "list", "--repo", src.Repo, "--state", "open", "--limit", "200",
-		"--json", "number,title,url,updatedAt,comments,labels"}
+	issues, err := issueList(ctx, src, "--state", "open")
+	if err != nil {
+		return nil, err
+	}
+	openPRs, err := openPRs(ctx, src.Repo)
+	if err != nil {
+		return nil, err
+	}
+	for i := range issues {
+		issues[i].OpenPRs = openPRs
+	}
+	return issues, nil
+}
+
+// Closed returns the source's issues that were closed after since. Their
+// open pull requests are not looked up.
+func (GH) Closed(ctx context.Context, src config.IssueSource, since time.Time) ([]Issue, error) {
+	// The search is by day; the caller's window is narrowed by what it does
+	// with each issue's pull request.
+	return issueList(ctx, src, "--state", "closed", "--search", "closed:>="+since.UTC().Format("2006-01-02"))
+}
+
+func issueList(ctx context.Context, src config.IssueSource, filter ...string) ([]Issue, error) {
+	args := append([]string{"issue", "list", "--repo", src.Repo, "--limit", "200",
+		"--json", "number,title,url,updatedAt,comments,labels"}, filter...)
 	if src.Label != "" {
 		args = append(args, "--label", src.Label)
 	}
@@ -83,12 +106,8 @@ func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 	if err := json.Unmarshal(out, &issues); err != nil {
 		return nil, fmt.Errorf("gh issue list %s: parse output: %w", src.Repo, err)
 	}
-	openPRs, err := openPRs(ctx, src.Repo)
-	if err != nil {
-		return nil, err
-	}
 	for i := range issues {
-		issues[i].Repo, issues[i].OpenPRs = src.Repo, openPRs
+		issues[i].Repo = src.Repo
 	}
 	return issues, nil
 }
@@ -152,19 +171,46 @@ func prProblem(mergeable string, checks []check) string {
 // them: the work will change, and the worker asks again when it hands back.
 // A question it asked the owner still is.
 func Waiting(issue Issue, signals []config.Signal) []string {
-	rework := Rework(issue, signals) != ""
 	var open []string
-	for _, s := range signals {
-		if isOpen, _ := signalState(issue, s); isOpen && !(rework && !s.SendsBack) {
-			open = append(open, s.Name)
-		}
+	for _, a := range Asks(issue, signals) {
+		open = append(open, a.Name)
 	}
 	return open
 }
 
+// Ask is one thing an issue asks of the owner: an open signal.
+type Ask struct {
+	// Name is the signal's name.
+	Name string `json:"name"`
+	// Since is when the worker last asked; zero when the comment has no time.
+	Since time.Time `json:"since"`
+	// PR is the pull request a follows_pr signal waits on; 0 for none.
+	PR int `json:"pr,omitempty"`
+}
+
+// Asks returns what the issue asks of the owner, in the order of the signals.
+// Waiting says which asks are left out while the issue needs a worker again.
+func Asks(issue Issue, signals []config.Signal) []Ask {
+	rework := Rework(issue, signals) != ""
+	var asks []Ask
+	for _, s := range signals {
+		isOpen, pr, since := signalState(issue, s)
+		if !isOpen || (rework && !s.SendsBack) {
+			continue
+		}
+		ask := Ask{Name: s.Name, Since: since}
+		if s.FollowsPR {
+			ask.PR = pr
+		}
+		asks = append(asks, ask)
+	}
+	return asks
+}
+
 // Rework says why an issue that was handed back needs a worker again while
-// its pull request is still open: the owner answered after the hand-back, or
-// the pull request cannot merge as it stands. Empty when it does not.
+// its pull request is still open: the owner answered after the hand-back with
+// something other than an acceptance, or the pull request cannot merge as it
+// stands. Empty when it does not.
 func Rework(issue Issue, signals []config.Signal) string {
 	handBack, pr := lastHandBack(issue, signals)
 	open, isOpen := issue.OpenPRs[pr]
@@ -173,7 +219,12 @@ func Rework(issue Issue, signals []config.Signal) string {
 	}
 	var reasons []string
 	for _, s := range signals {
-		if s.SendsBack && s.AnsweredBy != "" && lastComment(issue, s.AnsweredBy) > handBack {
+		if !s.SendsBack || s.AnsweredBy == "" {
+			continue
+		}
+		// The last answer rules: an acceptance after a change was asked for
+		// takes the change back.
+		if last := lastComment(issue, s.AnsweredBy); last > handBack && !accepts(issue.Comments[last].Body, s) {
 			reasons = append(reasons, fmt.Sprintf("the owner answered in the issue (%s) after pull request #%d was handed back; read the answer and apply it", s.AnsweredBy, pr))
 			break
 		}
@@ -182,6 +233,13 @@ func Rework(issue Issue, signals []config.Signal) string {
 		reasons = append(reasons, fmt.Sprintf("pull request #%d %s", pr, open.Problem))
 	}
 	return strings.Join(reasons, "; ")
+}
+
+// accepts reports whether an answer takes the work as it stands: the text
+// after the answering phrase starts with one of the signal's accept words.
+func accepts(body string, s config.Signal) bool {
+	value, _ := afterPhrase(strings.ToLower(body), strings.ToLower(s.AnsweredBy))
+	return isClear(strings.TrimLeft(value, ": \t\r\n*_`\"'"), s.Accept)
 }
 
 // lastHandBack returns the position of the last comment in which a worker
@@ -215,9 +273,9 @@ func lastComment(issue Issue, phrase string) int {
 	return last
 }
 
-// signalState reports whether the signal is open on the issue, and the pull
-// request its last ask named (0 for none).
-func signalState(issue Issue, s config.Signal) (open bool, pr int) {
+// signalState reports whether the signal is open on the issue, the pull
+// request its last ask named (0 for none), and when that ask was made.
+func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Time) {
 	for _, c := range issue.Comments {
 		body := strings.ToLower(c.Body)
 		// The answer is tested first: a comment that both cites an earlier
@@ -226,17 +284,22 @@ func signalState(issue Issue, s config.Signal) (open bool, pr int) {
 			open = false
 		}
 		if value, found := asked(body, s); found {
-			open, pr = !isClear(value, s.Clear), prNumber(value)
+			open, pr, since = !isClear(value, s.Clear), prNumber(value), c.CreatedAt
+		}
+		// A check that was done and failed is not asked for any more. It is
+		// tested last: the comment that reports it may repeat the ask.
+		if failedIn(body, s) {
+			open = false
 		}
 	}
 	// A signal that follows a pull request is over once that pull request is
 	// merged or closed.
 	if open && s.FollowsPR && pr != 0 && issue.OpenPRs != nil {
 		if _, stillOpen := issue.OpenPRs[pr]; !stillOpen {
-			return false, pr
+			return false, pr, since
 		}
 	}
-	return open, pr
+	return open, pr, since
 }
 
 var prRE = regexp.MustCompile(`#(\d+)`)
@@ -279,4 +342,45 @@ func isClear(value string, clear []string) bool {
 		}
 	}
 	return false
+}
+
+func failedIn(body string, s config.Signal) bool {
+	return s.FailedBy != "" && strings.Contains(body, strings.ToLower(s.FailedBy))
+}
+
+// What an issue says about the eye check of its last handed-back pull request.
+const (
+	EyesAsked  = "asked"  // a worker asked for a look and nobody has looked
+	EyesFailed = "failed" // someone looked and the work did not pass
+)
+
+// EyeCheck reports whether the issue's handed-back work still owes a look
+// (EyesAsked), was looked at and failed (EyesFailed), or neither (""). pr is
+// the pull request of the last hand-back and since is when the state began.
+func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since time.Time) {
+	_, pr = lastHandBack(issue, signals)
+	if pr == 0 {
+		return "", 0, time.Time{}
+	}
+	for _, s := range signals {
+		if s.Name != config.EyesSignal {
+			continue
+		}
+		for _, c := range issue.Comments {
+			body := strings.ToLower(c.Body)
+			if s.AnsweredBy != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) {
+				state = ""
+			}
+			if value, found := asked(body, s); found {
+				state, since = "", c.CreatedAt
+				if !isClear(value, s.Clear) {
+					state = EyesAsked
+				}
+			}
+			if failedIn(body, s) {
+				state, since = EyesFailed, c.CreatedAt
+			}
+		}
+	}
+	return state, pr, since
 }
