@@ -367,19 +367,21 @@ func failedIn(body string, s config.Signal) bool {
 
 // What an issue says about the eye check of its last handed-back pull request.
 const (
-	EyesAsked  = "asked"  // a worker asked for a look and nobody has looked
-	EyesFailed = "failed" // someone looked and the work did not pass
-	EyesPassed = "passed" // someone looked and said so
+	EyesAsked   = "asked"   // a worker asked for a look and nobody has looked
+	EyesFailed  = "failed"  // someone looked and the work did not pass
+	EyesPassed  = "passed"  // someone looked and said so
+	EyesBlocked = "blocked" // a worker tried to look and could not
 )
 
 // EyeCheck reports whether the issue's handed-back work still owes a look
 // (EyesAsked), was looked at and failed (EyesFailed) or passed (EyesPassed),
-// or never asked for one (""). pr is the pull request of the last hand-back
-// and since is when the state began.
-func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since time.Time) {
+// could not be looked at (EyesBlocked), or never asked for one (""). pr is
+// the pull request of the last hand-back, since is when the state began, and
+// note is what stopped a blocked look.
+func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since time.Time, note string) {
 	_, pr = lastHandBack(issue, signals)
 	if pr == 0 {
-		return "", 0, time.Time{}
+		return "", 0, time.Time{}, ""
 	}
 	for _, s := range signals {
 		if s.Name != config.EyesSignal {
@@ -400,7 +402,30 @@ func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since
 			if failedIn(body, s) {
 				state, since = EyesFailed, c.CreatedAt
 			}
+			// A look that was done, or never asked for, cannot be blocked.
+			if why, found := noteAfter(c.Body, s.BlockedBy); found && (state == EyesAsked || state == EyesBlocked) {
+				state, since, note = EyesBlocked, c.CreatedAt, why
+			}
+			// The owner cleared what was in the way: the look is owed again.
+			if state == EyesBlocked && s.UnblockedBy != "" && strings.Contains(body, strings.ToLower(s.UnblockedBy)) {
+				state, since = EyesAsked, c.CreatedAt
+			}
 		}
 	}
-	return state, pr, since
+	if state != EyesBlocked {
+		note = ""
+	}
+	return state, pr, since, note
+}
+
+// noteAfter returns the first line that follows the phrase in a comment, in
+// the comment's own case.
+func noteAfter(body, phrase string) (string, bool) {
+	at := strings.Index(strings.ToLower(body), strings.ToLower(phrase))
+	if phrase == "" || at < 0 {
+		return "", false
+	}
+	rest := strings.TrimLeft(body[min(at+len(phrase), len(body)):], ": \t\r\n*_`\"'")
+	line, _, _ := strings.Cut(rest, "\n")
+	return strings.TrimSpace(line), true
 }

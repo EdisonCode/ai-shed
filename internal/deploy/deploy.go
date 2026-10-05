@@ -280,6 +280,29 @@ func PushTask(ctx context.Context, r probe.Runner, m config.Machine, worker, id 
 	return writeRemote(ctx, r, m, runlog.StateDir+"/"+runlog.TasksDir+"/"+where+"/"+id+".md", brief, "644")
 }
 
+// What became of a task that was to be cancelled.
+const (
+	TaskCancelled = "cancelled" // it waited, and is gone
+	TaskTaken     = "taken"     // a worker was handed it; it is too late
+	TaskAbsent    = "absent"    // the machine has no such task
+)
+
+// CancelTask removes a one-off task that still waits for a worker, and says
+// what became of it. A task a worker was handed is left alone: the worker
+// has its brief and may be halfway through.
+func CancelTask(ctx context.Context, r probe.Runner, m config.Machine, id string) (string, error) {
+	script := fmt.Sprintf(`d="$HOME/%s/%s"
+[ -f "$d/%s/%s.md" ] && { echo %s; exit 0; }
+for f in "$d"/*/%s.md; do [ -f "$f" ] && rm "$f" && { echo %s; exit 0; }; done
+echo %s
+`, runlog.StateDir, runlog.TasksDir, runlog.TaskTaken, id, TaskTaken, id, TaskCancelled, TaskAbsent)
+	out, err := r.Run(ctx, m, "sh -s", strings.NewReader(script))
+	if err != nil {
+		return "", fmt.Errorf("cancel task %s: %w", id, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // noReport is what the report script prints when no worker has written one.
 const noReport = "@@no-report"
 

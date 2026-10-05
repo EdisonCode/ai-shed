@@ -163,6 +163,11 @@ signals:
     # What a worker writes when it looked on staging and the work did not
     # pass. It closes the signal; the worker asks for a decision with it.
     failed_by: "Eyes failed"
+    # What a worker writes when it could not look at all (signed out,
+    # staging down), and what you write when a worker can try again. A
+    # blocked look is not handed out until then. These are the defaults.
+    blocked_by: "Eyes blocked"
+    unblocked_by: "Eyes unblocked"
   - name: review
     ask: "**PR:**"
     follows_pr: true

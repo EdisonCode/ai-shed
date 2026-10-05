@@ -21,6 +21,7 @@ const (
 	Awaiting = "awaiting" // merged, but staging does not serve it yet
 	Due      = "due"      // staging serves it and nobody has looked
 	Failed   = "failed"   // someone looked on staging and it did not pass
+	Blocked  = "blocked"  // a worker tried to look and could not; it is the owner's to clear
 )
 
 // commitTimeout bounds the owner's commit command, which usually asks a
@@ -35,8 +36,10 @@ type Look struct {
 	URL    string `json:"url"`
 	PR     int    `json:"pr"`
 	State  string `json:"state"`
-	// Since is when the look was asked for, or when it failed.
+	// Since is when the look was asked for, or when it failed or was blocked.
 	Since time.Time `json:"since"`
+	// Note is what stopped a blocked look, in the worker's words.
+	Note string `json:"note,omitempty"`
 }
 
 // Report is what one repository has merged since production and what of it
@@ -136,7 +139,7 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 	}
 	seen := map[int]bool{}
 	for _, issue := range issues {
-		state, pr, since := backlog.EyeCheck(issue, signals)
+		state, pr, since, note := backlog.EyeCheck(issue, signals)
 		pull, isMerged := merged[pr]
 		if state == "" || !isMerged || seen[issue.Number] {
 			continue
@@ -147,6 +150,9 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 			look.State = Passed
 			report.Passed = append(report.Passed, look)
 			continue
+		}
+		if state == backlog.EyesBlocked {
+			look.State, look.Note = Blocked, note
 		}
 		if state == backlog.EyesAsked {
 			onStaging, err := r.contains(ctx, repo.Name, report.Staging, pull.Commit)

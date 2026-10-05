@@ -250,8 +250,13 @@ machines:
   Your `Owner ruling` then sends the issue to a worker as usual.
 - **A check that could not be done.** The browser is signed out, staging is
   down, the description cannot be judged, or the check needs an act the
-  orders forbid. The worker posts nothing and says it is blocked, and the
-  supervisor reports `needs_owner`. A blocked look never counts as passed.
+  orders forbid. The worker comments `Eyes blocked:` with what stopped it
+  and takes its next item: a look only you can clear does not hold a worker
+  idle. The look is yours now. `shed status` counts it as not done and lists
+  it with the worker's reason, and your `notify` command hears of it. When
+  the cause is gone, comment `Eyes unblocked` on the issue and a worker
+  tries again; or look yourself and comment `Eyes checked:`. A blocked look
+  never counts as passed.
 - **When staging's commit cannot be read**, no look is handed out, the
   building goes on, and `shed status` says so.
 
@@ -300,6 +305,7 @@ some-command | shed task linux-box -       # the brief on standard input
 - **Afterwards the worker goes back to its queue**, on a clear context when
   it has `fresh_per_issue`.
 - A busy machine holds a task like any hand-over, for `max_wait` at most. A
+  task that arrives while an issue is held goes ahead of that issue. A
   session that ends in the middle gives the task to that worker's next
   session.
 
@@ -313,6 +319,16 @@ task in place of an issue for the worker that has it:
     20261004-143210-512  in hand  app
     20261004-150102-090  queued   any worker
 ```
+
+A task that still waits can be cancelled, for example to push it again for a
+worker that has since come free:
+
+```sh
+shed task -cancel 20261004-150102-090 linux-box
+```
+
+A task a worker was already handed is not cancelled: the worker has its
+brief and may be halfway through.
 
 A task has no issue behind it, so nothing in the queue rules applies to it:
 no rework, no signals, no retries. If it leads to a pull request, that pull
@@ -538,6 +554,7 @@ and the two typed commands to what that tool understands.
 | issue waits on you | a comment asks for a decision, a look or a review, and nothing answers it |
 | cannot read the release state | a `repos` commit command failed or did not print a commit, or GitHub could not be asked |
 | eye checks are due on staging | merged work is on staging, owes a look, and no worker has `eye_checks` |
+| the eye check is blocked | a worker could not do it and said why; clear the cause and comment `Eyes unblocked`, or look yourself |
 | issues queued and no worker is running | there is a backlog and nobody is on it |
 | worker has been quiet | an issue's window had no output for 30 minutes |
 

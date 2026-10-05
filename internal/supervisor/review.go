@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -104,7 +105,7 @@ Rules for the message of a nudge:
 - One line, plain words, specific. Name the issue number, the file or the command.
 - An item marked rework was handed back with a pull request that cannot merge as it stands. Say what is wrong with the pull request and tell the worker to fix that and nothing else, even if the item also waits on the owner for something.
 - An item marked eye check is merged work that someone must look at on staging before it goes to production. It is not work to build. Hand it over like any other item; the worker's brief says how an eye check is done.
-- A worker that could not do an eye check is blocked: it could not sign in, staging was down, the description was too vague to judge, or the check needs an act its orders forbid. A blocked check has not passed. Choose needs_owner and say in the reason what blocked it. Do not hand the worker another item until the owner has acted.
+- A worker that could not do an eye check is blocked: it could not sign in, staging was down, the description was too vague to judge, or the check needs an act its orders forbid. A blocked check has not passed. The worker's brief tells it to record the block in a comment on the issue. The check then leaves its queue and is the owner's to clear; the owner is told. If the terminal does not show that it posted that comment, tell it once to post it. Once it has, hand over the first workable item of the queue, or choose done when there is none. A blocked check is no reason to leave a worker idle beside an item it can act on.
 - A worker that was sent back to an item and says nothing needs to change has not finished until it hands back again. If its terminal does not show a new hand-back, tell it once to post a new hand-back that says so. Do not tell it to look for changes to make.
 - When <in_hand> shows a one-off task from the owner, its brief is the owner's own words for that task. Work it covers is in scope even where the worker's brief does not cover it. Judge the worker against it until the task is done and its report is written. Then hand over the first workable queue item, or choose done.
 - An item marked as put first by the owner is the owner's direct order, and may come from another worker's queue. It is in scope for this worker even where its brief does not cover it. When it is workable, hand it over before any other item.
@@ -191,17 +192,12 @@ func Prompt(in ReviewInput) string {
 // second answer in that text is an error: nothing says which one it meant. A
 // verdict outside the choices is an error.
 func ParseVerdict(answer string) (Verdict, error) {
-	start := strings.Index(answer, "{")
-	if start < 0 {
+	if !strings.Contains(answer, "{") {
 		return Verdict{}, fmt.Errorf("reviewer gave no JSON object: %q", clip(answer, 200))
 	}
-	var v Verdict
-	dec := json.NewDecoder(strings.NewReader(answer[start:]))
-	if err := dec.Decode(&v); err != nil {
+	v, err := lastAnswer(answer)
+	if err != nil {
 		return Verdict{}, fmt.Errorf("reviewer gave bad JSON: %w: %q", err, clip(answer, 200))
-	}
-	if rest := answer[start+int(dec.InputOffset()):]; strings.Contains(rest, `"verdict"`) {
-		return Verdict{}, fmt.Errorf("reviewer gave more than one answer: %q", clip(answer, 300))
 	}
 	// A message is typed as one line: a newline would send it in pieces.
 	v.Message = clip(strings.Join(strings.Fields(v.Message), " "), maxMessage)
@@ -222,6 +218,38 @@ func ParseVerdict(answer string) (Verdict, error) {
 		return Verdict{}, fmt.Errorf("reviewer gave unknown verdict %q", v.Verdict)
 	}
 	return v, nil
+}
+
+// lastAnswer returns the last complete verdict in the reviewer's answer. A
+// reviewer may change its mind while it writes and give a second object: the
+// last one is the one it means. Rejecting both left the worker idle for as
+// long as the reviewer kept doing it. Text around the objects is ignored.
+func lastAnswer(answer string) (Verdict, error) {
+	var last Verdict
+	var firstErr error
+	for rest := answer; ; {
+		start := strings.Index(rest, "{")
+		if start < 0 {
+			break
+		}
+		rest = rest[start:]
+		var v Verdict
+		dec := json.NewDecoder(strings.NewReader(rest))
+		if err := dec.Decode(&v); err != nil {
+			// A brace in a remark, or an object that was cut short.
+			firstErr = cmp.Or(firstErr, err)
+			rest = rest[1:]
+			continue
+		}
+		rest = rest[dec.InputOffset():]
+		if v.Verdict != "" {
+			last, firstErr = v, nil
+		}
+	}
+	if last.Verdict == "" && firstErr != nil {
+		return Verdict{}, firstErr
+	}
+	return last, nil
 }
 
 func clip(s string, max int) string {

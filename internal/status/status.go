@@ -210,10 +210,23 @@ func (r RepoReport) Attention() []string {
 	if r.Error != "" {
 		return []string{"cannot read the release state: " + r.Error}
 	}
+	var attention []string
 	if due := r.count(looks.Due); due > 0 && r.Lookers == 0 {
-		return []string{fmt.Sprintf("%d eye check(s) are due on staging and no worker does eye checks: they are yours", due)}
+		attention = append(attention, fmt.Sprintf("%d eye check(s) are due on staging and no worker does eye checks: they are yours", due))
 	}
-	return nil
+	// A look a worker could not do is the owner's to clear. No worker waits
+	// on it, so nothing else says so.
+	for _, l := range r.Looks {
+		if l.State != looks.Blocked {
+			continue
+		}
+		why := l.Note
+		if why == "" {
+			why = "the worker's comment on the issue says why"
+		}
+		attention = append(attention, fmt.Sprintf("the eye check of %s#%d (pull request #%d) is blocked: %s", l.Repo, l.Number, l.PR, why))
+	}
+	return attention
 }
 
 func (r RepoReport) count(state string) int {
@@ -242,7 +255,7 @@ func (c Collector) CollectAll(ctx context.Context, cfg *config.Config) Report {
 		for _, l := range r.Looks {
 			// A look that is due is a worker's. One that waits for a staging
 			// deploy asks for no eyes yet.
-			if r.Lookers > 0 && l.State != looks.Failed {
+			if r.Lookers > 0 && l.State != looks.Failed && l.State != looks.Blocked {
 				workerLooks[issueKey(l.Repo, l.Number)] = true
 			}
 		}

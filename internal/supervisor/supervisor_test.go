@@ -478,7 +478,10 @@ func TestParseVerdict(t *testing.T) {
 		{"unknown verdict", `{"verdict":"approve","reason":"r"}`, Verdict{}, "unknown verdict"},
 		{"no json", "I think it is fine.", Verdict{}, "no JSON"},
 		{"a remark after the answer is ignored", "{\"verdict\":\"done\",\"reason\":\"r\"}\n\nWhy: every item {in the queue} waits on the owner.", Verdict{Verdict: "done", Reason: "r"}, ""},
-		{"two answers are no answer", `{"verdict":"done","reason":"r"} Wait, the queue has #13. {"verdict":"nudge","message":"Take #13.","issue":13,"reason":"r"}`, Verdict{}, "more than one answer"},
+		{"the last of two answers is the one it means", `{"verdict":"done","reason":"r"} Wait, the queue has #13. {"verdict":"nudge","message":"Take #13.","issue":13,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #13.", Reason: "r", Issue: 13}, ""},
+		{"a second answer that was cut short does not count", `{"verdict":"done","reason":"r"} {"verdict":"nudge","message":"Take {the next`, Verdict{Verdict: "done", Reason: "r"}, ""},
+		{"an answer after a brace in a remark", `The queue {as shown} is empty. {"verdict":"done","reason":"r"}`, Verdict{Verdict: "done", Reason: "r"}, ""},
+		{"an object that was cut short", `{"verdict":"done","reason":"every item`, Verdict{}, "bad JSON"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1511,7 +1514,8 @@ func TestBriefSaysHowAnEyeCheckPassesFailsAndIsBlocked(t *testing.T) {
 		"starts with `Eyes checked:`",
 		"headed `Hand-back`. Write `Eyes failed:`",
 		"then `Decisions needed:`",
-		"Say here `Blocked:` and why, and stop. A check you could not do has not passed.",
+		"Post a comment on the issue that starts with `Eyes blocked:`",
+		"the supervisor gives you your next item. A check you could not do has not passed.",
 	} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("brief lacks %q:\n%s", want, brief)
@@ -1528,8 +1532,30 @@ func TestBriefOfAWorkerWithoutABrowserHasNoEyeChecks(t *testing.T) {
 	}
 }
 
-func TestReviewerIsToldABlockedEyeCheckNeedsTheOwner(t *testing.T) {
-	if !strings.Contains(instructions, "A blocked check has not passed. Choose needs_owner") {
+func TestBlockedLookLeavesTheQueueAndTheOwnerIsToldOnce(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack)
+	blocked := look(7, 41, looks.Blocked)
+	blocked.Note = "staging asks for a sign-in"
+	withStaging(f, blocked)
+	var told []string
+	f.Notify = func(worker, message string) { told = append(told, message) }
+	f.tick(2 * time.Minute)
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
+		t.Fatalf("queue = %v; a blocked look is the owner's, not a worker's", got)
+	}
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; the worker takes the next workable item", f.term.sent)
+	}
+	if want := []string{"box: the eye check of org/app#7 is blocked and waits for you: staging asks for a sign-in"}; !slices.Equal(told, want) {
+		t.Fatalf("told = %q, want %q once", told, want)
+	}
+}
+
+func TestReviewerIsToldABlockedEyeCheckDoesNotHoldTheWorker(t *testing.T) {
+	if !strings.Contains(instructions, "A blocked check is no reason to leave a worker idle beside an item it can act on.") {
 		t.Fatal("the reviewer is not told what to do with an eye check that could not be done")
 	}
 }
@@ -1784,6 +1810,19 @@ func TestBusyMachineHoldsATaskLikeAHandOver(t *testing.T) {
 	f.tick(20 * time.Minute)
 	if !slices.Equal(f.term.sent, []string{taskMessage}) {
 		t.Fatalf("sent = %q; after max_wait the task goes through", f.term.sent)
+	}
+}
+
+func TestTaskPushedWhileAHandOverIsHeldComesBeforeIt(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12))
+	busy := busyMachine(f)
+	f.tick(2 * time.Minute) // #12 is held
+	f.pushTask(t, runlog.TaskAny, "t1", "A task.")
+	*busy = false
+	f.tick(time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{taskMessage}) {
+		t.Fatalf("sent = %q; a task goes ahead of the queue, held or not", f.term.sent)
 	}
 }
 

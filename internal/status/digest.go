@@ -102,8 +102,7 @@ func RenderDigest(w io.Writer, d Digest) {
 				passed++
 			}
 		}
-		fmt.Fprintf(w, "  %d passed in this window; now %d not done (%d on staging, %d wait for a staging deploy), %d failed\n",
-			passed, r.count(looks.Due)+r.count(looks.Awaiting), r.count(looks.Due), r.count(looks.Awaiting), r.count(looks.Failed))
+		fmt.Fprintf(w, "  %d passed in this window; now %s, %d failed\n", passed, r.notDone(), r.count(looks.Failed))
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		for _, l := range r.Passed {
 			if l.Since.After(d.Since) {
@@ -111,8 +110,8 @@ func RenderDigest(w io.Writer, d Digest) {
 			}
 		}
 		for _, l := range r.Looks {
-			if l.State == looks.Failed {
-				fmt.Fprintf(tw, "    #%d\tPR #%d\tFAILED\t%s ago\t%s\n", l.Number, l.PR, Short(d.Now.Sub(l.Since)), l.Title)
+			if l.State == looks.Failed || l.State == looks.Blocked {
+				fmt.Fprintf(tw, "    #%d\tPR #%d\t%s\t%s ago\t%s\n", l.Number, l.PR, lookWords[l.State], Short(d.Now.Sub(l.Since)), l.Title)
 			}
 		}
 		tw.Flush()

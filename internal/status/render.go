@@ -40,7 +40,18 @@ func Render(w io.Writer, reports []MachineReport, repos []RepoReport) {
 }
 
 // lookWords says each look state the way the report prints it.
-var lookWords = map[string]string{looks.Due: "on staging", looks.Awaiting: "waits for staging", looks.Failed: "FAILED"}
+var lookWords = map[string]string{looks.Due: "on staging", looks.Awaiting: "waits for staging", looks.Failed: "FAILED", looks.Blocked: "BLOCKED"}
+
+// notDone counts the looks nobody has done, as in "2 not done (1 on staging,
+// 1 wait for a staging deploy)". Blocked ones are named when there are any.
+func (r RepoReport) notDone() string {
+	due, awaiting, blocked := r.count(looks.Due), r.count(looks.Awaiting), r.count(looks.Blocked)
+	words := fmt.Sprintf("%d not done (%d on staging, %d wait for a staging deploy", due+awaiting+blocked, due, awaiting)
+	if blocked > 0 {
+		words += fmt.Sprintf(", %d blocked", blocked)
+	}
+	return words + ")"
+}
 
 // renderRepo writes what is merged and not yet in production, and how much
 // of it nobody has looked at: the go or no-go for a production deploy.
@@ -57,12 +68,11 @@ func renderRepo(w io.Writer, r RepoReport) {
 			window = "since production's commit, " + Short(r.Now.Sub(r.Since)) + " ago"
 		}
 		fmt.Fprintf(w, "\n  %d pull request(s) merged %s\n", r.Merged, window)
-		due, awaiting, failed := r.count(looks.Due), r.count(looks.Awaiting), r.count(looks.Failed)
 		switch {
 		case len(r.Looks) == 0:
 			fmt.Fprintln(w, "  eye checks: none outstanding")
 		default:
-			fmt.Fprintf(w, "  eye checks: %d not done (%d on staging, %d wait for a staging deploy), %d failed\n", due+awaiting, due, awaiting, failed)
+			fmt.Fprintf(w, "  eye checks: %s, %d failed\n", r.notDone(), r.count(looks.Failed))
 		}
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		for _, l := range r.Looks {

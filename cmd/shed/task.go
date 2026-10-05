@@ -14,19 +14,20 @@ import (
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
-// cmdTask pushes a one-off task with a brief of its own to a machine, or
-// prints the report a worker wrote for one. The machine's agent hands the
+// cmdTask pushes a one-off task with a brief of its own to a machine, prints
+// the report a worker wrote for one, or cancels one that still waits. The machine's agent hands the
 // task to the worker ahead of its queue, when the worker has nothing in
 // progress.
 func cmdTask(args []string) int {
 	fs := flag.NewFlagSet("task", flag.ContinueOnError)
 	worker := fs.String("worker", "", "the worker the task is for (default: the first that is free)")
 	report := fs.String("report", "", "print the report of the task with this id")
+	cancel := fs.String("cancel", "", "cancel the task with this id, if no worker was handed it yet")
 	cfg, path, err := loadConfig(fs, args)
 	if err != nil {
 		return fail(err)
 	}
-	const usage = "usage: shed task [-worker name] <machine> <brief-file|->\n       shed task -report <id> <machine>"
+	const usage = "usage: shed task [-worker name] <machine> <brief-file|->\n       shed task -report <id> <machine>\n       shed task -cancel <id> <machine>"
 	if fs.NArg() < 1 {
 		return fail(fmt.Errorf("%s", usage))
 	}
@@ -51,6 +52,24 @@ func cmdTask(args []string) int {
 		}
 		fmt.Print(text)
 		return exitOK
+	}
+
+	if *cancel != "" {
+		if fs.NArg() != 1 || !runlog.ValidTaskID(*cancel) {
+			return fail(fmt.Errorf("%s", usage))
+		}
+		outcome, err := deploy.CancelTask(ctx, runner, m, *cancel)
+		switch {
+		case err != nil:
+			return fail(err)
+		case outcome == deploy.TaskCancelled:
+			fmt.Printf("%s: task %s is cancelled. No worker was handed it.\n", m.Name, *cancel)
+			return exitOK
+		case outcome == deploy.TaskTaken:
+			fmt.Fprintf(os.Stderr, "shed: task %s was already handed to a worker on %s and is not cancelled; `shed status` shows who has it\n", *cancel, m.Name)
+			return exitAttention
+		}
+		return fail(fmt.Errorf("machine %s has no task %s", m.Name, *cancel))
 	}
 
 	if fs.NArg() != 2 {

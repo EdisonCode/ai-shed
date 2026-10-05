@@ -669,6 +669,27 @@ func TestStatusShowsWhereEachOneOffTaskStands(t *testing.T) {
 	}
 }
 
+func TestBlockedLookIsCountedAsNotDoneAndNeedsOwner(t *testing.T) {
+	state := releaseState()
+	state.Looks = append(state.Looks, looks.Look{Repo: "org/app", Number: 5, Title: "Fix the thing", PR: 45, State: looks.Blocked,
+		Since: now.Add(-30 * time.Minute), Note: "staging asks for a sign-in"})
+	repos := []RepoReport{{Report: state, Lookers: 1, Now: now}}
+	var out bytes.Buffer
+	Render(&out, nil, repos)
+	for _, want := range []string{
+		"eye checks: 3 not done (1 on staging, 1 wait for a staging deploy, 1 blocked), 1 failed",
+		"#5  PR #45  BLOCKED",
+		"! the eye check of org/app#5 (pull request #45) is blocked: staging asks for a sign-in",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if !NeedsOwner(nil, repos) {
+		t.Fatal("a blocked look is the owner's to clear")
+	}
+}
+
 func TestBumpedIssueIsMarkedAndNeedsNothing(t *testing.T) {
 	res := healthy()
 	res.Checkins = []runlog.Checkin{checkin(runlog.VerdictOnTrack, "working")}
