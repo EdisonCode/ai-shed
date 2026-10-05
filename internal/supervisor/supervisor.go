@@ -70,6 +70,9 @@ const (
 	TaskDir    = ".shed/tasks"
 	taskReport = ".report.md"
 	taskOrder  = "One-off task from the owner, ahead of your queue: read %s in full and carry it out. When it is done, write your report in %s, say so here, and stop."
+	// bumpTold goes with the hand-over of an issue the owner put first. It may
+	// come from another worker's queue, and a worker holds to its brief.
+	bumpTold = " The owner put #%d first in your queue: it is yours even where your brief does not cover it."
 )
 
 // Check-in kinds: why the supervisor looked.
@@ -547,6 +550,9 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 		c.Model = model
 		c.Message += fmt.Sprintf(modelTold, model)
 	}
+	if newIssue && item.Bumped {
+		c.Message += fmt.Sprintf(bumpTold, verdict.Issue)
+	}
 	if err := s.Terminal.Send(w.Name, c.Message); err != nil {
 		return err
 	}
@@ -778,10 +784,11 @@ func (s *Supervisor) recover(worker string) *workerState {
 	return st
 }
 
-// queue lists the worker's open issues in the order to work them: rework
-// first, since finishing started work beats starting more, then the eye
-// checks that are due on staging, then by the owner's priority, then oldest
-// first. An issue that another worker has in hand is not in it.
+// queue lists the worker's open issues in the order to work them: the ones
+// the owner put first, then rework, since finishing started work beats
+// starting more, then the eye checks that are due on staging, then by the
+// owner's priority, then oldest first. An issue that another worker has in
+// hand is not in it, and neither is one the owner moved to another worker.
 func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, error) {
 	checkins, err := runlog.ReadCheckins(s.StateDir)
 	if err != nil {
@@ -793,6 +800,10 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 			taken[runlog.IssueInHand(checkins, other.Name)] = true
 		}
 	}
+	bumps, err := s.bumps()
+	if err != nil {
+		return nil, err
+	}
 	items := []QueueItem{}
 	var open []backlog.Issue
 	for _, src := range s.Machine.SourcesFor(w) {
@@ -802,25 +813,25 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		}
 		open = append(open, issues...)
 		for _, i := range issues {
-			if taken[i.Number] {
+			to, bumped := bumps[i.Number]
+			if taken[i.Number] || (to != "" && to != w.Name) {
 				continue
 			}
-			item := QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title, Waiting: backlog.Waiting(i, s.Signals),
-				Model: s.Settings.Models.For(i.LabelNames()), rank: src.Rank(i.LabelNames())}
-			if reason := backlog.Rework(i, s.Signals); reason != "" {
-				if runlog.ReworkSpent(checkins, i.Number, s.Now()) {
-					item.Waiting = append(item.Waiting, fmt.Sprintf("%s after %d tries", reason, runlog.ReworkLimit))
-				} else {
-					item.Rework = reason
-				}
-			}
+			item := s.item(i, src, checkins)
+			item.Bumped = bumped
 			items = append(items, item)
 		}
+	}
+	if items, err = s.withMoved(ctx, w, items, bumps, taken, checkins); err != nil {
+		return nil, err
 	}
 	items = s.withLooks(ctx, w, items, open, checkins)
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
 		switch {
+		case x.Bumped != y.Bumped:
+			// The owner's own word comes before every rule.
+			return x.Bumped
 		case (x.Rework != "") != (y.Rework != ""):
 			return x.Rework != ""
 		case (x.Look != "") != (y.Look != ""):
@@ -833,6 +844,77 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		}
 		return x.Number < y.Number
 	})
+	return items, nil
+}
+
+// item is the queue item of an open issue from this source.
+func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []runlog.Checkin) QueueItem {
+	item := QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title, Waiting: backlog.Waiting(i, s.Signals),
+		Model: s.Settings.Models.For(i.LabelNames()), rank: src.Rank(i.LabelNames())}
+	if reason := backlog.Rework(i, s.Signals); reason != "" {
+		if runlog.ReworkSpent(checkins, i.Number, s.Now()) {
+			item.Waiting = append(item.Waiting, fmt.Sprintf("%s after %d tries", reason, runlog.ReworkLimit))
+		} else {
+			item.Rework = reason
+		}
+	}
+	return item
+}
+
+// bumps returns the issues the owner put first in line, each with the worker
+// it was moved to; "" for none. A bump that names a worker the machine does
+// not have moves nothing: the issue must not drop out of every queue.
+func (s *Supervisor) bumps() (map[int]string, error) {
+	bumps, err := runlog.Bumps(s.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	for issue, to := range bumps {
+		if !slices.ContainsFunc(s.Machine.Workers, func(w config.Worker) bool { return w.Name == to }) {
+			bumps[issue] = ""
+		}
+	}
+	return bumps, nil
+}
+
+// withMoved adds the issues the owner moved to this worker from the queue
+// of another. The other sources of the machine are listed only when there is
+// such an issue. A bump whose issue is in none of the machine's queues is
+// over: the issue was closed, or lost its label.
+func (s *Supervisor) withMoved(ctx context.Context, w config.Worker, items []QueueItem, bumps map[int]string, taken map[int]bool, checkins []runlog.Checkin) ([]QueueItem, error) {
+	missing := map[int]bool{}
+	for issue, to := range bumps {
+		if _, here := find(items, issue); to == w.Name && !here && !taken[issue] {
+			missing[issue] = true
+		}
+	}
+	if len(missing) == 0 {
+		return items, nil
+	}
+	own := s.Machine.SourcesFor(w)
+	for _, src := range s.Machine.AllSources() {
+		if slices.ContainsFunc(own, func(o config.IssueSource) bool { return o.Key() == src.Key() }) {
+			continue
+		}
+		issues, err := s.Lister.List(ctx, src)
+		if err != nil {
+			return nil, err
+		}
+		for _, i := range issues {
+			if missing[i.Number] {
+				delete(missing, i.Number)
+				item := s.item(i, src, checkins)
+				item.Bumped = true
+				items = append(items, item)
+			}
+		}
+	}
+	for issue := range missing {
+		s.Logf("worker %s: #%d is open in no queue of this machine; its bump is dropped", w.Name, issue)
+		if err := runlog.RemoveBump(s.StateDir, issue); err != nil {
+			return nil, err
+		}
+	}
 	return items, nil
 }
 
@@ -978,7 +1060,7 @@ func (s *Supervisor) briefText(w config.Worker) string {
 			}
 			b.WriteString("\n")
 		}
-		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nBefore you start an issue, check whether an open pull request or an unmerged branch already covers it (`gh pr list --search <number>`, `git fetch` and `git branch -r`). If one does and the supervisor did not send you back to that pull request, do not start it: another worker has it. Report what you found in the issue as a decision for the owner, say so here, and stop.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\nWhen you are sent back to an issue you already handed back, do what the message says and hand back again, even when nothing needed to change: post a new hand-back comment that names the pull request, as your first one did, and say what you changed or that nothing changed. The new hand-back is what tells the supervisor you are done with it.\n")
+		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nThe owner may put an issue first in your queue, or move one to you from another worker's queue. The supervisor says so when it hands it over. Such an issue is yours even where this brief does not cover it; the standing orders still hold.\nBefore you start an issue, check whether an open pull request or an unmerged branch already covers it (`gh pr list --search <number>`, `git fetch` and `git branch -r`). If one does and the supervisor did not send you back to that pull request, do not start it: another worker has it. Report what you found in the issue as a decision for the owner, say so here, and stop.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\nWhen you are sent back to an issue you already handed back, do what the message says and hand back again, even when nothing needed to change: post a new hand-back comment that names the pull request, as your first one did, and say what you changed or that nothing changed. The new hand-back is what tells the supervisor you are done with it.\n")
 	}
 	s.eyeCheckBrief(&b, w)
 	fmt.Fprintf(&b, `
