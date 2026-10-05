@@ -1533,3 +1533,107 @@ func TestReviewerIsToldABlockedEyeCheckNeedsTheOwner(t *testing.T) {
 		t.Fatal("the reviewer is not told what to do with an eye check that could not be done")
 	}
 }
+
+// mark records what the worker's tool reports about itself.
+func (f *fixture) mark(t *testing.T, state, detail string, at time.Time) {
+	t.Helper()
+	if err := runlog.WriteMark(f.StateDir, "app", runlog.Mark{Time: at, State: state, Detail: detail}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *fixture) kinds(t *testing.T) []string {
+	t.Helper()
+	var kinds []string
+	for _, c := range f.checkins(t) {
+		kinds = append(kinds, c.Kind+" "+c.Verdict)
+	}
+	return kinds
+}
+
+// askedForPermission is a started worker whose tool stopped a minute in to
+// ask a person, with the prompt the last thing on its screen.
+func askedForPermission(t *testing.T) *fixture {
+	t.Helper()
+	f := started(t, config.Supervisor{}, onTrack)
+	asked := f.now.Add(time.Minute)
+	f.term.running(asked)
+	f.mark(t, runlog.MarkWaiting, "Claude needs your permission to use Bash", asked)
+	return f
+}
+
+func TestToolThatWaitsForAPersonNeedsTheOwnerWithoutAReview(t *testing.T) {
+	f := askedForPermission(t)
+	f.tick(2 * time.Minute)
+	f.tick(10 * time.Minute)
+	f.tick(10 * time.Minute)
+
+	if len(f.reviewer.prompts) != 0 {
+		t.Fatalf("the reviewer was asked %d times; the tool already said what the worker waits for", len(f.reviewer.prompts))
+	}
+	if got, want := f.kinds(t), []string{"start started", "hook needs_owner"}; !slices.Equal(got, want) {
+		t.Fatalf("check-ins = %v, want %v: it is reported once", got, want)
+	}
+	if c := f.lastCheckin(t); c.Reason != "its tool waits for a person: Claude needs your permission to use Bash" {
+		t.Fatalf("reason = %q", c.Reason)
+	}
+}
+
+func TestWaitingIsOverWhenTheScreenMovesOn(t *testing.T) {
+	f := askedForPermission(t)
+	f.tick(2 * time.Minute)
+	f.term.running(f.now.Add(20 * time.Second)) // the owner answered and the work goes on
+	f.tick(30 * time.Second)
+
+	if c := f.lastCheckin(t); c.Kind != KindHook || c.Verdict != runlog.VerdictOnTrack {
+		t.Fatalf("check-in = %+v, want the worker back on track", c)
+	}
+	if len(f.reviewer.prompts) != 0 {
+		t.Fatalf("the reviewer was asked %d times", len(f.reviewer.prompts))
+	}
+}
+
+func TestWaitingIsReportedOnceAcrossAnAgentRestart(t *testing.T) {
+	f := askedForPermission(t)
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	f.tick(time.Minute)
+
+	if got, want := f.kinds(t), []string{"start started", "hook needs_owner"}; !slices.Equal(got, want) {
+		t.Fatalf("check-ins = %v, want %v", got, want)
+	}
+}
+
+func TestTurnInProgressIsNotReviewedAsIdle(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.mark(t, runlog.MarkWorking, "", f.now)
+	f.tick(5 * time.Minute) // a long test run prints nothing
+	f.tick(5 * time.Minute)
+	if len(f.reviewer.prompts) != 0 {
+		t.Fatalf("reviewed %d times while its tool reports a turn in progress", len(f.reviewer.prompts))
+	}
+
+	f.tick(config.DefaultScopeEvery)
+	if len(f.reviewer.prompts) != 1 || !strings.Contains(f.reviewer.prompts[0], "its tool reports a turn in progress") {
+		t.Fatalf("after scope_every it gets its scope check, told that a turn is in progress: %q", f.reviewer.prompts)
+	}
+}
+
+func TestWorkerWhoseTurnEndedIsReviewedAsBefore(t *testing.T) {
+	f := started(t, config.Supervisor{}, Verdict{Verdict: runlog.VerdictDone, Reason: "queue is empty"})
+	f.mark(t, runlog.MarkIdle, "", f.now)
+	f.tick(2 * time.Minute)
+	if len(f.reviewer.prompts) != 1 {
+		t.Fatalf("reviewed %d times, want 1", len(f.reviewer.prompts))
+	}
+}
+
+func TestNewSessionStartsWithNoMarkOfTheLastOne(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	f.mark(t, runlog.MarkWaiting, "a prompt of the session that ended", t0.Add(-time.Hour))
+	f.tick(0)
+
+	if m, ok := runlog.ReadMark(f.StateDir, "app"); ok {
+		t.Fatalf("mark = %+v after a new session started", m)
+	}
+}
