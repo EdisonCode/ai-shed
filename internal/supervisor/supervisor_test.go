@@ -547,6 +547,18 @@ func TestStandingOrdersReachTheWorkerAndTheReviewer(t *testing.T) {
 	}
 }
 
+func TestBriefTellsAWorkerToRefuseAnIssueThatIsAlreadyCovered(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	f.tick(0)
+
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	for _, want := range []string{"an open pull request or an unmerged branch already covers it", "do not start it", "as a decision for the owner"} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+}
+
 func TestOrchestratorIsToldTheModelAndNotSwitched(t *testing.T) {
 	tell := config.Models{Default: "sonnet", Labels: models.Labels, Apply: config.ModelTell}
 	f := started(t, config.Supervisor{Models: tell}, assign(12))

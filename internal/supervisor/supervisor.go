@@ -725,7 +725,7 @@ func (s *Supervisor) briefText(w config.Worker) string {
 			}
 			b.WriteString("\n")
 		}
-		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\n")
+		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nBefore you start an issue, check whether an open pull request or an unmerged branch already covers it (`gh pr list --search <number>`, `git fetch` and `git branch -r`). If one does and the supervisor did not send you back to that pull request, do not start it: another worker has it. Report what you found in the issue as a decision for the owner, say so here, and stop.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\n")
 	}
 	b.WriteString(`
 ## You work unattended

@@ -158,7 +158,10 @@ machines:
 ```
 
 An issue that waits on you is skipped. An issue that one worker has in hand is
-never handed to another, whatever their queues.
+never handed to another, whatever their queues. A worker's brief also tells it
+to look, before it starts an issue, for an open pull request or an unmerged
+branch that already covers it. If it finds one that it was not sent back to,
+it does not start: it reports the overlap in the issue as a decision for you.
 
 ### Machine capacity
 
@@ -171,7 +174,7 @@ machines:
   - name: linux-box
     capacity:
       max_load: 1.5        # 1-minute load average per core
-      busy_when: '[ "$(pgrep -fc "Runner\.Worker")" -ge 2 ]'   # exit 0 = busy
+      busy_when: '[ "$(pgrep -c -x "Runner\.Worker")" -ge 2 ]'   # exit 0 = busy
       max_wait: 20m
 ```
 
@@ -189,9 +192,13 @@ machines:
   any command of yours, run after the machine's `init` line, and it is the
   place for what load does not show. Two examples for Linux:
 
+  Match a process by its exact name (`pgrep -x`), not by its command line
+  (`pgrep -f`): `-f` also counts any shell or script whose arguments happen
+  to contain the pattern, and the machine then looks busier than it is.
+
   ```sh
   # two or more GitHub Actions jobs are running on this machine's runners
-  [ "$(pgrep -fc "Runner\.Worker")" -ge 2 ]
+  [ "$(pgrep -c -x "Runner\.Worker")" -ge 2 ]
   # disk or memory pressure: tasks stalled more than 20% of the last 10 seconds
   awk -F'[ =]' '/^some/ && $3 > 20 {busy=1} END {exit !busy}' /proc/pressure/io /proc/pressure/memory
   ```
