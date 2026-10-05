@@ -24,6 +24,7 @@ Usage:
   shed update                       replace this shed with the latest release
   shed preflight [-machine name]    on a machine: check that each worker's command comes up ready
   shed agent [-machine name]        on a machine: supervise its workers and run its tasks
+  shed mark working|idle|waiting    in a worker's tool hook: tell shed the worker's state
   shed version                      print the version
 
 Every command accepts -config <path>. Without it, shed reads $SHED_CONFIG,
@@ -58,6 +59,8 @@ func main() {
 		code = cmdRecycle(args)
 	case "update":
 		code = cmdUpdate(args)
+	case "mark":
+		code = cmdMark(args)
 	case "version":
 		fmt.Println("shed", version)
 	case "help", "-h", "--help":

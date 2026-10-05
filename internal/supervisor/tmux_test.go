@@ -170,3 +170,34 @@ func TestTmuxCaptureMarksFaintText(t *testing.T) {
 	}
 	t.Fatalf("the faint text was not marked:\n%s", screen)
 }
+
+func TestWorkerOfAPane(t *testing.T) {
+	for location, want := range map[string]string{
+		"shed|app\n":      "app",
+		"shed|docs-b":     "docs-b",
+		"work|app":        "",
+		"shed|../../etc":  "",
+		"shed|":           "",
+		"":                "",
+		"shed|App Window": "",
+	} {
+		if got := workerOf(location); got != want {
+			t.Errorf("worker of %q = %q, want %q", location, got, want)
+		}
+	}
+}
+
+func TestTmuxKnowsWhichWorkerAPaneBelongsTo(t *testing.T) {
+	tm := privateTmux(t)
+	withoutLocale(t)
+	if err := tm.Open("app", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	pane, err := tm.run("list-panes", "-t", target("app"), "-F", "#{pane_id}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worker, err := tm.WorkerOfPane(strings.TrimSpace(pane)); err != nil || worker != "app" {
+		t.Fatalf("worker = %q, %v", worker, err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -173,4 +174,27 @@ func (t Tmux) Send(window, text string) error {
 func (t Tmux) Close(window string) error {
 	_, err := t.run("kill-window", "-t", target(window))
 	return err
+}
+
+var workerNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// WorkerOfPane returns the supervised worker whose window holds the tmux
+// pane, or "" when the pane is not a worker's. A hook of the worker's tool
+// finds out with it which worker it speaks for.
+func (t Tmux) WorkerOfPane(pane string) (string, error) {
+	out, err := t.run("display-message", "-p", "-t", pane, "#{session_name}|#{window_name}")
+	if err != nil {
+		return "", err
+	}
+	return workerOf(out), nil
+}
+
+// workerOf reads "session|window" and returns the window's name when it is a
+// worker's window.
+func workerOf(location string) string {
+	session, window, _ := strings.Cut(strings.TrimSpace(location), "|")
+	if session != Session || !workerNameRE.MatchString(window) {
+		return ""
+	}
+	return window
 }
