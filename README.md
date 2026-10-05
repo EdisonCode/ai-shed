@@ -106,7 +106,7 @@ merge, deploy, or weaken a test.
 
 Guards against wasted tokens:
 
-- Three nudges in 30 minutes that do not get a worker moving end with `stuck`, not a fourth nudge.
+- Three nudges in 30 minutes about the same work that do not get a worker moving end with `stuck`, not a fourth nudge. A hand-over of the next issue starts the count again, and so does a new session: a worker that finishes short issues quickly is not stuck.
 - A session that exits three times in 30 minutes is not started a fourth time.
 - A failed check-in (`gh` is logged out, the reviewer command is broken) is retried after 10 minutes, not every tick.
 - A usage limit costs no nudges. A limited worker is left alone until its reset. A reviewer that is itself at its limit is tried again after 15 minutes and is not reported as a failure.
