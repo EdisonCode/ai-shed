@@ -548,6 +548,24 @@ func TestStandingOrdersReachTheWorkerAndTheReviewer(t *testing.T) {
 	}
 }
 
+func TestBriefTellsAWorkerSentBackToHandBackAgainEvenWithNothingToChange(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	f.tick(0)
+
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	for _, want := range []string{"sent back to an issue you already handed back", "even when nothing needed to change", "names the pull request"} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+}
+
+func TestReviewerIsToldWhatToDoWhenASentBackWorkerFindsNothingToChange(t *testing.T) {
+	if !strings.Contains(instructions, "tell it once to post a new hand-back that says so") {
+		t.Fatal("the reviewer would nudge such a worker until it is marked stuck")
+	}
+}
+
 func TestBriefTellsAWorkerToRefuseAnIssueThatIsAlreadyCovered(t *testing.T) {
 	f := newFixture(t, config.Supervisor{}, onTrack)
 	f.tick(0)
