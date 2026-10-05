@@ -1,6 +1,8 @@
 package backlog
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -260,5 +262,29 @@ func TestEyeCheckOfHandedBackWork(t *testing.T) {
 				t.Errorf("waiting = %v, want %v", got, tc.wantWaiting)
 			}
 		})
+	}
+}
+
+type listByLabel map[string][]Issue
+
+func (l listByLabel) List(_ context.Context, src config.IssueSource) ([]Issue, error) {
+	if src.Label == "broken" {
+		return nil, errors.New("gh: not logged in")
+	}
+	return l[src.Label], nil
+}
+
+func TestFindLooksInEverySourceForAnOpenIssue(t *testing.T) {
+	lister := listByLabel{"box": {{Number: 12, Title: "Paginate"}}, "docs": {{Number: 50, Title: "Glossary"}}}
+	sources := []config.IssueSource{{Repo: "org/app", Label: "box"}, {Repo: "org/app", Label: "docs"}}
+
+	if i, found, err := Find(context.Background(), lister, sources, 50); err != nil || !found || i.Title != "Glossary" {
+		t.Fatalf("#50 = %+v, %v, %v", i, found, err)
+	}
+	if _, found, err := Find(context.Background(), lister, sources, 99); err != nil || found {
+		t.Fatalf("#99 found = %v, %v; it is open in no source", found, err)
+	}
+	if _, _, err := Find(context.Background(), lister, []config.IssueSource{{Label: "broken"}}, 12); err == nil {
+		t.Fatal("a source that cannot be listed must be an error, not a missing issue")
 	}
 }

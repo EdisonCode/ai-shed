@@ -13,6 +13,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/probe"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
 func TestPlatform(t *testing.T) {
@@ -258,6 +259,25 @@ func TestRecycleLeavesARequestForTheAgent(t *testing.T) {
 		if err != nil || string(got) != want {
 			t.Errorf("now=%v: request = %q, %v; want %q", now, got, err, want)
 		}
+	}
+}
+
+func TestBumpLeavesARequestForTheAgentAndUnbumpTakesItBack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ctx, r := context.Background(), probe.ShellRunner{}
+	if err := Bump(ctx, r, here, 41, "docs"); err != nil {
+		t.Fatal(err)
+	}
+	bumps, err := runlog.Bumps(filepath.Join(home, runlog.StateDir))
+	if err != nil || len(bumps) != 1 || bumps[41] != "docs" {
+		t.Fatalf("bumps = %v, %v; want #41 for docs", bumps, err)
+	}
+	if removed, err := Unbump(ctx, r, here, 41); err != nil || !removed {
+		t.Fatalf("unbump = %v, %v", removed, err)
+	}
+	if removed, err := Unbump(ctx, r, here, 41); err != nil || removed {
+		t.Fatalf("second unbump = %v, %v; nothing was left to take back", removed, err)
 	}
 }
 
