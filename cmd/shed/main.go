@@ -21,6 +21,8 @@ Usage:
                                     send this version and the fleet file to machines
   shed recycle [-now] <machine> <worker>
                                     give a worker a fresh session after its current issue
+  shed tidy [-apply] <machine>      list the worktrees and branches whose pull request is merged;
+                                    with -apply, remove them
   shed update                       replace this shed with the latest release
   shed preflight [-machine name]    on a machine: check that each worker's command comes up ready
   shed agent [-machine name]        on a machine: supervise its workers and run its tasks
@@ -61,6 +63,8 @@ func main() {
 		code = cmdUpdate(args)
 	case "mark":
 		code = cmdMark(args)
+	case "tidy":
+		code = cmdTidy(args)
 	case "version":
 		fmt.Println("shed", version)
 	case "help", "-h", "--help":

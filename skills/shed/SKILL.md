@@ -202,6 +202,17 @@ tokens.
 6. `shed status` shows `agent ok` within a minute, and each worker under
    `supervised` within two.
 
+## Tidy a machine
+
+`shed tidy <machine>` lists the worktrees and local branches whose pull
+request is merged. It changes nothing. Show the owner the two counts and
+anything under "stays" that looks finished to you but has uncommitted files:
+that is work nobody pushed. `shed tidy -apply <machine>` removes what was
+listed. Run it when the owner asks, or after a batch of merges; it is safe
+while workers are busy, since a worker's directory and anything with
+uncommitted or unmerged work is never touched. Never remove a worktree by
+hand to "help" it: a refusal means there is work in it.
+
 ## Keep shed current
 
 `shed update` replaces the owner's shed with the latest release. `shed deploy`
