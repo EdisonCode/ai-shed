@@ -225,7 +225,7 @@ func Rework(issue Issue, signals []config.Signal) string {
 		// The last answer rules: an acceptance after a change was asked for
 		// takes the change back.
 		if last := lastComment(issue, s.AnsweredBy); last > handBack && !accepts(issue.Comments[last].Body, s) {
-			reasons = append(reasons, fmt.Sprintf("the owner answered in the issue (%s) after pull request #%d was handed back; read the answer and apply it", s.AnsweredBy, pr))
+			reasons = append(reasons, fmt.Sprintf("the owner answered in the issue (%s) after pull request #%d was handed back; read the answer and apply it; if it asks for no change, hand back again and say so", s.AnsweredBy, pr))
 			break
 		}
 	}

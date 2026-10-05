@@ -131,7 +131,7 @@ func TestParsePRs(t *testing.T) {
 }
 
 func TestOwnersAnswerAfterAHandBackSendsTheIssueBack(t *testing.T) {
-	const sentBack = "the owner answered in the issue (Owner ruling) after pull request #41 was handed back; read the answer and apply it"
+	const sentBack = "the owner answered in the issue (Owner ruling) after pull request #41 was handed back; read the answer and apply it; if it asks for no change, hand back again and say so"
 	laterHandBack := "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** nothing\n**Decisions needed:** none\nApplied Owner ruling 1."
 	cases := []struct {
 		name        string

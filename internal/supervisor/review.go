@@ -92,6 +92,7 @@ Rules for the message of a nudge:
 - An item marked rework was handed back with a pull request that cannot merge as it stands. Say what is wrong with the pull request and tell the worker to fix that and nothing else, even if the item also waits on the owner for something.
 - An item marked eye check is merged work that someone must look at on staging before it goes to production. It is not work to build. Hand it over like any other item; the worker's brief says how an eye check is done.
 - A worker that could not do an eye check is blocked: it could not sign in, staging was down, the description was too vague to judge, or the check needs an act its orders forbid. A blocked check has not passed. Choose needs_owner and say in the reason what blocked it. Do not hand the worker another item until the owner has acted.
+- A worker that was sent back to an item and says nothing needs to change has not finished until it hands back again. If its terminal does not show a new hand-back, tell it once to post a new hand-back that says so. Do not tell it to look for changes to make.
 - Keep the worker inside its brief. Work that the brief does not cover is out of scope, however useful.
 - Do not make a decision that belongs to the owner: product behaviour, money, scope beyond the brief, merging, deploying, production, credentials. Tell the worker to write the question and its recommendation in the issue, then take the next item.
 - Never tell the worker to skip or weaken a test, bypass a hook, merge, or deploy.

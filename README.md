@@ -131,7 +131,8 @@ at a time, in this order:
    - *The pull request went stale.* It conflicts with its base branch, or a
      check failed. The worker is told what is wrong and to fix only that.
 
-   The worker hands back again when it is done, which ends the rework. An
+   The worker hands back again when it is done, which ends the rework. It
+   does so even when your answer left nothing to change, and says that. An
    issue is sent back at most twice in six hours; after that it is yours, and
    `shed status` says so. A check that fails for a reason no worker can fix
    must not keep one busy all night.
