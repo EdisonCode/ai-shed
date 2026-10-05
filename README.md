@@ -216,8 +216,13 @@ machines:
   Your `Owner ruling` then sends the issue to a worker as usual.
 - **A check that could not be done.** The browser is signed out, staging is
   down, the description cannot be judged, or the check needs an act the
-  orders forbid. The worker posts nothing and says it is blocked, and the
-  supervisor reports `needs_owner`. A blocked look never counts as passed.
+  orders forbid. The worker comments `Eyes blocked:` with what stopped it
+  and takes its next item: a look only you can clear does not hold a worker
+  idle. The look is yours now. `shed status` counts it as not done and lists
+  it with the worker's reason, and your `notify` command hears of it. When
+  the cause is gone, comment `Eyes unblocked` on the issue and a worker
+  tries again; or look yourself and comment `Eyes checked:`. A blocked look
+  never counts as passed.
 - **When staging's commit cannot be read**, no look is handed out, the
   building goes on, and `shed status` says so.
 
@@ -515,6 +520,7 @@ and the two typed commands to what that tool understands.
 | issue waits on you | a comment asks for a decision, a look or a review, and nothing answers it |
 | cannot read the release state | a `repos` commit command failed or did not print a commit, or GitHub could not be asked |
 | eye checks are due on staging | merged work is on staging, owes a look, and no worker has `eye_checks` |
+| the eye check is blocked | a worker could not do it and said why; clear the cause and comment `Eyes unblocked`, or look yourself |
 | issues queued and no worker is running | there is a backlog and nobody is on it |
 | worker has been quiet | an issue's window had no output for 30 minutes |
 

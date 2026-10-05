@@ -246,3 +246,16 @@ repos:
 		t.Fatal("the worker does not do eye checks")
 	}
 }
+
+func TestEyesSignalOfAnOlderFleetFileGetsThePhrasesForABlockedLook(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + "signals: [{name: eyes, ask: \"Needs eyes:\", answered_by: Eyes checked, failed_by: Eyes failed, unblocked_by: Try again}, {name: decision, ask: \"Decisions needed:\"}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eyes := cfg.Signals[0]; eyes.BlockedBy != DefaultBlockedBy || eyes.UnblockedBy != "Try again" {
+		t.Fatalf("eyes = %+v", eyes)
+	}
+	if cfg.Signals[1].BlockedBy != "" {
+		t.Fatalf("decision = %+v; only an eye check can be blocked", cfg.Signals[1])
+	}
+}

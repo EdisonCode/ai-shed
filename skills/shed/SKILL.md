@@ -186,11 +186,14 @@ Run this as a checklist and report each line.
      staging deploy, which is the owner's to trigger. `FAILED` has reopened
      its issue with a decision for the owner: put that to them like any
      other decision, and do not send a fix without their ruling.
-   - `worker needs you` with a reason that an eye check is blocked: the
-     worker could not sign in to staging, staging was down, or the check
-     needs an act the staging `orders` do not allow. Fix the cause, or do
-     the look yourself with the owner. Never post `Eyes checked` for a look
-     nobody did.
+   - `the eye check of ... is blocked`, and `BLOCKED` in the release state:
+     the worker could not sign in to staging, staging was down, or the check
+     needs an act the staging `orders` do not allow. Its reason is in the
+     line. The worker has moved on; the look waits for the owner. Fix the
+     cause, then comment the `unblocked_by` phrase of the `eyes` signal
+     (`Eyes unblocked`) on the issue so a worker tries again, or do the look
+     yourself with the owner. Never post `Eyes checked` for a look nobody
+     did.
    - `rework` in the issues list needs nothing from the owner: the pull
      request cannot merge and a worker is being sent back to it. A `!` line
      that says `after 2 tries by a worker` is the owner's: the workers could

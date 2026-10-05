@@ -1514,7 +1514,8 @@ func TestBriefSaysHowAnEyeCheckPassesFailsAndIsBlocked(t *testing.T) {
 		"starts with `Eyes checked:`",
 		"headed `Hand-back`. Write `Eyes failed:`",
 		"then `Decisions needed:`",
-		"Say here `Blocked:` and why, and stop. A check you could not do has not passed.",
+		"Post a comment on the issue that starts with `Eyes blocked:`",
+		"the supervisor gives you your next item. A check you could not do has not passed.",
 	} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("brief lacks %q:\n%s", want, brief)
@@ -1531,8 +1532,30 @@ func TestBriefOfAWorkerWithoutABrowserHasNoEyeChecks(t *testing.T) {
 	}
 }
 
-func TestReviewerIsToldABlockedEyeCheckNeedsTheOwner(t *testing.T) {
-	if !strings.Contains(instructions, "A blocked check has not passed. Choose needs_owner") {
+func TestBlockedLookLeavesTheQueueAndTheOwnerIsToldOnce(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack)
+	blocked := look(7, 41, looks.Blocked)
+	blocked.Note = "staging asks for a sign-in"
+	withStaging(f, blocked)
+	var told []string
+	f.Notify = func(worker, message string) { told = append(told, message) }
+	f.tick(2 * time.Minute)
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
+		t.Fatalf("queue = %v; a blocked look is the owner's, not a worker's", got)
+	}
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; the worker takes the next workable item", f.term.sent)
+	}
+	if want := []string{"box: the eye check of org/app#7 is blocked and waits for you: staging asks for a sign-in"}; !slices.Equal(told, want) {
+		t.Fatalf("told = %q, want %q once", told, want)
+	}
+}
+
+func TestReviewerIsToldABlockedEyeCheckDoesNotHoldTheWorker(t *testing.T) {
+	if !strings.Contains(instructions, "A blocked check is no reason to leave a worker idle beside an item it can act on.") {
 		t.Fatal("the reviewer is not told what to do with an eye check that could not be done")
 	}
 }

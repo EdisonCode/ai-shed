@@ -291,6 +291,13 @@ type Signal struct {
 	// signal asks for and the work did not pass. It closes the signal: the
 	// look was done. What to do about it is a decision the worker asks for.
 	FailedBy string `yaml:"failed_by"`
+	// BlockedBy is the phrase a worker writes when it could not do the check
+	// the signal asks for: it could not sign in, or the place was down. The
+	// check is then not handed to a worker again until the owner writes
+	// UnblockedBy, or does the check. Both are for the eyes signal, where an
+	// empty one gets its default.
+	BlockedBy   string `yaml:"blocked_by"`
+	UnblockedBy string `yaml:"unblocked_by"`
 	// HandBack is the config's hand-back phrase, copied onto each signal
 	// when the config is read.
 	HandBack string `yaml:"-"`
@@ -300,11 +307,18 @@ type Signal struct {
 // with eye_checks answers it on staging.
 const EyesSignal = "eyes"
 
+// The phrases for an eye check that could not be done, and for the owner's
+// word that it can be tried again.
+const (
+	DefaultBlockedBy   = "Eyes blocked"
+	DefaultUnblockedBy = "Eyes unblocked"
+)
+
 // DefaultSignals returns the built-in signals, counted in hand-back comments.
 func DefaultSignals() []Signal {
 	return withHandBack(DefaultHandBack, []Signal{
 		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true, Accept: []string{"accepted"}},
-		{Name: EyesSignal, Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked", FailedBy: "Eyes failed"},
+		{Name: EyesSignal, Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked", FailedBy: "Eyes failed", BlockedBy: DefaultBlockedBy, UnblockedBy: DefaultUnblockedBy},
 		{Name: "review", Ask: "**PR:**", FollowsPR: true},
 	})
 }
@@ -370,6 +384,19 @@ func Parse(data []byte) (*Config, error) {
 		handBack = *cfg.HandBack
 	}
 	withHandBack(handBack, cfg.Signals)
+	// A fleet file written before a look could be recorded as blocked names
+	// no phrases for it.
+	for i, s := range cfg.Signals {
+		if s.Name != EyesSignal {
+			continue
+		}
+		if s.BlockedBy == "" {
+			cfg.Signals[i].BlockedBy = DefaultBlockedBy
+		}
+		if s.UnblockedBy == "" {
+			cfg.Signals[i].UnblockedBy = DefaultUnblockedBy
+		}
+	}
 	if err := cfg.validateEyeChecks(); err != nil {
 		return nil, err
 	}

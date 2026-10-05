@@ -244,6 +244,11 @@ func TestEyeCheckOfHandedBackWork(t *testing.T) {
 		{"looked at and failed: the look is done, the decision is open", []string{asks, failed}, EyesFailed, 41, []string{"decision"}},
 		{"failed, ruled on: free for a worker", []string{asks, failed, ruling}, EyesFailed, 41, nil},
 		{"the fix asks for a new look", []string{asks, failed, ruling, fixed}, EyesAsked, 58, []string{"eyes"}},
+		{"a worker could not look", []string{asks, "Eyes blocked: staging asks for a sign-in I may not type."}, EyesBlocked, 41, []string{"eyes"}},
+		{"the owner cleared the way", []string{asks, "Eyes blocked: signed out.", "Eyes unblocked: signed in again."}, EyesAsked, 41, []string{"eyes"}},
+		{"the owner looked instead", []string{asks, "Eyes blocked: signed out.", "Eyes checked: the total is right."}, EyesPassed, 41, nil},
+		{"blocked again after the way was cleared", []string{asks, "Eyes blocked: signed out.", "Eyes unblocked", "**Eyes blocked:**\nstaging is down"}, EyesBlocked, 41, []string{"eyes"}},
+		{"a look that passed cannot be blocked", []string{asks, "Eyes checked: fine.", "Eyes blocked: too late."}, EyesPassed, 41, nil},
 		{"an ask with no pull request owes no look on staging", []string{"## Hand-back\n**Needs eyes:** open /orders"}, "", 0, []string{"eyes"}},
 	}
 	for _, tc := range cases {
@@ -252,7 +257,7 @@ func TestEyeCheckOfHandedBackWork(t *testing.T) {
 			for _, body := range tc.comments {
 				issue.Comments = append(issue.Comments, Comment{Body: body})
 			}
-			state, pr, _ := EyeCheck(issue, config.DefaultSignals())
+			state, pr, _, _ := EyeCheck(issue, config.DefaultSignals())
 			if state != tc.wantState || pr != tc.wantPR {
 				t.Errorf("eye check = %q of #%d, want %q of #%d", state, pr, tc.wantState, tc.wantPR)
 			}
@@ -260,5 +265,15 @@ func TestEyeCheckOfHandedBackWork(t *testing.T) {
 				t.Errorf("waiting = %v, want %v", got, tc.wantWaiting)
 			}
 		})
+	}
+}
+
+func TestBlockedEyeCheckSaysWhatStoppedIt(t *testing.T) {
+	issue := Issue{OpenPRs: map[int]PR{}, Comments: []Comment{
+		{Body: "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders"},
+		{Body: "**Eyes blocked:** Staging asks for a Customer sign-in.\nThe owner must sign in."},
+	}}
+	if state, _, _, note := EyeCheck(issue, config.DefaultSignals()); state != EyesBlocked || note != "Staging asks for a Customer sign-in." {
+		t.Fatalf("eye check = %q, note %q", state, note)
 	}
 }

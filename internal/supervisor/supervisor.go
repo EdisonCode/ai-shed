@@ -120,6 +120,8 @@ type Supervisor struct {
 	// lookError is the last failure to read the looks, so that it is logged
 	// once and not at every queue check.
 	lookError string
+	// blockedTold holds the blocked looks the owner was told of.
+	blockedTold map[string]bool
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.
@@ -877,6 +879,9 @@ func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []Que
 			return other.Name != w.Name && other.EyeChecks && slices.ContainsFunc(s.Machine.SourcesFor(other), inQueue(repo.Name))
 		})
 		for _, look := range report.Looks {
+			if look.State == looks.Blocked {
+				s.tellBlocked(look)
+			}
 			if look.State != looks.Due || taken[look.Number] || (choice && runlog.Builder(checkins, look.Number) == w.Name) {
 				continue
 			}
@@ -892,6 +897,25 @@ func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []Que
 		}
 	}
 	return items
+}
+
+// tellBlocked tells the owner, once, of a look that a worker could not do.
+// The worker moved on to its next item, so no check-in says it needs them.
+// What was told is not kept across a restart of the agent: the owner hears
+// of a look that is still blocked once more.
+func (s *Supervisor) tellBlocked(look looks.Look) {
+	key := fmt.Sprintf("%s#%d %d", look.Repo, look.Number, look.Since.Unix())
+	if s.blockedTold[key] {
+		return
+	}
+	if s.blockedTold == nil {
+		s.blockedTold = map[string]bool{}
+	}
+	s.blockedTold[key] = true
+	s.Logf("the eye check of %s#%d is blocked: %s", look.Repo, look.Number, look.Note)
+	if s.Notify != nil {
+		s.Notify("", fmt.Sprintf("%s: the eye check of %s#%d is blocked and waits for you: %s", s.Machine.Name, look.Repo, look.Number, look.Note))
+	}
 }
 
 // find returns the queue item with this number.
@@ -1057,8 +1081,8 @@ How to do one:
 - On staging, do only what is allowed above. An act that is not named there is not allowed.
 - It passes: post a comment on the issue that starts with `+"`%s:`"+` and says what you saw.
 - It fails: reopen the issue (`+"`gh issue reopen`"+`) and post a comment headed `+"`%s`"+`. Write `+"`%s:`"+` with what you saw against what was expected, then `+"`%s`"+` with the question for the owner and your recommendation. Do not fix it.
-- You could not do it (you cannot sign in, staging is down, the description is too vague to judge, the check needs an act that is not allowed): you are blocked. Post nothing that says checked or failed. Say here `+"`Blocked:`"+` and why, and stop. A check you could not do has not passed.
-`, eyes.Ask, eyes.AnsweredBy, eyes.HandBack, eyes.FailedBy, decision.Ask)
+- You could not do it (you cannot sign in, staging is down, the description is too vague to judge, the check needs an act that is not allowed): you are blocked. Post a comment on the issue that starts with `+"`%s:`"+` and says, on that line, what stopped you and what the owner must do about it. Post nothing that says checked or failed. Then say so here and stop: the check is the owner's to clear, and the supervisor gives you your next item. A check you could not do has not passed.
+`, eyes.Ask, eyes.AnsweredBy, eyes.HandBack, eyes.FailedBy, decision.Ask, eyes.BlockedBy)
 }
 
 // signal returns the signal with this name.

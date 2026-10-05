@@ -180,3 +180,28 @@ func TestParseMergedKeepsWhatWasMergedInTheWindow(t *testing.T) {
 		t.Fatalf("merged = %v, %v", merged, err)
 	}
 }
+
+func TestLookThatCouldNotBeDoneIsBlockedUntilTheOwnerClearsIt(t *testing.T) {
+	gh := &fakeGitHub{deployed: now.Add(-48 * time.Hour),
+		merged:    map[int]string{41: "c41", 42: "c42"},
+		onStaging: map[string]bool{"c41": true, "c42": true},
+		closed: []backlog.Issue{
+			handedBack(1, 41, "Eyes blocked: staging asks for a sign-in I may not type."),
+			handedBack(2, 42, "Eyes blocked: staging was down.", "Eyes unblocked: it is up again."),
+		}}
+	report, err := reader(gh).Read(context.Background(), repo, sources, nil, config.DefaultSignals())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := states(report); len(got) != 2 || got[1] != Blocked || got[2] != Due {
+		t.Fatalf("looks = %v, want #1 blocked and #2 due again", got)
+	}
+	for _, l := range report.Looks {
+		if l.Number == 1 && l.Note != "staging asks for a sign-in I may not type." {
+			t.Fatalf("note = %q", l.Note)
+		}
+	}
+	if len(report.Passed) != 0 {
+		t.Fatalf("passed = %+v; a blocked look has not passed", report.Passed)
+	}
+}
