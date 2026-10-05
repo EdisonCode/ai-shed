@@ -642,6 +642,52 @@ starts a new one, which reads the brief and is handed the next issue.
 A scheduled task that is running when the agent restarts is stopped and
 recorded as stopped.
 
+### Tidying up after merged work
+
+A worker starts each issue on a new branch, and its tool makes worktrees for
+sub-tasks. Nothing removes either when the pull request merges, and after a
+few weeks a machine has dozens.
+
+```sh
+shed tidy linux-box          # list what is merged; change nothing
+shed tidy -apply linux-box   # remove it
+```
+
+```
+linux-box  /home/me/Projects/my-app/.git  (my-org/my-app)
+  merged, would be removed
+    worktree  /home/me/Projects/wt-123-retry-export  [task/123-retry-export]  merged in #131
+    branch    task/118-audit-log-pages                                        merged in #125
+  stays
+    worktree  /home/me/Projects/my-app  [main]                    the clone itself
+    worktree  /home/me/Projects/app-worker  [task/130-paginate]   a worker's directory
+    worktree  /home/me/Projects/wt-127-totals  [task/127-totals]  2 uncommitted or untracked file(s)
+    branch    task/140-spike                                      no merged pull request ends at its commit
+
+linux-box: 1 worktree(s) and 1 branch(es) are merged. Nothing was changed. Run `shed tidy -apply linux-box` to remove them.
+```
+
+It looks at the clone behind each worker's `dir` and removes:
+
+- a **worktree** that is on a branch, has nothing uncommitted or untracked,
+  and whose last commit is the last commit of a merged pull request;
+- a **local branch** whose last commit is the last commit of a merged pull
+  request, unless a worktree that stays has it checked out.
+
+It never removes the clone itself, a worker's directory, a detached
+worktree, or anything with a commit that no merged pull request ends at.
+"Merged" is asked of GitHub and not read from the default branch's history:
+a squash merge leaves no trace there, and a branch that was only just made
+would look merged.
+
+With `-apply`, each removal checks again on the machine that the worktree or
+branch is at the commit it was listed with. `git worktree remove` is run
+without `--force`, so git refuses one that gained changes in the meantime.
+What was left alone is listed with the reason, and the exit code is 1.
+
+Remote branches are not touched. `shed tidy` runs on the watcher and needs
+only `git` on the machine, so it works on a machine whose shed is older.
+
 ### Hearing about it
 
 With the laptop closed, `shed status` tells nobody anything. Set a command and
