@@ -234,7 +234,7 @@ my-org/my-app  staging 3f2a1c9  production 9b1e0d4
 
 The commit commands run on the watcher for `shed status` and on the worker's
 machine for the queue, after its `init` line, so both must reach the
-environments. `shed status -json` does not carry the release state yet.
+environments. `shed status -json` carries the release state under `repos`.
 
 ### Machine capacity
 
@@ -448,7 +448,7 @@ gh api repos/EdisonCode/ai-shed/contents/shed.example.yaml --jq .content | base6
 shed validate
 shed status
 shed status -watch 1m                       # live view
-shed status -json                           # for scripts
+shed status -json                           # for scripts: {"machines": [...], "repos": [...]}
 ```
 
 To update: `shed update` replaces the binary with the latest release, checked

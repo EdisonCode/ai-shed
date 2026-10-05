@@ -43,6 +43,14 @@ const (
 	TaskFailed  = "failed"
 )
 
+// Report is the whole answer, as `shed status -json` prints it.
+type Report struct {
+	Machines []MachineReport `json:"machines"`
+	// Repos is the release state of each repository under `repos` in the
+	// fleet file; empty when it has none.
+	Repos []RepoReport `json:"repos"`
+}
+
 type MachineReport struct {
 	Name string `json:"name"`
 	Host string `json:"host"`

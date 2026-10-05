@@ -83,7 +83,7 @@ type Reader struct {
 // Read reports on one repository. open holds the open issues of sources;
 // issues of other repositories in it are ignored.
 func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.IssueSource, open []backlog.Issue, signals []config.Signal) (Report, error) {
-	report := Report{Repo: repo.Name, Since: r.Now().Add(-repo.LookBackOrDefault())}
+	report := Report{Repo: repo.Name, Since: r.Now().Add(-repo.LookBackOrDefault()), Looks: []Look{}}
 	var err error
 	if report.Staging, err = r.commit(ctx, repo.Name, "staging", repo.Staging.Commit); err != nil {
 		return report, err

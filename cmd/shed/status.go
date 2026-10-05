@@ -37,7 +37,7 @@ func cmdStatus(args []string) int {
 		if *asJSON {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
-			if err := enc.Encode(reports); err != nil {
+			if err := enc.Encode(status.Report{Machines: reports, Repos: repos}); err != nil {
 				return fail(err)
 			}
 		} else {

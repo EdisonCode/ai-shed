@@ -3,6 +3,7 @@ package status
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -452,5 +453,36 @@ func TestReleaseStateThatCannotBeReadNeedsOwner(t *testing.T) {
 	Render(&out, nil, repos)
 	if !NeedsOwner(nil, repos) || !strings.Contains(out.String(), "! cannot read the release state: org/app: read staging's commit: exit status 7") {
 		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+func TestJSONReportCarriesTheMachinesAndTheReleaseState(t *testing.T) {
+	report := Report{
+		Machines: []MachineReport{Assess(config.Machine{Name: "box"}, signals, now, healthy(), nil)},
+		Repos:    []RepoReport{{Report: releaseState(), Lookers: 1, Now: now}},
+	}
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Machines []struct{ Name string }
+		Repos    []struct {
+			Repo, Staging, Production string
+			Merged                    int
+			Looks                     []struct {
+				Number, PR int
+				State      string
+			}
+		}
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Machines) != 1 || got.Machines[0].Name != "box" {
+		t.Fatalf("machines = %+v in %s", got.Machines, data)
+	}
+	if r := got.Repos[0]; r.Repo != "org/app" || r.Staging != "aaaaaaa1111" || r.Merged != 14 || len(r.Looks) != 3 || r.Looks[0].State != looks.Due || r.Looks[0].PR != 41 {
+		t.Fatalf("repos = %+v in %s", got.Repos, data)
 	}
 }
