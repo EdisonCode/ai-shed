@@ -267,6 +267,11 @@ func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Ti
 		if value, found := asked(body, s); found {
 			open, pr, since = !isClear(value, s.Clear), prNumber(value), c.CreatedAt
 		}
+		// A check that was done and failed is not asked for any more. It is
+		// tested last: the comment that reports it may repeat the ask.
+		if failedIn(body, s) {
+			open = false
+		}
 	}
 	// A signal that follows a pull request is over once that pull request is
 	// merged or closed.
@@ -318,4 +323,45 @@ func isClear(value string, clear []string) bool {
 		}
 	}
 	return false
+}
+
+func failedIn(body string, s config.Signal) bool {
+	return s.FailedBy != "" && strings.Contains(body, strings.ToLower(s.FailedBy))
+}
+
+// What an issue says about the eye check of its last handed-back pull request.
+const (
+	EyesAsked  = "asked"  // a worker asked for a look and nobody has looked
+	EyesFailed = "failed" // someone looked and the work did not pass
+)
+
+// EyeCheck reports whether the issue's handed-back work still owes a look
+// (EyesAsked), was looked at and failed (EyesFailed), or neither (""). pr is
+// the pull request of the last hand-back and since is when the state began.
+func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since time.Time) {
+	_, pr = lastHandBack(issue, signals)
+	if pr == 0 {
+		return "", 0, time.Time{}
+	}
+	for _, s := range signals {
+		if s.Name != config.EyesSignal {
+			continue
+		}
+		for _, c := range issue.Comments {
+			body := strings.ToLower(c.Body)
+			if s.AnsweredBy != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) {
+				state = ""
+			}
+			if value, found := asked(body, s); found {
+				state, since = "", c.CreatedAt
+				if !isClear(value, s.Clear) {
+					state = EyesAsked
+				}
+			}
+			if failedIn(body, s) {
+				state, since = EyesFailed, c.CreatedAt
+			}
+		}
+	}
+	return state, pr, since
 }

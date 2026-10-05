@@ -225,3 +225,39 @@ func TestWithNoHandBackPhraseAnAskCountsAnywhere(t *testing.T) {
 		t.Fatalf("waiting = %v", got)
 	}
 }
+
+func TestEyeCheckOfHandedBackWork(t *testing.T) {
+	asks := "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders and check the total"
+	failed := "## Hand-back\n**Eyes failed:** the total is blank on staging\n**Decisions needed:**\n1. Fix now or ship without?"
+	fixed := "## Hand-back\n**PR:** #58 (ready)\n**Needs eyes:** open /orders again"
+	cases := []struct {
+		name        string
+		comments    []string
+		wantState   string
+		wantPR      int
+		wantWaiting []string
+	}{
+		{"asked", []string{asks}, EyesAsked, 41, []string{"eyes"}},
+		{"nothing to look at", []string{handBackClean}, "", 41, nil},
+		{"looked at and passed", []string{asks, "Eyes checked: the total is right."}, "", 41, nil},
+		{"looked at and failed: the look is done, the decision is open", []string{asks, failed}, EyesFailed, 41, []string{"decision"}},
+		{"failed, ruled on: free for a worker", []string{asks, failed, ruling}, EyesFailed, 41, nil},
+		{"the fix asks for a new look", []string{asks, failed, ruling, fixed}, EyesAsked, 58, []string{"eyes"}},
+		{"an ask with no pull request owes no look on staging", []string{"## Hand-back\n**Needs eyes:** open /orders"}, "", 0, []string{"eyes"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issue := Issue{OpenPRs: map[int]PR{}} // every pull request is merged
+			for _, body := range tc.comments {
+				issue.Comments = append(issue.Comments, Comment{Body: body})
+			}
+			state, pr, _ := EyeCheck(issue, config.DefaultSignals())
+			if state != tc.wantState || pr != tc.wantPR {
+				t.Errorf("eye check = %q of #%d, want %q of #%d", state, pr, tc.wantState, tc.wantPR)
+			}
+			if got := Waiting(issue, config.DefaultSignals()); !slices.Equal(got, tc.wantWaiting) {
+				t.Errorf("waiting = %v, want %v", got, tc.wantWaiting)
+			}
+		})
+	}
+}
