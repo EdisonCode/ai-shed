@@ -173,4 +173,6 @@ signals:
     unblocked_by: "Eyes unblocked"
   - name: review
     ask: "**PR:**"
+    # A hand-back with no pull request ("**PR:** none") has nothing to review.
+    clear: ["none"]
     follows_pr: true

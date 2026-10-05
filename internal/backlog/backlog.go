@@ -203,6 +203,20 @@ type Ask struct {
 	Since time.Time `json:"since"`
 	// PR is the pull request a follows_pr signal waits on; 0 for none.
 	PR int `json:"pr,omitempty"`
+	// NoPR is set when a follows_pr signal is open and its ask named no pull
+	// request. No merge can close such an ask.
+	NoPR bool `json:"no_pr,omitempty"`
+}
+
+// What names the ask and the pull request it waits on, as in "review #41".
+func (a Ask) What() string {
+	switch {
+	case a.PR != 0:
+		return fmt.Sprintf("%s #%d", a.Name, a.PR)
+	case a.NoPR:
+		return a.Name + " (no pull request named)"
+	}
+	return a.Name
 }
 
 // Asks returns what the issue asks of the owner, in the order of the signals.
@@ -217,7 +231,7 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 		}
 		ask := Ask{Name: s.Name, Since: since}
 		if s.FollowsPR {
-			ask.PR = pr
+			ask.PR, ask.NoPR = pr, pr == 0
 		}
 		asks = append(asks, ask)
 	}

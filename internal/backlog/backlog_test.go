@@ -62,6 +62,7 @@ func TestReviewSignalFollowsItsPullRequest(t *testing.T) {
 		{"first is still open but the latest hand-back's is merged", []string{handBackClean, laterHandBack}, map[int]PR{41: {}}, nil},
 		{"open pull requests unknown: stay open", []string{handBackClean}, nil, []string{"review"}},
 		{"no pull request number: stay open", []string{"## Hand-back\n**PR:** not opened yet, branch pushed"}, map[int]PR{}, []string{"review"}},
+		{"no pull request at all: nothing to review", []string{"## Hand-back\n**PR:** none (plan-only pass)\n**Decisions needed:** none"}, map[int]PR{}, nil},
 		{"a merged pull request does not answer a decision", []string{handBackAsking}, map[int]PR{}, []string{"decision"}},
 	}
 	for _, tc := range cases {
@@ -181,6 +182,24 @@ func TestAsksSayHowLongTheOwnerHasBeenAskedAndForWhichPullRequest(t *testing.T) 
 	want := []Ask{{Name: "decision", Since: first}, {Name: "eyes", Since: second}, {Name: "review", Since: second, PR: 41}}
 	if got := Asks(issue, config.DefaultSignals()); !slices.Equal(got, want) {
 		t.Fatalf("asks = %+v, want %+v", got, want)
+	}
+}
+
+func TestRulingAfterAPlanOnlyHandBackFreesTheIssue(t *testing.T) {
+	issue := Issue{OpenPRs: map[int]PR{}, Comments: []Comment{
+		{Body: "## Hand-back\n**PR:** none (plan-only pass)\n**Decisions needed:**\n1. Build it this way?"},
+		{Body: "Owner ruling: go for the build."},
+	}}
+	if got := Waiting(issue, config.DefaultSignals()); len(got) != 0 {
+		t.Fatalf("waiting = %v; the ruling was the only thing asked for", got)
+	}
+}
+
+func TestAskOfAReviewWithNoPullRequestSaysSo(t *testing.T) {
+	issue := Issue{OpenPRs: map[int]PR{}, Comments: []Comment{{Body: "## Hand-back\n**PR:** not opened yet, branch pushed"}}}
+	asks := Asks(issue, config.DefaultSignals())
+	if len(asks) != 1 || asks[0].What() != "review (no pull request named)" {
+		t.Fatalf("asks = %+v; a review that follows no pull request must be visible", asks)
 	}
 }
 
