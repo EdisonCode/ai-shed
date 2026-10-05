@@ -143,6 +143,9 @@ at a time, in this order:
 2. **Priority.** The labels in the source's `priority` list, first to last.
 3. **Age.** Oldest first.
 
+An issue you bumped goes ahead of all three; see
+[Putting an issue first](#putting-an-issue-first).
+
 ```yaml
 machines:
   - name: linux-box
@@ -163,6 +166,37 @@ never handed to another, whatever their queues. A worker's brief also tells it
 to look, before it starts an issue, for an open pull request or an unmerged
 branch that already covers it. If it finds one that it was not sent back to,
 it does not start: it reports the overlap in the issue as a decision for you.
+
+### Putting an issue first
+
+A priority label orders a queue. It cannot help an urgent issue that sits in
+the queue of a worker with hours of work in hand while another worker on the
+machine is free. For that, say it directly:
+
+```sh
+shed bump linux-box 41                # first in the queue it is in
+shed bump -worker docs linux-box 41   # first for this worker, whatever its queue
+shed bump -undo linux-box 41          # back to its usual place
+```
+
+- **It goes ahead of everything in the queue**: rework, eye checks and
+  priority labels. Several bumped issues keep their usual order among
+  themselves.
+- **With `-worker` the issue moves.** It joins that worker's queue, from any
+  queue of the machine, and leaves the other workers' queues. It may be
+  outside that worker's brief: the worker and the reviewer are both told
+  that the owner put it there. Standing orders still hold.
+- **Nobody is interrupted.** The issue is handed over at the next point where
+  the worker has nothing in progress. A resting worker picks it up at its
+  next queue check, within five minutes. An issue that a worker already has
+  in hand stays with that worker.
+- **It lasts as long as the issue is open**, so a moved issue that comes back
+  as rework comes back to the worker that built it. A move ends by itself
+  once the issue is closed or leaves the machine's queues.
+- The issue must be open in one of the machine's queues. To send an issue to
+  another machine, change its label.
+
+`shed status` marks the issue `(bumped)` or `(bumped to docs)`.
 
 ### Eye checks on staging
 
@@ -860,7 +894,7 @@ author's direction.
   guards above bound the cost of a wrong nudge; they do not make it right.
 - A stale pull request is judged by any failed check, required or not.
 - An issue is matched to a window by number only. Two repos with the same
-  issue number on one machine share a match.
+  issue number on one machine share a match, and share a bump.
 - A missed task run is known only after the task has run once.
 - The log files are not rotated.
 - Linux and macOS only.

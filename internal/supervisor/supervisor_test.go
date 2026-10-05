@@ -1850,3 +1850,138 @@ func TestBriefTellsAWorkerAboutOneOffTasks(t *testing.T) {
 		}
 	}
 }
+
+// bump puts an issue first in line, as `shed bump` does: for the named
+// worker, or with worker empty for the workers whose queue it is in.
+func (f *fixture) bump(t *testing.T, issue int, worker string) string {
+	t.Helper()
+	path := filepath.Join(f.StateDir, runlog.BumpsDir, fmt.Sprint(issue))
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, []byte(worker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestBumpedIssueGoesFirstInTheQueue(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.Machine.Issues[0].Priority = []string{"p0"}
+	f.lister.issues = []backlog.Issue{labeled(30), labeled(40, "p0"), handedBackWith(12, "conflicts with the base branch")}
+	f.bump(t, 30, "")
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if got, want := queueShown(t, prompt), []int{30, 12, 40}; !slices.Equal(got, want) {
+		t.Fatalf("queue = %v, want %v", got, want)
+	}
+	if !strings.Contains(prompt, "org/app#30 Issue [the owner put this first]") {
+		t.Fatalf("the reviewer was not told the owner put #30 first:\n%s", prompt)
+	}
+}
+
+func TestBumpedIssueIsHandedOverWithTheOwnersWord(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(30), nudge("The test still fails."))
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(30)}
+	f.bump(t, 30, "")
+	f.tick(2 * time.Minute)
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute)
+
+	want := []string{"Take the next issue. The owner put #30 first in your queue: it is yours even where your brief does not cover it.", "The test still fails."}
+	if !slices.Equal(f.term.sent, want) {
+		t.Fatalf("sent = %q, want %q", f.term.sent, want)
+	}
+}
+
+// docsQueue gives the second worker a queue of its own.
+func docsQueue(f *fixture) {
+	f.Machine.Workers[1].Issues = []config.IssueSource{{Repo: "org/app", Label: "area:docs"}}
+	f.lister.byLabel = map[string][]backlog.Issue{"machine:box": {labeled(12), labeled(13)}, "area:docs": {labeled(50)}}
+}
+
+func TestIssueMovedToAnotherWorkerLeavesTheQueueItWasIn(t *testing.T) {
+	f := twoWorkers(t, onTrack)
+	docsQueue(f)
+	f.bump(t, 13, "docs")
+	f.tick(0)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
+		t.Fatalf("worker app was shown %v; #13 was moved to docs", got)
+	}
+	if got := queueShown(t, f.reviewer.prompts[1]); !slices.Equal(got, []int{13, 50}) {
+		t.Fatalf("worker docs was shown %v, want the moved issue first", got)
+	}
+}
+
+func TestIssueAWorkerHasInHandIsNotMovedAway(t *testing.T) {
+	f := twoWorkers(t, assign(13), onTrack)
+	docsQueue(f)
+	f.tick(0) // app takes #13
+	path := f.bump(t, 13, "docs")
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute)
+
+	last := f.reviewer.prompts[len(f.reviewer.prompts)-1]
+	if got := queueShown(t, last); !slices.Equal(got, []int{50}) {
+		t.Fatalf("worker docs was shown %v; #13 is in hand for app", got)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the bump was dropped while its issue is still open: %v", err)
+	}
+}
+
+func TestRestingWorkerWakesWhenAnIssueIsMovedToIt(t *testing.T) {
+	f := twoWorkers(t, onTrack, done, onTrack, assign(13))
+	docsQueue(f)
+	f.lister.byLabel["area:docs"] = nil
+	f.tick(0) // app works; docs has an empty queue and rests
+	f.term.sent = nil
+	f.bump(t, 13, "docs")
+	f.tick(queueRecheck + time.Minute)
+
+	if len(f.term.sent) != 1 || !strings.HasPrefix(f.term.sent[0], "Take the next issue. The owner put #13 first") {
+		t.Fatalf("sent = %q, want #13 handed to docs", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Worker != "docs" || c.Issue != 13 || c.Kind != KindQueue {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestBumpOfAnIssueThatLeftEveryQueueIsDropped(t *testing.T) {
+	f := twoWorkers(t, onTrack)
+	docsQueue(f)
+	path := f.bump(t, 99, "docs") // closed, or its label was removed
+	f.tick(0)
+
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the bump of #99 is still on the machine: %v", err)
+	}
+	if got := queueShown(t, f.reviewer.prompts[1]); !slices.Equal(got, []int{50}) {
+		t.Fatalf("worker docs was shown %v", got)
+	}
+}
+
+func TestBumpToAWorkerTheMachineDoesNotHaveMovesNothing(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(30)}
+	f.bump(t, 30, "renamed-away")
+	f.tick(2 * time.Minute)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{30, 12}) {
+		t.Fatalf("queue = %v; an issue must not drop out of every queue", got)
+	}
+}
+
+func TestBriefTellsAWorkerAboutBumpedIssues(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	if !strings.Contains(string(brief), "The owner may put an issue first in your queue") {
+		t.Fatalf("brief:\n%s", brief)
+	}
+}
+
+func TestReviewerIsToldABumpedIssueIsInScope(t *testing.T) {
+	if !strings.Contains(instructions, "An item marked as put first by the owner") {
+		t.Fatal("the reviewer would hold a moved issue against the worker's brief")
+	}
+}

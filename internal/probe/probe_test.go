@@ -162,3 +162,13 @@ func TestParseReadsTheOneOffTasksOnTheMachine(t *testing.T) {
 		t.Fatalf("tasks = %+v", res.Tasks)
 	}
 }
+
+func TestParseReadsTheIssuesTheOwnerPutFirst(t *testing.T) {
+	res, err := Parse("@@now 1790000000\n@@bump 41 docs\n@@bump 12 \n@@bump 12.new app\n@@end\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if to, ok := res.Bumps[12]; len(res.Bumps) != 2 || res.Bumps[41] != "docs" || !ok || to != "" {
+		t.Fatalf("bumps = %v", res.Bumps)
+	}
+}

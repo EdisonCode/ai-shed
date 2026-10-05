@@ -60,6 +60,23 @@ type Lister interface {
 	List(ctx context.Context, src config.IssueSource) ([]Issue, error)
 }
 
+// Find returns the open issue with this number from the first of the sources
+// that has it.
+func Find(ctx context.Context, lister Lister, sources []config.IssueSource, number int) (Issue, bool, error) {
+	for _, src := range sources {
+		issues, err := lister.List(ctx, src)
+		if err != nil {
+			return Issue{}, false, err
+		}
+		for _, i := range issues {
+			if i.Number == number {
+				return i, true, nil
+			}
+		}
+	}
+	return Issue{}, false, nil
+}
+
 // GH lists issues with the GitHub CLI, so shed needs no token of its own.
 type GH struct{}
 

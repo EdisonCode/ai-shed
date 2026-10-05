@@ -251,6 +251,25 @@ func Recycle(ctx context.Context, r probe.Runner, m config.Machine, worker strin
 	return writeRemote(ctx, r, m, runlog.StateDir+"/"+runlog.RecycleDir+"/"+worker, []byte(mode), "644")
 }
 
+// Bump asks the machine's agent to put an issue first in line: in the queue
+// of the named worker or, with worker empty, of the workers that have it.
+func Bump(ctx context.Context, r probe.Runner, m config.Machine, issue int, worker string) error {
+	return writeRemote(ctx, r, m, bumpPath(issue), []byte(worker), "644")
+}
+
+// Unbump takes a bump back. It reports false when the issue was not bumped.
+func Unbump(ctx context.Context, r probe.Runner, m config.Machine, issue int) (bool, error) {
+	out, err := r.Run(ctx, m, fmt.Sprintf(`f="$HOME/%s"; [ -f "$f" ] || { echo absent; exit 0; }; rm "$f" && echo removed`, bumpPath(issue)), nil)
+	if err != nil {
+		return false, fmt.Errorf("take back the bump of #%d: %w", issue, err)
+	}
+	return strings.TrimSpace(string(out)) == "removed", nil
+}
+
+func bumpPath(issue int) string {
+	return fmt.Sprintf("%s/%s/%d", runlog.StateDir, runlog.BumpsDir, issue)
+}
+
 // PushTask queues a one-off task on a machine, for the named worker or, with
 // worker empty, for any. The machine's agent hands it over.
 func PushTask(ctx context.Context, r probe.Runner, m config.Machine, worker, id string, brief []byte) error {

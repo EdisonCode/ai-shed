@@ -13,6 +13,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/probe"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
 func TestPlatform(t *testing.T) {
@@ -287,6 +288,25 @@ func TestCancelRemovesOnlyATaskThatStillWaits(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasks, "_taken/t2.md")); err != nil {
 		t.Errorf("a task in a worker's hands was removed: %v", err)
+	}
+}
+
+func TestBumpLeavesARequestForTheAgentAndUnbumpTakesItBack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ctx, r := context.Background(), probe.ShellRunner{}
+	if err := Bump(ctx, r, here, 41, "docs"); err != nil {
+		t.Fatal(err)
+	}
+	bumps, err := runlog.Bumps(filepath.Join(home, runlog.StateDir))
+	if err != nil || len(bumps) != 1 || bumps[41] != "docs" {
+		t.Fatalf("bumps = %v, %v; want #41 for docs", bumps, err)
+	}
+	if removed, err := Unbump(ctx, r, here, 41); err != nil || !removed {
+		t.Fatalf("unbump = %v, %v", removed, err)
+	}
+	if removed, err := Unbump(ctx, r, here, 41); err != nil || removed {
+		t.Fatalf("second unbump = %v, %v; nothing was left to take back", removed, err)
 	}
 }
 

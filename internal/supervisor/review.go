@@ -52,6 +52,9 @@ type QueueItem struct {
 	// Look says why the item is an eye check on staging and not work to
 	// build: its pull request is merged and staging serves it.
 	Look string
+	// Bumped is set when the owner put the issue first in line with
+	// `shed bump`. It may come from another worker's queue.
+	Bumped bool
 	// rank is the issue's place in its source's priority order.
 	rank int
 }
@@ -105,6 +108,7 @@ Rules for the message of a nudge:
 - A worker that could not do an eye check is blocked: it could not sign in, staging was down, the description was too vague to judge, or the check needs an act its orders forbid. A blocked check has not passed. The worker's brief tells it to record the block in a comment on the issue. The check then leaves its queue and is the owner's to clear; the owner is told. If the terminal does not show that it posted that comment, tell it once to post it. Once it has, hand over the first workable item of the queue, or choose done when there is none. A blocked check is no reason to leave a worker idle beside an item it can act on.
 - A worker that was sent back to an item and says nothing needs to change has not finished until it hands back again. If its terminal does not show a new hand-back, tell it once to post a new hand-back that says so. Do not tell it to look for changes to make.
 - When <in_hand> shows a one-off task from the owner, its brief is the owner's own words for that task. Work it covers is in scope even where the worker's brief does not cover it. Judge the worker against it until the task is done and its report is written. Then hand over the first workable queue item, or choose done.
+- An item marked as put first by the owner is the owner's direct order, and may come from another worker's queue. It is in scope for this worker even where its brief does not cover it. When it is workable, hand it over before any other item.
 - Keep the worker inside its brief. Work that the brief does not cover is out of scope, however useful.
 - Do not make a decision that belongs to the owner: product behaviour, money, scope beyond the brief, merging, deploying, production, credentials. Tell the worker to write the question and its recommendation in the issue, then take the next item.
 - Never tell the worker to skip or weaken a test, bypass a hook, merge, or deploy.
@@ -134,6 +138,9 @@ func Prompt(in ReviewInput) string {
 	}
 	for _, q := range in.Queue {
 		fmt.Fprintf(&b, "%s#%d %s", q.Repo, q.Number, q.Title)
+		if q.Bumped {
+			b.WriteString(" [the owner put this first]")
+		}
 		if q.Rework != "" {
 			fmt.Fprintf(&b, " [rework: %s]", q.Rework)
 		}
