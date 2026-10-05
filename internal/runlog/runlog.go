@@ -121,6 +121,8 @@ type Checkin struct {
 	// Look is set when the issue was handed over for an eye check on
 	// staging, not to be built.
 	Look bool `json:"look,omitempty"`
+	// Task is set when the message handed the worker a one-off task.
+	Task string `json:"task,omitempty"`
 }
 
 func AppendCheckin(dir string, c Checkin) error {
@@ -177,6 +179,9 @@ func InHand(checkins []Checkin, worker string) (issue int, look bool) {
 		switch {
 		case c.Worker != worker:
 		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled:
+			issue, look = 0, false
+		case c.Sent && c.Task != "":
+			// A one-off task took the place of the issue it had.
 			issue, look = 0, false
 		case c.Sent && c.Issue != 0:
 			issue, look = c.Issue, c.Look

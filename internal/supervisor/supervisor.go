@@ -64,6 +64,12 @@ const (
 	// words: a worker that took it for work to build would start a branch.
 	lookOrder     = "Do the eye check of #%d on staging: %s. Follow the Eye checks section of " + BriefFile + " and change no code."
 	clearSettling = 2 * time.Second
+
+	// TaskDir is where a one-off task's brief is put in the worker's
+	// directory, and where the worker writes its report.
+	TaskDir    = ".shed/tasks"
+	taskReport = ".report.md"
+	taskOrder  = "One-off task from the owner, ahead of your queue: read %s in full and carry it out. When it is done, write your report in %s, say so here, and stop."
 )
 
 // Check-in kinds: why the supervisor looked.
@@ -78,6 +84,7 @@ const (
 	KindRecycle  = "recycle"  // the owner asked for a fresh session
 	KindCapacity = "capacity" // a held hand-over was delivered
 	KindHook     = "hook"     // its tool said it waits for a person, or no longer does
+	KindTask     = "task"     // it was handed a one-off task from the owner
 	KindError    = "error"
 )
 
@@ -151,6 +158,10 @@ type workerState struct {
 	issue int
 	// look is set when that issue was handed over for an eye check.
 	look bool
+	// task is the one-off task it was handed and has not finished; "" for
+	// none. worked is set once the session has been handed any work.
+	task   string
+	worked bool
 	// markSeen is the time of the last mark of its tool that was acted on,
 	// and waiting is set while that mark says it waits for a person.
 	markSeen time.Time
@@ -260,7 +271,7 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 	// A fresh session was asked for. It waits for the issue in hand unless
 	// the owner said now. A worker that was last found done has handed that
 	// issue back: nothing is in progress.
-	if pending, immediately := s.recycleRequested(w.Name); pending && (immediately || st.issue == 0 || st.lastVerdict() == runlog.VerdictDone) {
+	if pending, immediately := s.recycleRequested(w.Name); pending && (immediately || (st.issue == 0 && st.task == "") || st.lastVerdict() == runlog.VerdictDone) {
 		return s.recycle(w, st, now)
 	}
 
@@ -304,6 +315,13 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 	}
 
 	idle := now.Sub(obs.LastActivity)
+	// A resting worker has nothing in progress: a one-off task that waits
+	// for it is handed over at once. No reviewer is needed to see that.
+	if idle >= settle && toolState != runlog.MarkWorking && st.lastVerdict() == runlog.VerdictDone {
+		if task, ok := s.pendingTask(ctx, w, st, now); ok {
+			return s.deliverTask(w, st, obs, now, task)
+		}
+	}
 	switch {
 	case now.Before(st.limitedUntil):
 		return nil
@@ -357,6 +375,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 		return err
 	}
 	st.briefChecked = true
+	s.returnTask(w, st)
 	kind := KindRestart
 	if !windowExists {
 		kind = KindStart
@@ -369,7 +388,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 		return err
 	}
 	st.starts = append(st.starts, now)
-	st.lastReview, st.model, st.issue, st.look = now, "", 0, false
+	st.lastReview, st.model, st.issue, st.look, st.worked = now, "", 0, false, false
 	// The last session's tool said nothing about this one.
 	if err := runlog.RemoveMark(s.StateDir, w.Name); err != nil {
 		return err
@@ -395,6 +414,10 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	}
 	idle := now.Sub(obs.LastActivity)
 	in := ReviewInput{Worker: w.Name, Brief: s.scope(w), Queue: queue, Recent: st.recent, Terminal: terminal, Now: now, LimitedUntil: st.limitedUntil, InHand: st.issue}
+	if st.task != "" {
+		in.Task = st.task
+		in.TaskBrief, _ = runlog.TakenTask(s.StateDir, st.task)
+	}
 	if idle >= settle {
 		in.Idle = idle
 		mark, _ := runlog.ReadMark(s.StateDir, w.Name)
@@ -408,6 +431,13 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	// or it is about to be given another issue. A fresh session that was
 	// asked for starts here; the hand-over happens in the new session.
 	item, inQueue := find(queue, verdict.Issue)
+	// Nothing is in progress when the worker is done or is about to be given
+	// another issue. A one-off task in hand is over then, and one that waits
+	// for the worker comes before the issue the reviewer chose.
+	atRest := verdict.Verdict == runlog.VerdictDone || (verdict.Verdict == runlog.VerdictNudge && st.handsOver(verdict.Issue, item))
+	if atRest {
+		st.task = ""
+	}
 	if pending, _ := s.recycleRequested(w.Name); pending {
 		handOver := verdict.Verdict == runlog.VerdictNudge && st.handsOver(verdict.Issue, item)
 		if handOver || verdict.Verdict == runlog.VerdictDone {
@@ -417,6 +447,11 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	if verdict.Issue != 0 && !inQueue {
 		// Another worker may have it in hand, or the reviewer made it up.
 		return fmt.Errorf("the reviewer handed over #%d, which is not in this worker's queue", verdict.Issue)
+	}
+	if atRest {
+		if task, ok := s.pendingTask(ctx, w, st, now); ok {
+			return s.deliverTask(w, st, obs, now, task)
+		}
 	}
 	st.lastReview, st.reviewedActivity = now, obs.LastActivity
 	st.lastQueueCheck, st.queueSeen = now, fingerprint(queue)
@@ -481,7 +516,7 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 	switchModel := newIssue && !tellOnly && model != "" && model != st.model
 	// The first issue of a session lands on a context that is
 	// already empty.
-	fresh := newIssue && w.FreshPerIssue && st.issue != 0
+	fresh := newIssue && w.FreshPerIssue && st.worked
 	// A worker stopped by a usage limit was cut off in the middle of
 	// its work and wrote nothing down. Its context is all there is of
 	// that work, so it is kept, at the price of reading it again.
@@ -506,6 +541,7 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 	}
 	if newIssue {
 		st.issue, st.look = verdict.Issue, item.Look != ""
+		st.task, st.worked = "", true
 	}
 	if tellOnly && model != "" {
 		c.Model = model
@@ -517,6 +553,77 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 	c.Sent = true
 	st.nudges = append(st.nudges, now)
 	return nil
+}
+
+// pendingTask returns the one-off task to hand this worker now. A worker
+// takes one task at a time. A task is new work, so a busy machine holds it
+// like a hand-over, and for no longer.
+func (s *Supervisor) pendingTask(ctx context.Context, w config.Worker, st *workerState, now time.Time) (runlog.Task, bool) {
+	if st.task != "" {
+		return runlog.Task{}, false
+	}
+	task, ok := runlog.PendingTask(s.StateDir, w.Name)
+	if !ok {
+		return runlog.Task{}, false
+	}
+	if s.busy(ctx) != "" && now.Sub(task.Queued) < s.Machine.Capacity.MaxWaitOrDefault() {
+		return runlog.Task{}, false
+	}
+	return task, true
+}
+
+// deliverTask hands a worker a one-off task: its brief goes into the
+// worker's directory and one line tells the worker to read it.
+func (s *Supervisor) deliverTask(w config.Worker, st *workerState, obs Observation, now time.Time, task runlog.Task) error {
+	dir := filepath.Join(expandHome(w.Dir), TaskDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("worker %s: task %s: %w", w.Name, task.ID, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, task.ID+".md"), []byte(task.Brief), 0o644); err != nil {
+		return fmt.Errorf("worker %s: task %s: %w", w.Name, task.ID, err)
+	}
+	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: KindTask, Verdict: runlog.VerdictNudge, Task: task.ID,
+		Reason: "the owner pushed a one-off task", Activity: obs.LastActivity, Queue: st.queueSeen}
+	c.Cold = now.Sub(obs.LastActivity) > s.Settings.CacheTTLOrDefault()
+	c.Message = fmt.Sprintf(taskOrder, TaskDir+"/"+task.ID+".md", TaskDir+"/"+task.ID+taskReport)
+	// The same rule as for an issue: a context is kept only while it is warm
+	// and the worker does not start each piece of work fresh.
+	switch {
+	case (w.FreshPerIssue && st.worked) || (c.Cold && s.Settings.ClearWhenCold()):
+		if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
+			return err
+		}
+		c.Message = reorient + c.Message
+	case st.briefStale:
+		c.Message = briefChangedThen + c.Message
+	}
+	st.briefStale = false
+	if err := s.Terminal.Send(w.Name, c.Message); err != nil {
+		return err
+	}
+	// The message is sent before the task is marked taken. If marking fails
+	// the task is handed over twice, which beats a task nobody was told of.
+	if err := runlog.TakeTask(s.StateDir, task); err != nil {
+		return err
+	}
+	c.Sent = true
+	st.task, st.issue, st.look, st.worked = task.ID, 0, false, true
+	st.nudges = []time.Time{now}
+	st.lastReview, st.reviewedActivity = now, obs.LastActivity
+	s.record(st, c)
+	return nil
+}
+
+// returnTask puts the task of a session that ended back in the worker's
+// queue, so its next session takes it up again.
+func (s *Supervisor) returnTask(w config.Worker, st *workerState) {
+	if st.task == "" {
+		return
+	}
+	if err := runlog.ReturnTask(s.StateDir, st.task, w.Name); err != nil {
+		s.Logf("worker %s: %v", w.Name, err)
+	}
+	st.task = ""
 }
 
 // busy says why the machine has no room for new work, or "" when it has.
@@ -584,6 +691,7 @@ func (s *Supervisor) recycle(w config.Worker, st *workerState, now time.Time) er
 		return fmt.Errorf("worker %s: clear the recycle request: %w", w.Name, err)
 	}
 	st.issue, st.look, st.model, st.limitedUntil = 0, false, "", time.Time{}
+	s.returnTask(w, st)
 	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindRecycle, Verdict: runlog.VerdictRecycled, Reason: "its session was ended so that a fresh one starts"})
 	return nil
 }
@@ -616,18 +724,23 @@ func (s *Supervisor) recover(worker string) *workerState {
 		case c.Verdict == runlog.VerdictStarted:
 			// A new session: nothing in hand, the model its command gave it.
 			st.issue, st.look, st.model, st.briefStale = 0, false, "", false
+			st.task, st.worked = "", false
 			st.nudges = nil
 			st.starts = append(st.starts, c.Time)
 			st.lastReview = c.Time
 		case c.Verdict == runlog.VerdictRecycled:
 			st.issue, st.look, st.model, st.limitedUntil = 0, false, "", time.Time{}
+			st.task, st.worked = "", false
 		case c.Kind == KindBrief:
 			st.briefStale = !c.Sent
 		case c.Kind == KindHook:
 			st.markSeen, st.waiting = c.Time, c.Verdict == runlog.VerdictNeedsOwner
 		case c.Verdict == runlog.VerdictLimited && c.Activity.IsZero():
 			// The reviewer was limited; the worker itself was not reviewed.
-		case c.Kind == KindIdle || c.Kind == KindScope || c.Kind == KindQueue || c.Kind == KindLimit || c.Kind == KindCapacity:
+		case c.Kind == KindIdle || c.Kind == KindScope || c.Kind == KindQueue || c.Kind == KindLimit || c.Kind == KindCapacity || c.Kind == KindTask:
+			if c.Verdict == runlog.VerdictDone {
+				st.task = ""
+			}
 			st.lastReview, st.lastQueueCheck = c.Time, c.Time
 			st.reviewedActivity, st.queueSeen = c.Activity, c.Queue
 			st.limitedUntil = time.Time{}
@@ -646,6 +759,11 @@ func (s *Supervisor) recover(worker string) *workerState {
 				// A hand-over: the count starts again, as in deliver.
 				st.nudges = nil
 				st.issue, st.look = c.Issue, c.Look
+				st.task, st.worked = "", true
+			}
+			if c.Task != "" {
+				st.nudges = nil
+				st.task, st.issue, st.look, st.worked = c.Task, 0, false, true
 			}
 			st.nudges = append(st.nudges, c.Time)
 			st.briefStale = false
@@ -863,6 +981,16 @@ func (s *Supervisor) briefText(w config.Worker) string {
 		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nBefore you start an issue, check whether an open pull request or an unmerged branch already covers it (`gh pr list --search <number>`, `git fetch` and `git branch -r`). If one does and the supervisor did not send you back to that pull request, do not start it: another worker has it. Report what you found in the issue as a decision for the owner, say so here, and stop.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\nWhen you are sent back to an issue you already handed back, do what the message says and hand back again, even when nothing needed to change: post a new hand-back comment that names the pull request, as your first one did, and say what you changed or that nothing changed. The new hand-back is what tells the supervisor you are done with it.\n")
 	}
 	s.eyeCheckBrief(&b, w)
+	fmt.Fprintf(&b, `
+## One-off tasks
+
+The owner may push you a task of its own, outside your queue. The supervisor
+then names a file under %s. Read it in full: it is the owner's own brief for
+that task, it comes before your queue, and where it says so it goes beyond
+this brief. The standing orders still hold. When the task is done, write a
+report in the file the supervisor named: what you did, what you verified and
+how, and what is left open. Then say so here and stop.
+`, "`"+TaskDir+"/`")
 	b.WriteString(`
 ## You work unattended
 
