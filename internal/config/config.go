@@ -54,6 +54,10 @@ type Environment struct {
 	URL string `yaml:"url"`
 	// Orders say what a worker may and may not do there during an eye check.
 	Orders string `yaml:"orders"`
+	// Viewport is the browser size an eye check is done at when the
+	// hand-back names none, as "<width>x<height>" in CSS pixels. shed cannot
+	// resize a browser: the worker is told the size and says what it had.
+	Viewport string `yaml:"viewport"`
 }
 
 // DefaultLookBack is how far back merged work is looked for.
@@ -331,8 +335,9 @@ func withHandBack(phrase string, signals []Signal) []Signal {
 }
 
 var (
-	nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
-	repoRE = regexp.MustCompile(`^[^/\s]+/[^/\s]+$`)
+	nameRE     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+	viewportRE = regexp.MustCompile(`^[1-9][0-9]*x[1-9][0-9]*$`)
+	repoRE     = regexp.MustCompile(`^[^/\s]+/[^/\s]+$`)
 )
 
 // Resolve picks the config path: the flag, then $SHED_CONFIG, then ./shed.yaml,
@@ -560,7 +565,10 @@ func (c *Config) validate() error {
 		if r.Staging.Commit == "" {
 			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
 		}
-		if r.Production.URL != "" || r.Production.Orders != "" {
+		if r.Staging.Viewport != "" && !viewportRE.MatchString(r.Staging.Viewport) {
+			fail("%s: staging.viewport %q is not a size such as 1440x900", where, r.Staging.Viewport)
+		}
+		if r.Production.URL != "" || r.Production.Orders != "" || r.Production.Viewport != "" {
 			fail("%s: production takes only commit; no worker goes there", where)
 		}
 		if r.LookBack != "" {

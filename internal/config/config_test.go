@@ -60,6 +60,8 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"repo without a staging commit", minimal + "repos: [{repo: org/app}]\n", "staging.commit is required"},
 		{"duplicate repo", minimal + "repos: [{repo: org/app, staging: {commit: x}}, {repo: org/app, staging: {commit: x}}]\n", "duplicate entry"},
 		{"bad look_back", minimal + "repos: [{repo: org/app, staging: {commit: x}, look_back: 14d}]\n", "look_back"},
+		{"viewport that is not a size", minimal + "repos: [{repo: org/app, staging: {commit: x, viewport: wide}}]\n", "staging.viewport \"wide\" is not a size"},
+		{"production with a viewport", minimal + "repos: [{repo: org/app, staging: {commit: x}, production: {commit: y, viewport: 1440x900}}]\n", "production takes only commit"},
 		{"production with a url", minimal + "repos: [{repo: org/app, staging: {commit: x}, production: {commit: y, url: https://example.com}}]\n", "production takes only commit"},
 		{"eye checks without a repo entry", minimal + "    issues: [{repo: org/app, label: x}]\n    workers:\n      - {name: w, dir: /tmp, brief: b, eye_checks: true}\n", "has no entry under repos"},
 		{"eye checks without a failure phrase", minimal + "    issues: [{repo: org/app, label: x}]\n    workers:\n      - {name: w, dir: /tmp, brief: b, eye_checks: true}\nrepos: [{repo: org/app, staging: {commit: x}}]\nsignals: [{name: eyes, ask: \"Needs eyes:\", answered_by: Eyes checked}]\n", "answered_by and failed_by"},
@@ -232,14 +234,14 @@ func TestRepoDeploysAndEyeCheckWorkers(t *testing.T) {
       - {name: w, dir: /tmp, brief: b, eye_checks: true}
 repos:
   - repo: org/app
-    staging: {commit: "echo abc1234", url: "https://staging.example.com", orders: "Read only."}
+    staging: {commit: "echo abc1234", url: "https://staging.example.com", orders: "Read only.", viewport: 1440x900}
     production: {commit: "echo def5678"}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	repo, ok := cfg.Repo("org/app")
-	if !ok || repo.Staging.URL != "https://staging.example.com" || repo.LookBackOrDefault() != DefaultLookBack {
+	if !ok || repo.Staging.URL != "https://staging.example.com" || repo.Staging.Viewport != "1440x900" || repo.LookBackOrDefault() != DefaultLookBack {
 		t.Fatalf("repo = %+v", repo)
 	}
 	if !cfg.Machines[0].Workers[0].EyeChecks {

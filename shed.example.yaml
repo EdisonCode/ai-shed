@@ -103,6 +103,9 @@ machines:
 #       orders: |
 #         You may sign in as the test user, open any page and save a draft.
 #         Never place an order, send a message or change another user's data.
+#       # Optional. The browser size to look at when a hand-back names none.
+#       # The worker's comment always says the size it really had.
+#       viewport: 1440x900
 #     # Optional. Merged work is looked for since this commit.
 #     production:
 #       commit: "curl -fsS https://app.example.com/healthz | jq -r .commit"
