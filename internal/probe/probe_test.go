@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
 var twoChecks = []config.Check{{Name: "gh auth", Run: "gh auth status"}, {Name: "claude", Run: "command -v claude"}}
@@ -136,5 +137,18 @@ func TestParseReadsRecycleRequests(t *testing.T) {
 	res, err := Parse(linuxOutput, twoChecks)
 	if err != nil || len(res.Recycle) != 1 || res.Recycle[0] != "app" {
 		t.Fatalf("recycle = %v, %v", res.Recycle, err)
+	}
+}
+
+func TestParseReadsWhatEachWorkersToolReported(t *testing.T) {
+	out := "@@now 1790000000\n" +
+		`@@mark app {"time":"2026-10-04T12:00:00Z","state":"waiting","detail":"Allow Bash?"}` + "\n" +
+		"@@mark docs not json\n@@end\n"
+	res, err := Parse(out, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := res.Marks["app"]; m.State != runlog.MarkWaiting || m.Detail != "Allow Bash?" || len(res.Marks) != 1 {
+		t.Fatalf("marks = %+v", res.Marks)
 	}
 }

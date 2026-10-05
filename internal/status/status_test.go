@@ -486,3 +486,48 @@ func TestJSONReportCarriesTheMachinesAndTheReleaseState(t *testing.T) {
 		t.Fatalf("repos = %+v in %s", got.Repos, data)
 	}
 }
+
+func TestStatusShowsWhatEachWorkersToolReports(t *testing.T) {
+	m := config.Machine{Name: "box", Workers: []config.Worker{
+		{Name: "app", Dir: "/tmp", Brief: "b"}, {Name: "docs", Dir: "/tmp", Brief: "b"}, {Name: "ops", Dir: "/tmp", Brief: "b"}, {Name: "old", Dir: "/tmp", Brief: "b"}}}
+	res := healthy()
+	shedWindow := func(name string, quietFor time.Duration) probe.Window {
+		return probe.Window{Session: "shed", Name: name, Command: "claude", LastActivity: now.Add(-quietFor)}
+	}
+	res.Windows = []probe.Window{shedWindow("app", 20*time.Minute), shedWindow("docs", 10*time.Second), shedWindow("ops", 4*time.Minute), shedWindow("old", time.Hour)}
+	res.Marks = map[string]runlog.Mark{
+		"app":  {Time: now.Add(-20 * time.Minute), State: runlog.MarkWaiting, Detail: "Allow Bash?"},
+		"docs": {Time: now.Add(-20 * time.Minute), State: runlog.MarkWaiting}, // answered: its screen moved on
+		"ops":  {Time: now.Add(-4 * time.Minute), State: runlog.MarkIdle},
+	}
+	for _, name := range []string{"app", "docs", "ops", "old"} {
+		c := checkin(runlog.VerdictOnTrack, "fine")
+		c.Worker = name
+		res.Checkins = append(res.Checkins, c)
+	}
+
+	r := Assess(m, signals, now, res, nil)
+	got := map[string]string{}
+	for _, w := range r.Workers {
+		got[w.Name] = w.Tool + "|" + w.State
+	}
+	want := map[string]string{"app": "claude|waiting", "docs": "claude|working", "ops": "claude|idle", "old": "claude|"}
+	for name, state := range want {
+		if got[name] != state {
+			t.Errorf("worker %s = %q, want %q", name, got[name], state)
+		}
+	}
+
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	for _, line := range []string{
+		"app   no issue  waiting 20m  on_track  5m ago  fine",
+		"docs  no issue  working      on_track  5m ago  fine",
+		"ops   no issue  idle 4m      on_track  5m ago  fine",
+		"old   no issue  -            on_track  5m ago  fine",
+	} {
+		if !strings.Contains(out.String(), line) {
+			t.Fatalf("output lacks %q:\n%s", line, out.String())
+		}
+	}
+}

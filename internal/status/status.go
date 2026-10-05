@@ -96,6 +96,11 @@ type WorkerStatus struct {
 	Tool string `json:"tool"`
 	// Issue is the issue the supervisor last handed it; 0 for none.
 	Issue int `json:"issue,omitempty"`
+	// State is what the worker's own tool reports through its hooks:
+	// working, idle or waiting for a person. Empty when the tool has no
+	// hooks. StateSince is when it began; zero when that is not known.
+	State      string    `json:"state,omitempty"`
+	StateSince time.Time `json:"state_since,omitzero"`
 	// RecyclePending is set when the owner asked for a fresh session and the
 	// supervisor waits for the issue in hand to finish.
 	RecyclePending bool `json:"recycle_pending,omitempty"`
@@ -370,6 +375,19 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 		st := WorkerStatus{Name: w.Name, Issue: runlog.IssueInHand(res.Checkins, w.Name), RecyclePending: slices.Contains(res.Recycle, w.Name)}
 		if fields := strings.Fields(w.CommandOrDefault()); len(fields) > 0 {
 			st.Tool = fields[0]
+		}
+		if mark, ok := res.Marks[w.Name]; ok {
+			lastActivity := mark.Time
+			for _, win := range res.Windows {
+				if win.Session == workerSession && win.Name == w.Name {
+					lastActivity = win.LastActivity
+				}
+			}
+			st.State = mark.StateAt(lastActivity)
+			// A prompt that was answered: the tool did not say when.
+			if st.State == mark.State {
+				st.StateSince = mark.Time
+			}
 		}
 		if c, ok := latest[w.Name]; ok {
 			st.Last = &c

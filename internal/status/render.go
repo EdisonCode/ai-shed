@@ -3,6 +3,7 @@ package status
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -154,6 +155,7 @@ func renderMachine(w io.Writer, r MachineReport) {
 	}
 	if len(r.Workers) > 0 && r.Probe != nil {
 		fmt.Fprintln(w, "  supervised")
+		hooked := slices.ContainsFunc(r.Workers, func(wk WorkerStatus) bool { return wk.State != "" })
 		for _, wk := range r.Workers {
 			if wk.Last == nil {
 				fmt.Fprintf(tw, "    %s\tno check-in yet\n", wk.Name)
@@ -163,7 +165,13 @@ func renderMachine(w io.Writer, r MachineReport) {
 			if wk.RecyclePending {
 				reason = "[fresh session pending] " + reason
 			}
-			fmt.Fprintf(tw, "    %s\t%s\t%s\t%s ago\t%s\n", wk.Name, inHand(wk), wk.Last.Verdict, Short(r.Probe.Now.Sub(wk.Last.Time)), reason)
+			hand := inHand(wk)
+			// The tool's own state has a column only on a machine where
+			// some worker's tool reports one.
+			if hooked {
+				hand += "\t" + toolState(r, wk)
+			}
+			fmt.Fprintf(tw, "    %s\t%s\t%s\t%s ago\t%s\n", wk.Name, hand, wk.Last.Verdict, Short(r.Probe.Now.Sub(wk.Last.Time)), reason)
 		}
 		tw.Flush()
 	}
@@ -224,6 +232,18 @@ func lastRun(r MachineReport, t TaskStatus) string {
 		return "started " + Short(r.Probe.Now.Sub(t.Last.Start)) + " ago"
 	}
 	return fmt.Sprintf("%s ago, took %s", Short(r.Probe.Now.Sub(t.Last.End)), Short(t.Last.End.Sub(t.Last.Start)))
+}
+
+// toolState says what the worker's own tool reports and for how long; "-"
+// for a tool with no hooks.
+func toolState(r MachineReport, w WorkerStatus) string {
+	switch {
+	case w.State == "":
+		return "-"
+	case w.StateSince.IsZero():
+		return w.State
+	}
+	return w.State + " " + Short(r.Probe.Now.Sub(w.StateSince))
 }
 
 func inHand(w WorkerStatus) string {
