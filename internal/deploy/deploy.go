@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -278,6 +279,22 @@ func Resume(ctx context.Context, r probe.Runner, m config.Machine) (bool, error)
 		return false, fmt.Errorf("resume %s: %w", m.Name, err)
 	}
 	return strings.TrimSpace(string(out)) == "resumed", nil
+}
+
+// EndLimitHolds tells the machine's agent that the usage limit of the named
+// workers is over, whatever time their screens name. The agent looks again at
+// each one it holds at a limit; a worker that is at none is left as it is.
+func EndLimitHolds(ctx context.Context, r probe.Runner, m config.Machine, workers []string) error {
+	quoted := make([]string, len(workers))
+	for i, w := range workers {
+		quoted[i] = strconv.Quote(w)
+	}
+	command := fmt.Sprintf(`d="$HOME/%s/%s" && mkdir -p "$d" && for w in %s; do : > "$d/$w" || exit 1; done`,
+		runlog.StateDir, runlog.ResumeDir, strings.Join(quoted, " "))
+	if _, err := r.Run(ctx, m, command, nil); err != nil {
+		return fmt.Errorf("resume %s: %w", m.Name, err)
+	}
+	return nil
 }
 
 // Bump asks the machine's agent to put an issue first in line: in the queue

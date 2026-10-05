@@ -103,6 +103,15 @@ the load falls gradually. It does not stop work in progress. `shed resume
 the heavy job, not after it has failed. Do not stop a worker's session or
 type into it to free up the machine.
 
+## A usage limit that ended early
+
+A worker at a usage limit shows `limited` in `shed status` and is held until
+the time its screen named, six hours at the most. When the owner says the
+limit was reset, run `shed resume <machine>`, or `shed resume <machine>
+<worker>` for one worker: the agent looks at each held worker within a minute
+and tells it to continue. Do not type "continue" into the workers yourself,
+and do not recycle a worker to clear the hold: that costs it its session.
+
 ## Push a one-off task
 
 Use an issue for work that belongs in the backlog. Use a task when the brief

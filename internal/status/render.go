@@ -10,6 +10,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/probe"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
 // workerSession is the tmux session that holds supervised workers.
@@ -175,6 +176,9 @@ func renderMachine(w io.Writer, r MachineReport) {
 				continue
 			}
 			reason := wk.Last.Reason
+			if wk.Last.Verdict == runlog.VerdictLimited {
+				reason = limitedWords(r, wk)
+			}
 			if wk.RecyclePending {
 				reason = "[fresh session pending] " + reason
 			}
@@ -274,6 +278,34 @@ func toolState(r MachineReport, w WorkerStatus) string {
 		return w.State
 	}
 	return w.State + " " + Short(r.Probe.Now.Sub(w.StateSince))
+}
+
+// limitedWords says what the owner needs to know of a worker that is held
+// at a usage limit: how long the hold lasts at the most, when the worker last
+// printed anything, and how to end the hold. The reason was true when the
+// limit was seen. Once the worker has printed since, it is out of date and
+// is not shown.
+func limitedWords(r MachineReport, w WorkerStatus) string {
+	words := "due to be looked at again"
+	if left := w.Last.Until.Sub(r.Probe.Now); left > 0 {
+		words = "held for up to another " + Short(left)
+	}
+	stale := false
+	for _, win := range r.Probe.Windows {
+		if win.Session != workerSession || win.Name != w.Name {
+			continue
+		}
+		if stale = win.LastActivity.After(w.Last.Time); stale {
+			words += fmt.Sprintf(", but active %s ago, after the limit was seen", Short(r.Probe.Now.Sub(win.LastActivity)))
+		} else {
+			words += fmt.Sprintf(", last active %s ago", Short(r.Probe.Now.Sub(win.LastActivity)))
+		}
+	}
+	words += fmt.Sprintf("; if the limit is over: shed resume %s %s", r.Name, w.Name)
+	if stale {
+		return words
+	}
+	return words + ". " + w.Last.Reason
 }
 
 func inHand(w WorkerStatus) string {

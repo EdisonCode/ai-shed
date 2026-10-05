@@ -723,3 +723,35 @@ func TestPausedMachineSaysSoAndNeedsNothing(t *testing.T) {
 		t.Fatalf("report:\n%s", out.String())
 	}
 }
+
+func limitedReport(t *testing.T, quietFor time.Duration) string {
+	t.Helper()
+	res := healthy()
+	c := checkin(runlog.VerdictLimited, "the screen says the limit resets Oct 7 at 6pm")
+	c.Until = now.Add(4 * time.Hour)
+	res.Checkins = []runlog.Checkin{c}
+	win := window("app", quietFor)
+	win.Session = workerSession
+	res.Windows = []probe.Window{win}
+	machine := appWorker
+	machine.Name = "box"
+	var out bytes.Buffer
+	Render(&out, []MachineReport{Assess(machine, signals, now, res, nil)}, nil)
+	return out.String()
+}
+
+func TestLimitedWorkerShowsHowLongItIsHeldAndHowToEndIt(t *testing.T) {
+	out := limitedReport(t, 10*time.Minute)
+	for _, want := range []string{"held for up to another 4h", "last active 10m ago", "shed resume box app", "resets Oct 7 at 6pm"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestLimitedWorkerThatWorkedSinceDoesNotShowTheOldReason(t *testing.T) {
+	out := limitedReport(t, 2*time.Minute) // the limit was seen 5 minutes ago
+	if !strings.Contains(out, "but active 2m ago, after the limit was seen") || strings.Contains(out, "resets Oct 7") {
+		t.Fatalf("a reason older than the worker's last output reads as if it were current:\n%s", out)
+	}
+}

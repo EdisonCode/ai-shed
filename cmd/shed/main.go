@@ -28,7 +28,7 @@ Usage:
                                     put an open issue first in its queue, or in that worker's
   shed bump -undo <machine> <issue> put it back in its usual place
   shed pause [-for 30m] <machine>   hand out nothing and nudge nobody for a while
-  shed resume <machine>             end a pause early
+  shed resume <machine> [worker]    end a pause early, and a hold at a usage limit that is over
   shed recycle [-now] <machine> <worker>
                                     give a worker a fresh session after its current issue
   shed tidy [-apply] <machine>      list the worktrees and branches whose pull request is merged;
