@@ -1389,7 +1389,7 @@ func withStaging(f *fixture, found ...looks.Look) *fakeLooks {
 	reader := &fakeLooks{looks: found}
 	f.Looks = reader
 	f.Repos = []config.Repo{{Name: "org/app", Staging: config.Environment{Commit: "true", URL: "https://staging.example.com",
-		Orders: "Open pages and cancel a draft.\nNever send a message."}}}
+		Orders: "Open pages and cancel a draft.\nNever send a message.", Viewport: "1440x900"}}}
 	f.Machine.Workers[0].EyeChecks = true
 	return reader
 }
@@ -1511,6 +1511,9 @@ func TestBriefSaysHowAnEyeCheckPassesFailsAndIsBlocked(t *testing.T) {
 		"- org/app: staging is https://staging.example.com.",
 		"What you may do there: Open pages and cancel a draft.\n  Never send a message.",
 		"is after `Needs eyes:`",
+		"Viewport: look at 1440x900, unless the hand-back names another size.",
+		"Whatever you post, say that size in it, as in `viewport 1440x900`.",
+		"If it does, you are blocked, and your comment says the size you had and the size that was asked.",
 		"starts with `Eyes checked:`",
 		"headed `Hand-back`. Write `Eyes failed:`",
 		"then `Decisions needed:`",
@@ -1983,5 +1986,17 @@ func TestBriefTellsAWorkerAboutBumpedIssues(t *testing.T) {
 func TestReviewerIsToldABumpedIssueIsInScope(t *testing.T) {
 	if !strings.Contains(instructions, "An item marked as put first by the owner") {
 		t.Fatal("the reviewer would hold a moved issue against the worker's brief")
+	}
+}
+
+func TestBriefNamesNoViewportWhenTheFleetFileHasNone(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	withStaging(f)
+	f.Repos[0].Staging.Viewport = ""
+	f.tick(0)
+
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	if strings.Contains(string(brief), "Viewport: look at") || !strings.Contains(string(brief), "say that size in it") {
+		t.Fatalf("brief:\n%s", brief)
 	}
 }
