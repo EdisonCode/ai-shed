@@ -1176,6 +1176,9 @@ production, and that is you. It is not work to build.
 			if orders := strings.TrimSpace(repo.Staging.Orders); orders != "" {
 				fmt.Fprintf(b, "  What you may do there: %s\n", strings.ReplaceAll(orders, "\n", "\n  "))
 			}
+			if repo.Staging.Viewport != "" {
+				fmt.Fprintf(b, "  Viewport: look at %s, unless the hand-back names another size.\n", repo.Staging.Viewport)
+			}
 		}
 	}
 	fmt.Fprintf(b, `
@@ -1184,6 +1187,8 @@ How to do one:
 - Read the issue's last hand-back. What to look at, and what a pass looks like, is after `+"`%s`"+`.
 - Look on staging only, in a browser. Change no code and open no branch.
 - On staging, do only what is allowed above. An act that is not named there is not allowed.
+- Look at the viewport the check names. Read the size your browser really has (`+"`window.innerWidth`"+` by `+"`window.innerHeight`"+`); do not take it from what you asked for. Whatever you post, say that size in it, as in `+"`viewport 1440x900`"+`.
+- You cannot get the size the check names: if what is to be judged does not depend on the size, look at the size you have. If it does, you are blocked, and your comment says the size you had and the size that was asked.
 - It passes: post a comment on the issue that starts with `+"`%s:`"+` and says what you saw.
 - It fails: reopen the issue (`+"`gh issue reopen`"+`) and post a comment headed `+"`%s`"+`. Write `+"`%s:`"+` with what you saw against what was expected, then `+"`%s`"+` with the question for the owner and your recommendation. Do not fix it.
 - You could not do it (you cannot sign in, staging is down, the description is too vague to judge, the check needs an act that is not allowed): you are blocked. Post a comment on the issue that starts with `+"`%s:`"+` and says, on that line, what stopped you and what the owner must do about it. Post nothing that says checked or failed. Then say so here and stop: the check is the owner's to clear, and the supervisor gives you your next item. A check you could not do has not passed.

@@ -217,6 +217,7 @@ repos:
       orders: |
         You may sign in as the test user, open any page and save a draft.
         Never place an order, send a message or change another user's data.
+      viewport: 1440x900   # optional: the size to look at when a hand-back names none
     production:
       commit: "curl -fsS https://app.example.com/healthz | jq -r .commit"
     look_back: 336h      # the default: 14 days
@@ -242,6 +243,12 @@ machines:
 - **What the worker may do.** Its brief gets the staging address and your
   `orders`. An act the orders do not name is not allowed. Name the writes a
   check needs and the ones that must never happen.
+- **The viewport.** shed cannot resize a browser. The worker looks at the
+  size the hand-back names, or at `viewport` when it names none, and its
+  comment always says the size the browser really had, as in
+  `viewport 1440x900`. When it cannot get the size and what is to be judged
+  depends on it, the look is blocked and the comment says both sizes. If
+  your worker's browser tool can resize, say how in `orders`.
 - **A pass.** The worker comments `Eyes checked:` with what it saw.
 - **A failure.** The worker reopens the issue and hands it back with
   `Eyes failed:` and a `Decisions needed:` for you. It does not fix it: a
