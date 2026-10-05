@@ -21,12 +21,14 @@ linux-box  me@linux-box  load 0.52/8  disk 42%  agent ok
   tasks
     nightly-deps  0 3 * * *  ok  9h ago, took 41s
   ! check failed: docker (Cannot connect to the Docker daemon)
-  ! my-org/my-app#124 waits on you (decision): Drop the legacy column
+  ! my-org/my-app#123 waits on you (review #131 5h): Retry the export when the API times out
+  ! my-org/my-app#124 waits on you (decision 2h): Drop the legacy column
 
 mac-mini  me@mac-mini  UNREACHABLE
   ! unreachable: me@mac-mini: exit status 255: Operation timed out
 
-3 item(s) need you.
+4 item(s) need you.
+Waiting on you: 1 review (oldest 5h), 1 decision (oldest 2h).
 ```
 
 The exit code is 1 when anything needs you, so a script or a notifier can act on it.
@@ -337,6 +339,11 @@ or a discussion on the issue ask you nothing and hold nothing back. Your
 answers (`Owner ruling`, `Eyes checked`) count in any comment.
 
 An issue with an open signal is not handed to a worker.
+
+Each `waits on you` line says how long ago the worker asked and, for a review,
+which pull request: `(eyes 3h, review #41 3h)`. Under the report, one line
+totals what waits on you by kind with the age of the oldest. When the workers
+are idle, that line is where the work is.
 
 ## Setup
 

@@ -152,14 +152,40 @@ func prProblem(mergeable string, checks []check) string {
 // them: the work will change, and the worker asks again when it hands back.
 // A question it asked the owner still is.
 func Waiting(issue Issue, signals []config.Signal) []string {
-	rework := Rework(issue, signals) != ""
 	var open []string
-	for _, s := range signals {
-		if isOpen, _ := signalState(issue, s); isOpen && !(rework && !s.SendsBack) {
-			open = append(open, s.Name)
-		}
+	for _, a := range Asks(issue, signals) {
+		open = append(open, a.Name)
 	}
 	return open
+}
+
+// Ask is one thing an issue asks of the owner: an open signal.
+type Ask struct {
+	// Name is the signal's name.
+	Name string `json:"name"`
+	// Since is when the worker last asked; zero when the comment has no time.
+	Since time.Time `json:"since"`
+	// PR is the pull request a follows_pr signal waits on; 0 for none.
+	PR int `json:"pr,omitempty"`
+}
+
+// Asks returns what the issue asks of the owner, in the order of the signals.
+// Waiting says which asks are left out while the issue needs a worker again.
+func Asks(issue Issue, signals []config.Signal) []Ask {
+	rework := Rework(issue, signals) != ""
+	var asks []Ask
+	for _, s := range signals {
+		isOpen, pr, since := signalState(issue, s)
+		if !isOpen || (rework && !s.SendsBack) {
+			continue
+		}
+		ask := Ask{Name: s.Name, Since: since}
+		if s.FollowsPR {
+			ask.PR = pr
+		}
+		asks = append(asks, ask)
+	}
+	return asks
 }
 
 // Rework says why an issue that was handed back needs a worker again while
@@ -228,9 +254,9 @@ func lastComment(issue Issue, phrase string) int {
 	return last
 }
 
-// signalState reports whether the signal is open on the issue, and the pull
-// request its last ask named (0 for none).
-func signalState(issue Issue, s config.Signal) (open bool, pr int) {
+// signalState reports whether the signal is open on the issue, the pull
+// request its last ask named (0 for none), and when that ask was made.
+func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Time) {
 	for _, c := range issue.Comments {
 		body := strings.ToLower(c.Body)
 		// The answer is tested first: a comment that both cites an earlier
@@ -239,17 +265,17 @@ func signalState(issue Issue, s config.Signal) (open bool, pr int) {
 			open = false
 		}
 		if value, found := asked(body, s); found {
-			open, pr = !isClear(value, s.Clear), prNumber(value)
+			open, pr, since = !isClear(value, s.Clear), prNumber(value), c.CreatedAt
 		}
 	}
 	// A signal that follows a pull request is over once that pull request is
 	// merged or closed.
 	if open && s.FollowsPR && pr != 0 && issue.OpenPRs != nil {
 		if _, stillOpen := issue.OpenPRs[pr]; !stillOpen {
-			return false, pr
+			return false, pr, since
 		}
 	}
-	return open, pr
+	return open, pr, since
 }
 
 var prRE = regexp.MustCompile(`#(\d+)`)

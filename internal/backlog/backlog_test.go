@@ -3,6 +3,7 @@ package backlog
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
 )
@@ -166,6 +167,18 @@ func TestOwnersAnswerAfterAHandBackSendsTheIssueBack(t *testing.T) {
 				t.Errorf("rework = %q, want %q", got, tc.wantRework)
 			}
 		})
+	}
+}
+
+func TestAsksSayHowLongTheOwnerHasBeenAskedAndForWhichPullRequest(t *testing.T) {
+	first, second := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 4, 11, 0, 0, 0, time.UTC)
+	issue := Issue{OpenPRs: map[int]PR{41: {}}, Comments: []Comment{
+		{Body: "## Hand-back\n**PR:** #41 (draft)\n**Decisions needed:**\n1. Keep the column? See #3.", CreatedAt: first},
+		{Body: "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders", CreatedAt: second},
+	}}
+	want := []Ask{{Name: "decision", Since: first}, {Name: "eyes", Since: second}, {Name: "review", Since: second, PR: 41}}
+	if got := Asks(issue, config.DefaultSignals()); !slices.Equal(got, want) {
+		t.Fatalf("asks = %+v, want %+v", got, want)
 	}
 }
 

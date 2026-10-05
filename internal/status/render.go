@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/edisoncode/ai-shed/internal/probe"
 )
@@ -25,6 +26,54 @@ func Render(w io.Writer, reports []MachineReport) {
 		return
 	}
 	fmt.Fprintf(w, "%d item(s) need you.\n", total)
+	if line := waitingTotals(reports); line != "" {
+		fmt.Fprintln(w, line)
+	}
+}
+
+// waitingTotals counts what waits on the owner by kind, with the age of the
+// oldest: the owner's own backlog. An issue in the queue of two machines
+// waits once.
+func waitingTotals(reports []MachineReport) string {
+	type total struct {
+		count  int
+		oldest time.Duration
+	}
+	var kinds []string
+	totals := map[string]*total{}
+	counted := map[string]bool{}
+	for _, r := range reports {
+		for _, i := range r.Issues {
+			for _, a := range i.Asks {
+				key := fmt.Sprintf("%s#%d %s", i.Repo, i.Number, a.Name)
+				if counted[key] {
+					continue
+				}
+				counted[key] = true
+				t := totals[a.Name]
+				if t == nil {
+					t = &total{}
+					totals[a.Name] = t
+					kinds = append(kinds, a.Name)
+				}
+				t.count++
+				if !a.Since.IsZero() {
+					t.oldest = max(t.oldest, r.Now.Sub(a.Since))
+				}
+			}
+		}
+	}
+	if len(kinds) == 0 {
+		return ""
+	}
+	words := make([]string, len(kinds))
+	for n, kind := range kinds {
+		words[n] = fmt.Sprintf("%d %s", totals[kind].count, kind)
+		if totals[kind].oldest > 0 {
+			words[n] += fmt.Sprintf(" (oldest %s)", Short(totals[kind].oldest))
+		}
+	}
+	return "Waiting on you: " + strings.Join(words, ", ") + "."
 }
 
 func renderMachine(w io.Writer, r MachineReport) {

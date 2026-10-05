@@ -105,7 +105,10 @@ Run this as a checklist and report each line.
 
 ## Pick up the results
 
-1. `shed status`. Exit code 1 means something needs the owner.
+1. `shed status`. Exit code 1 means something needs the owner. The last line,
+   `Waiting on you: ...`, totals the owner's own backlog by kind with the age
+   of the oldest; each `waits on you` line has its own age. Start with the
+   oldest: idle workers usually wait behind it.
 2. For each `!` line, give the owner the fact and your recommendation:
    - `issue waits on you (decision)`: read the worker's comment
      (`gh issue view <n> --repo <r> --comments`), put the question to the
