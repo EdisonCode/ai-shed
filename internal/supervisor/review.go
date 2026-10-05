@@ -49,6 +49,12 @@ type QueueItem struct {
 	rank int
 }
 
+// Workable reports whether a worker can act on the item: it needs a worker
+// again, or it does not wait on the owner.
+func (q QueueItem) Workable() bool {
+	return q.Rework != "" || len(q.Waiting) == 0
+}
+
 // ReviewInput is everything the reviewer is shown.
 type ReviewInput struct {
 	Worker string

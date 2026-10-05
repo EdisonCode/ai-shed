@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -271,7 +272,14 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 			return err
 		}
 		st.lastQueueCheck = now
-		if fingerprint(queue) == st.queueSeen {
+		seen := fingerprint(queue)
+		if seen == st.queueSeen {
+			return nil
+		}
+		// What changed may have left nothing to hand over: the last workable
+		// item was closed, or went to another worker. That needs no review.
+		if !slices.ContainsFunc(queue, QueueItem.Workable) {
+			st.queueSeen = seen
 			return nil
 		}
 		return s.review(ctx, w, st, obs, now, KindQueue, queue)
@@ -638,13 +646,18 @@ func find(queue []QueueItem, number int) (QueueItem, bool) {
 	return QueueItem{}, false
 }
 
-// fingerprint is a digest of the queue. It changes when an issue joins or
-// leaves, when what an issue waits on changes (for example the owner
-// answered), or when a handed-back pull request stops being mergeable.
+// fingerprint is a digest of what the queue holds for a worker to do: its
+// workable items. It changes when one joins or leaves, when the owner's
+// answer frees an issue, or when a handed-back pull request needs a worker
+// again. An issue that only waits on the owner is not in it: a label, a
+// comment or a new hand-back that gives a worker nothing to do must not cost
+// every resting worker a review.
 func fingerprint(queue []QueueItem) string {
 	h := sha256.New()
 	for _, q := range queue {
-		fmt.Fprintf(h, "%s#%d:%s:%s;", q.Repo, q.Number, strings.Join(q.Waiting, ","), q.Rework)
+		if q.Workable() {
+			fmt.Fprintf(h, "%s#%d:%s;", q.Repo, q.Number, q.Rework)
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }

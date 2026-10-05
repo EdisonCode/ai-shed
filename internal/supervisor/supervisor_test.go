@@ -286,6 +286,43 @@ func TestRestingWorkerWakesWhenItsQueueChanges(t *testing.T) {
 	}
 }
 
+func TestRestingWorkerIsNotReviewedForAChangeItCannotActOn(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, Verdict{Verdict: runlog.VerdictDone, Reason: "all handed back"})
+	handedBack := backlog.Issue{Repo: "org/app", Number: 12, Title: "Paginate the audit log", OpenPRs: map[int]backlog.PR{41: {}},
+		Comments: []backlog.Comment{{Body: "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /audit and check page 2"}}}
+	f.lister.issues = []backlog.Issue{handedBack}
+	f.tick(2 * time.Minute)
+
+	// The owner did the eye check, then another issue was queued that
+	// already waits on them. Neither gives this worker anything to do.
+	handedBack.Comments = append(handedBack.Comments, backlog.Comment{Body: "Eyes checked: page 2 is right."})
+	f.lister.issues = []backlog.Issue{handedBack}
+	f.tick(queueRecheck + time.Minute)
+	f.lister.issues = append(f.lister.issues, backlog.Issue{Repo: "org/app", Number: 13, Title: "Plan the export",
+		Comments: []backlog.Comment{{Body: "## Hand-back\nDecisions needed: 1. CSV or XLSX?"}}})
+	f.tick(queueRecheck + time.Minute)
+
+	if len(f.reviewer.prompts) != 1 {
+		t.Fatalf("reviewed %d times, want 1: nothing in the queue became workable", len(f.reviewer.prompts))
+	}
+}
+
+func TestRestingWorkerWakesWhenTheOwnerAnswersAQuestion(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, Verdict{Verdict: runlog.VerdictDone, Reason: "it asked and stopped"}, assign(12))
+	asked := backlog.Issue{Repo: "org/app", Number: 12, Title: "Plan the export",
+		Comments: []backlog.Comment{{Body: "## Hand-back\nDecisions needed: 1. CSV or XLSX?"}}}
+	f.lister.issues = []backlog.Issue{asked}
+	f.tick(2 * time.Minute)
+
+	asked.Comments = append(asked.Comments, backlog.Comment{Body: "Owner ruling: CSV."})
+	f.lister.issues = []backlog.Issue{asked}
+	f.tick(queueRecheck + time.Minute)
+
+	if len(f.term.sent) != 1 {
+		t.Fatalf("sent = %q; the answer made #12 workable again", f.term.sent)
+	}
+}
+
 func TestColdWorkerIsClearedBeforeANudge(t *testing.T) {
 	f := started(t, config.Supervisor{CacheTTL: "5m"},
 		Verdict{Verdict: runlog.VerdictDone, Reason: "queue is empty"}, nudge("Take #13 next."))
