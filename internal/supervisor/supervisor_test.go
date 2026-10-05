@@ -430,7 +430,7 @@ func TestParseVerdict(t *testing.T) {
 		{"wrapped in prose and a fence", "Here you go:\n```json\n{\"verdict\":\"nudge\",\"message\":\"Take #12.\",\"reason\":\"r\"}\n```", Verdict{Verdict: "nudge", Message: "Take #12.", Reason: "r"}, ""},
 		{"message becomes one line", `{"verdict":"nudge","message":"Take #12.\nThen #13.","reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12. Then #13.", Reason: "r"}, ""},
 		{"message is dropped unless nudging", `{"verdict":"needs_owner","message":"y","reason":"r"}`, Verdict{Verdict: "needs_owner", Reason: "r"}, ""},
-		{"message never starts with a digit", `{"verdict":"nudge","message":"5227 is next: start it.","issue":5227,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Next: 5227 is next: start it.", Reason: "r", Issue: 5227}, ""},
+		{"message never starts with a digit", `{"verdict":"nudge","message":"127 is next: start it.","issue":127,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Next: 127 is next: start it.", Reason: "r", Issue: 127}, ""},
 		{"nudge without message", `{"verdict":"nudge","message":" ","reason":"r"}`, Verdict{}, "no message"},
 		{"unknown verdict", `{"verdict":"approve","reason":"r"}`, Verdict{}, "unknown verdict"},
 		{"no json", "I think it is fine.", Verdict{}, "no JSON"},

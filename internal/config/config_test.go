@@ -135,7 +135,7 @@ func TestModelIsPickedFromIssueLabels(t *testing.T) {
 		want   string
 	}{
 		{nil, "sonnet"},
-		{[]string{"bug", "machine:pc"}, "sonnet"},
+		{[]string{"bug", "machine:box"}, "sonnet"},
 		{[]string{"bug", "model:opus"}, "opus"},
 		{[]string{"model:fable"}, "fable"},
 	}

@@ -489,8 +489,8 @@ To get a worker onto new tooling (an integration you installed, a changed
 agent definition), ask for a fresh session:
 
 ```sh
-shed recycle mini app        # after the issue it has in hand
-shed recycle -now mini app   # at once
+shed recycle linux-box app        # after the issue it has in hand
+shed recycle -now linux-box app   # at once
 ```
 
 The agent ends the session at the next point where nothing is in progress and
