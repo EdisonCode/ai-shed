@@ -91,6 +91,13 @@ After an edit: `shed validate`, then `shed deploy`. If the fleet file has
 tool's own files (agent definitions, skills, notes) reach the machines. The agent picks the file up
 within 30 seconds and tells a running worker to read its brief again.
 
+## Before a production deploy
+
+Run `shed status` and read the repository's release state at the end. It is a
+go only when `eye checks:` shows none not done and none failed. Tell the owner
+the three numbers (merged since production, not done, failed) and what each
+outstanding look waits for. The deploy itself is the owner's call.
+
 ## Before the owner leaves
 
 Run this as a checklist and report each line.
@@ -124,6 +131,17 @@ Run this as a checklist and report each line.
      post a comment that clears the signal: the `answered_by` phrase of the
      `eyes` signal if the fleet file has one, otherwise the ask phrase
      followed by a `clear` word.
+     When the fleet file has `repos` and a worker with `eye_checks`, a look
+     at merged work on staging is the worker's, not the owner's. The release
+     state under the machines lists each one. `waits for staging` needs a
+     staging deploy, which is the owner's to trigger. `FAILED` has reopened
+     its issue with a decision for the owner: put that to them like any
+     other decision, and do not send a fix without their ruling.
+   - `worker needs you` with a reason that an eye check is blocked: the
+     worker could not sign in to staging, staging was down, or the check
+     needs an act the staging `orders` do not allow. Fix the cause, or do
+     the look yourself with the owner. Never post `Eyes checked` for a look
+     nobody did.
    - `rework` in the issues list needs nothing from the owner: the pull
      request cannot merge and a worker is being sent back to it. A `!` line
      that says `after 2 tries by a worker` is the owner's: the workers could

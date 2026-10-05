@@ -59,6 +59,10 @@ machines:
         # Optional. Clear the worker's context at each new issue. Good for a
         # queue of independent issues; leave off for themed work.
         fresh_per_issue: true
+        # Optional. The worker has a browser and does the eye checks of
+        # merged work on staging. Needs a `repos` entry for its queue's
+        # repositories; see below.
+        # eye_checks: true
         # Optional. A queue of this worker's own, in place of the machine's.
         # Use it when one machine runs two workers.
         # issues:
@@ -83,6 +87,28 @@ machines:
       - name: prune-worktrees
         schedule: "@every 6h"
         run: cd ~/work/my-app && git worktree prune
+
+# Optional. What shed knows about a repository's deploys. With it, a worker
+# with `eye_checks: true` looks at merged work on staging before it goes to
+# production, and `shed status` shows what is merged, not yet in production
+# and not yet looked at.
+# repos:
+#   - repo: my-org/my-app
+#     staging:
+#       url: https://staging.example.com
+#       # Any command that prints the commit staging serves.
+#       commit: "curl -fsS https://staging.example.com/healthz | jq -r .commit"
+#       # What a worker may do on staging during an eye check. An act that
+#       # is not named here is not allowed.
+#       orders: |
+#         You may sign in as the test user, open any page and save a draft.
+#         Never place an order, send a message or change another user's data.
+#     # Optional. Merged work is looked for since this commit.
+#     production:
+#       commit: "curl -fsS https://app.example.com/healthz | jq -r .commit"
+#     # Optional. How far back to look when production is older than this
+#     # or has no command. The default is 14 days.
+#     look_back: 336h
 
 # Optional. How the agent supervises workers. These are the defaults, except
 # `models`, which is off unless you set it.
@@ -134,6 +160,9 @@ signals:
     ask: "Needs eyes:"
     clear: ["nothing", "none"]
     answered_by: "Eyes checked"
+    # What a worker writes when it looked on staging and the work did not
+    # pass. It closes the signal; the worker asks for a decision with it.
+    failed_by: "Eyes failed"
   - name: review
     ask: "**PR:**"
     follows_pr: true

@@ -163,6 +163,79 @@ to look, before it starts an issue, for an open pull request or an unmerged
 branch that already covers it. If it finds one that it was not sent back to,
 it does not start: it reports the overlap in the issue as a decision for you.
 
+### Eye checks on staging
+
+A worker tests what it builds, and some work still needs someone to look at
+it running: a page, a flow, a number on a screen. The worker asks for that in
+its hand-back with `Needs eyes:`. You merge on the diff, staging is deployed
+when you deploy it, and by then the issue is usually closed. Tell shed how to
+see what staging and production serve, and a worker with a browser does the
+look on staging before the work goes to production.
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    staging:
+      url: https://staging.example.com
+      # Any command that prints the commit staging serves.
+      commit: "curl -fsS https://staging.example.com/healthz | jq -r .commit"
+      orders: |
+        You may sign in as the test user, open any page and save a draft.
+        Never place an order, send a message or change another user's data.
+    production:
+      commit: "curl -fsS https://app.example.com/healthz | jq -r .commit"
+    look_back: 336h      # the default: 14 days
+
+machines:
+  - name: mac-mini
+    workers:
+      - name: app
+        eye_checks: true   # this worker has a browser
+```
+
+- **What owes a look.** An issue, open or closed, whose last hand-back names
+  a pull request and asks for eyes, when that pull request was merged after
+  production's commit. Work that production already serves is not looked at:
+  it is too late to gate. With no `production` command, or when production is
+  older than `look_back`, the window is `look_back`.
+- **When it is due.** When staging's commit has the pull request's merge
+  commit in its history. Until then the look waits for a staging deploy, and
+  nothing is asked of anyone.
+- **Who does it.** A worker with `eye_checks: true`, ahead of new issues.
+  Where another such worker shares the queue, not the worker that built the
+  work: a second reader catches a hand-back that is too vague to check.
+- **What the worker may do.** Its brief gets the staging address and your
+  `orders`. An act the orders do not name is not allowed. Name the writes a
+  check needs and the ones that must never happen.
+- **A pass.** The worker comments `Eyes checked:` with what it saw.
+- **A failure.** The worker reopens the issue and hands it back with
+  `Eyes failed:` and a `Decisions needed:` for you. It does not fix it: a
+  failed look is new information, and whether it is a regression, an older
+  defect or the feature working as specified but wrong is yours to scope.
+  Your `Owner ruling` then sends the issue to a worker as usual.
+- **A check that could not be done.** The browser is signed out, staging is
+  down, the description cannot be judged, or the check needs an act the
+  orders forbid. The worker posts nothing and says it is blocked, and the
+  supervisor reports `needs_owner`. A blocked look never counts as passed.
+- **When staging's commit cannot be read**, no look is handed out, the
+  building goes on, and `shed status` says so.
+
+`shed status` ends with each repository's release state, the go or no-go for
+a production deploy:
+
+```
+my-org/my-app  staging 3f2a1c9  production 9b1e0d4
+  14 pull request(s) merged since production's commit, 2d ago
+  eye checks: 2 not done (1 on staging, 1 wait for a staging deploy), 1 failed
+    #123  PR #131  on staging         5h  Retry the export when the API times out
+    #127  PR #140  waits for staging  2h  Show the total on the order page
+    #125  PR #138  FAILED             1h  Paginate the audit log
+```
+
+The commit commands run on the watcher for `shed status` and on the worker's
+machine for the queue, after its `init` line, so both must reach the
+environments. `shed status -json` does not carry the release state yet.
+
 ### Machine capacity
 
 A machine often has other work: CI runners, builds, a database. Tell shed how
@@ -315,6 +388,8 @@ and the two typed commands to what that tool understands.
 | task failed | the last run exited non-zero |
 | task missed its run | a scheduled time passed with no run |
 | issue waits on you | a comment asks for a decision, a look or a review, and nothing answers it |
+| cannot read the release state | a `repos` commit command failed or did not print a commit, or GitHub could not be asked |
+| eye checks are due on staging | merged work is on staging, owes a look, and no worker has `eye_checks` |
 | issues queued and no worker is running | there is a backlog and nobody is on it |
 | worker has been quiet | an issue's window had no output for 30 minutes |
 
@@ -331,7 +406,7 @@ hand-back: a comment that contains the word `Hand-back` (configurable as
 | Signal | Opens when a comment has | Stays closed when followed by | Closes when a later comment has |
 | --- | --- | --- | --- |
 | decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker, unless it reads `Owner ruling: accepted`) |
-| eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked` |
+| eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked`, or `Eyes failed` from a worker that looked on staging |
 | review | `**PR:** #41` | | that pull request is merged or closed |
 
 While that pull request is open but cannot merge (a conflict, a failed check),
