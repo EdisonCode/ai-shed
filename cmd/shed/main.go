@@ -20,6 +20,9 @@ Usage:
   shed validate                     check the fleet file
   shed deploy [-install-agent] [machine...]
                                     send this version and the fleet file to machines
+  shed task [-worker name] <machine> <brief-file|->
+                                    push a one-off task with its own brief, ahead of the queue
+  shed task -report <id> <machine>  print the report a worker wrote for a task
   shed recycle [-now] <machine> <worker>
                                     give a worker a fresh session after its current issue
   shed tidy [-apply] <machine>      list the worktrees and branches whose pull request is merged;
@@ -67,6 +70,8 @@ func main() {
 		code = cmdMark(args)
 	case "tidy":
 		code = cmdTidy(args)
+	case "task":
+		code = cmdTask(args)
 	case "digest":
 		code = cmdDigest(args)
 	case "template":

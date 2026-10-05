@@ -251,6 +251,42 @@ func Recycle(ctx context.Context, r probe.Runner, m config.Machine, worker strin
 	return writeRemote(ctx, r, m, runlog.StateDir+"/"+runlog.RecycleDir+"/"+worker, []byte(mode), "644")
 }
 
+// PushTask queues a one-off task on a machine, for the named worker or, with
+// worker empty, for any. The machine's agent hands it over.
+func PushTask(ctx context.Context, r probe.Runner, m config.Machine, worker, id string, brief []byte) error {
+	where := worker
+	if where == "" {
+		where = runlog.TaskAny
+	}
+	return writeRemote(ctx, r, m, runlog.StateDir+"/"+runlog.TasksDir+"/"+where+"/"+id+".md", brief, "644")
+}
+
+// noReport is what the report script prints when no worker has written one.
+const noReport = "@@no-report"
+
+// TaskReport returns the report a worker wrote for a one-off task; found is
+// false when there is none yet.
+func TaskReport(ctx context.Context, r probe.Runner, m config.Machine, id string) (report string, found bool, err error) {
+	var script strings.Builder
+	for _, w := range m.Workers {
+		// A leading ~/ is the user's home, as for the worker's session.
+		dir := "'" + strings.ReplaceAll(w.Dir, "'", `'\''`) + "'"
+		if rest, ok := strings.CutPrefix(w.Dir, "~/"); ok {
+			dir = `"$HOME"/'` + strings.ReplaceAll(rest, "'", `'\''`) + "'"
+		}
+		fmt.Fprintf(&script, "f=%s/.shed/tasks/%s.report.md; [ -f \"$f\" ] && { cat \"$f\"; exit 0; }\n", dir, id)
+	}
+	script.WriteString("echo " + noReport + "\n")
+	out, err := r.Run(ctx, m, "sh -s", strings.NewReader(script.String()))
+	if err != nil {
+		return "", false, fmt.Errorf("read the report of task %s: %w", id, err)
+	}
+	if strings.TrimSpace(string(out)) == noReport {
+		return "", false, nil
+	}
+	return string(out), true, nil
+}
+
 // Hook runs the owner's deploy hook on this machine (the watcher) for one
 // deployed machine. The hook learns which machine from SHED_MACHINE and
 // SHED_HOST. An empty command does nothing.

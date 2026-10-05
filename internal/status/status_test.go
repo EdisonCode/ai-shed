@@ -638,3 +638,33 @@ func TestDigestSaysWhatItCouldNotRead(t *testing.T) {
 		t.Fatalf("digest:\n%s", out.String())
 	}
 }
+
+func TestStatusShowsWhereEachOneOffTaskStands(t *testing.T) {
+	res := healthy()
+	handed := func(worker, task string, ago time.Duration) runlog.Checkin {
+		return runlog.Checkin{Time: now.Add(-ago), Worker: worker, Kind: "task", Verdict: runlog.VerdictNudge, Sent: true, Task: task, Reason: "the owner pushed a one-off task"}
+	}
+	res.Checkins = []runlog.Checkin{
+		handed("app", "t-old", 3*time.Hour),
+		{Time: now.Add(-2 * time.Hour), Worker: "app", Kind: "idle", Verdict: runlog.VerdictDone, Reason: "it wrote its report"},
+		handed("app", "t-now", 10*time.Minute),
+	}
+	res.Tasks = []probe.Task{
+		{Where: runlog.TaskTaken, ID: "t-old"}, {Where: runlog.TaskTaken, ID: "t-now"}, {Where: runlog.TaskTaken, ID: "t-forgotten"},
+		{Where: "app", ID: "t-next"}, {Where: runlog.TaskAny, ID: "t-any"},
+	}
+	r := Assess(appWorker, signals, now, res, nil)
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	for _, want := range []string{
+		"app  task t-now  nudge  10m ago  the owner pushed a one-off task",
+		"one-off tasks\n    t-old   finished  app\n    t-now   in hand   app\n    t-next  queued    app\n    t-any   queued    any worker\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "t-forgotten") {
+		t.Fatalf("a task the log no longer knows is listed:\n%s", out.String())
+	}
+}

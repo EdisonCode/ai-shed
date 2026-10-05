@@ -71,6 +71,40 @@ worker), you may use the signal phrases freely: they count only inside a
 worker's hand-back comment. Do not head your own comment with the hand-back
 phrase.
 
+## Push a one-off task
+
+Use an issue for work that belongs in the backlog. Use a task when the brief
+is yours and on no issue: reasoning from the conversation with the owner, an
+investigation or comparison before anything is built, or work the owner
+wants one worker in particular to do.
+
+1. Write the brief to a file, for a reader with no other context: the goal,
+   what you already know and have ruled out, what is out of scope, and where
+   the result goes (a pull request, a comment on a named issue, or only the
+   report). If the task goes beyond the worker's usual brief, say so in it.
+2. `shed task <machine> <file>` for the first free worker, or
+   `shed task -worker <name> <machine> <file>` when the owner prefers one.
+   Note the task id it prints.
+3. `shed status` shows it as queued, in hand, then finished. It is handed
+   over when the worker has nothing in progress; a worker is not interrupted.
+4. `shed task -report <id> <machine>` prints the worker's report. Read the
+   artifact it points to before you tell the owner it is done.
+
+Never put a secret in a brief. A task has no rework or retry: if the report
+says it could not finish, push a new task or open an issue.
+
+## Write an issue a worker can take
+
+`shed template issue` prints an issue template. Put it in the repository as
+`.github/ISSUE_TEMPLATE/worker-task.md`, in the repository's own words. An
+issue that leans on another thread stalls a worker: paste what it needs.
+
+## The digest
+
+`shed digest` (or `-since 12h`) reports what merged, how the eye checks
+went and what waits on the owner, oldest first. Use it for the report at the
+end of a session or the start of a day, in place of writing one by hand.
+
 ## Write or change a brief
 
 A worker's `brief` in the fleet file says what the worker is for and what it

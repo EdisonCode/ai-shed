@@ -31,6 +31,15 @@ type Result struct {
 	Recycle []string `json:"-"`
 	// Marks is what each worker's tool last reported about itself, by worker.
 	Marks map[string]runlog.Mark `json:"-"`
+	// Tasks are the one-off tasks on the machine, waiting or handed over.
+	Tasks []Task `json:"-"`
+}
+
+// Task is a one-off task's file on the machine. Where is the worker it waits
+// for, runlog.TaskAny, or runlog.TaskTaken once a worker was handed it.
+type Task struct {
+	Where string
+	ID    string
 }
 
 type CheckResult struct {
@@ -61,6 +70,7 @@ s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.RunsFile + `" ] && tail -n 200 "$s/` + runlog.RunsFile + `" | sed 's/^/@@run /'
 [ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 100 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
 [ -d "$s/` + runlog.RecycleDir + `" ] && ls "$s/` + runlog.RecycleDir + `" | sed 's/^/@@recycle /'
+for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(basename "$(dirname "$f")") $(basename "$f" .md)"; done
 for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
 echo "@@end"
 `
@@ -137,6 +147,10 @@ func Parse(out string, checks []config.Check) (Result, error) {
 			}
 		case "@@recycle":
 			res.Recycle = append(res.Recycle, strings.TrimSpace(rest))
+		case "@@task":
+			if where, id, ok := strings.Cut(strings.TrimSpace(rest), " "); ok {
+				res.Tasks = append(res.Tasks, Task{Where: where, ID: id})
+			}
 		case "@@mark":
 			// A mark the hook was still writing is skipped, not fatal.
 			worker, line, _ := strings.Cut(rest, " ")

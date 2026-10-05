@@ -152,3 +152,13 @@ func TestParseReadsWhatEachWorkersToolReported(t *testing.T) {
 		t.Fatalf("marks = %+v", res.Marks)
 	}
 }
+
+func TestParseReadsTheOneOffTasksOnTheMachine(t *testing.T) {
+	res, err := Parse("@@now 1790000000\n@@task app 20261004-120000\n@@task _taken 20261004-110000\n@@end\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Tasks) != 2 || res.Tasks[0] != (Task{Where: "app", ID: "20261004-120000"}) || res.Tasks[1].Where != runlog.TaskTaken {
+		t.Fatalf("tasks = %+v", res.Tasks)
+	}
+}
