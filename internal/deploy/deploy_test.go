@@ -318,6 +318,19 @@ func TestPauseHoldsTheMachineUntilItRunsOutOrIsResumed(t *testing.T) {
 	}
 }
 
+func TestEndLimitHoldsLeavesARequestForEachWorker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := EndLimitHolds(context.Background(), probe.ShellRunner{}, here, []string{"app", "docs"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, worker := range []string{"app", "docs"} {
+		if _, err := os.Stat(filepath.Join(home, runlog.StateDir, runlog.ResumeDir, worker)); err != nil {
+			t.Errorf("no request for %s: %v", worker, err)
+		}
+	}
+}
+
 func TestBumpLeavesARequestForTheAgentAndUnbumpTakesItBack(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

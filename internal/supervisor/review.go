@@ -87,8 +87,11 @@ type ReviewInput struct {
 	// LimitedUntil is set when the worker was at a usage limit that was
 	// expected to reset at this time.
 	LimitedUntil time.Time
-	Recent       []runlog.Checkin
-	Terminal     string
+	// LimitOver says why a usage limit the worker was at is taken to be
+	// over before the time its screen names; empty when nothing says so.
+	LimitOver string
+	Recent    []runlog.Checkin
+	Terminal  string
 }
 
 const instructions = `You supervise an unattended AI coding worker. Its owner is away for hours and cannot answer. Your job is to keep the worker productive and inside its brief. You see its terminal. You cannot run anything yourself; do not try.
@@ -99,7 +102,7 @@ Choose one verdict:
 - nudge: one short message from you would get useful work moving. Use it when the worker has finished an item or waits for its first one and the queue has an item it can act on (give it the first workable item of the queue, which is in the order to work it, and put that number in "issue"; an item is workable when it is marked rework or eye check, or when it does not wait on the owner), when it asked a question that the brief already answers, when its work has left the brief, when it repeats an approach that keeps failing, or when it waits for something that will not come.
 - needs_owner: nothing useful can move until the owner acts. Also use it when the terminal shows a permission prompt, a menu or any dialog: you must never type into one. A one-line survey from the tool itself (for example "How is this session going? 1: Bad 2: Fine 3: Good 0: Dismiss") is not a dialog and does not block the worker: ignore it.
 - done: the queue has no item the worker can act on and the worker has reported its work. Leave it idle; an idle worker costs nothing.
-- limited: the terminal shows that the worker reached a usage limit or a rate limit and must wait for it to reset. Nothing you type can help before then, and a message would be wasted. Set "resume_in_minutes" to the minutes from the current time until the reset the terminal names; 0 if it names none.
+- limited: the terminal shows that the worker reached a usage limit or a rate limit and must wait for it to reset. Nothing you type can help before then, and a message would be wasted. Set "resume_in_minutes" to the minutes from the current time until the reset the terminal names; 0 if it names none. That time is when the limit ends at the latest: the owner may reset it sooner.
 
 Rules for the message of a nudge:
 - One line, plain words, specific. Name the issue number, the file or the command.
@@ -170,7 +173,10 @@ func Prompt(in ReviewInput) string {
 		b.WriteString("printing output now: it is working")
 	}
 	if !in.LimitedUntil.IsZero() {
-		fmt.Fprintf(&b, ". It was at a usage limit that was expected to reset at %s; if the limit is over, tell it to continue", in.LimitedUntil.Format("15:04"))
+		fmt.Fprintf(&b, ". It was at a usage limit that was expected to reset at %s at the latest; if the limit is over, tell it to continue", in.LimitedUntil.Format("15:04"))
+	}
+	if in.LimitOver != "" {
+		fmt.Fprintf(&b, ". It was at a usage limit, and %s. A reset time that its screen still names was the latest the limit could last, and the screen does not change when a limit ends early. If it sits at the limit message, do not answer limited: tell it to continue", in.LimitOver)
 	}
 	fmt.Fprintf(&b, "</state>\n\n<current_time>%s</current_time>\n\n<recent_checkins>\n", in.Now.Format("Mon 15:04 MST"))
 	if len(in.Recent) == 0 {

@@ -91,7 +91,7 @@ one verdict:
 | `needs_owner` | nothing can move without you, or a permission prompt or menu is open | types nothing; `shed status` shows it |
 | `done` | nothing left that it can act on | leaves it idle |
 | `held` | (set by the agent, not the reviewer) its next issue waits for the machine to have room | delivers it when there is room, or after `max_wait` |
-| `limited` | it reached a usage limit and must wait for the reset | types nothing, looks again just after the reset (every 15 minutes when the screen names no time), then tells it to continue |
+| `limited` | it reached a usage limit and must wait for the reset | types nothing, looks again just after the reset (every 15 minutes when the screen names no time), then tells it to continue. The time on the screen is the latest: see below for a limit that ends sooner |
 
 The terminal is captured with its styles. Text that the worker's tool draws
 faint, such as a placeholder or a suggestion of what to type next in an empty
@@ -110,6 +110,11 @@ Guards against wasted tokens:
 - A session that exits three times in 30 minutes is not started a fourth time.
 - A failed check-in (`gh` is logged out, the reviewer command is broken) is retried after 10 minutes, not every tick.
 - A usage limit costs no nudges. A limited worker is left alone until its reset. A reviewer that is itself at its limit is tried again after 15 minutes and is not reported as a failure.
+- A limit may end before the time the screen names: you reset the usage, or bought more. The screen does not change when that happens, so the hold on a limited worker ends early in three ways:
+  - `shed resume <machine>` ends it for every worker of the machine, and `shed resume <machine> <worker>` for one. The worker is looked at within a minute and told to continue. A worker that was at no limit is left as it is.
+  - The worker's screen moves. A worker at its limit prints nothing, so one that prints is reviewed like any other.
+  - The reviewer answers again after its own limit. It runs on the workers' account, so every held worker is looked at and told to continue.
+- `shed status` shows on a `limited` line how long the hold lasts at the most, when the worker last printed anything, and the `shed resume` command that ends it.
 - An idle worker is reviewed once per silence, not once per tick.
 - A resting worker is reviewed again only when its queue has something new it can act on. A label, a comment or a hand-back that leaves an issue waiting on you costs no review.
 
@@ -352,6 +357,9 @@ shed pause linux-box            # for 30 minutes
 shed pause -for 1h linux-box
 shed resume linux-box           # end it early
 ```
+
+`shed resume` also ends the hold on workers that wait for a usage limit you
+know is over; `shed resume linux-box app` does only that, for one worker.
 
 - **Nothing is typed into any worker while it lasts.** No issue or task is
   handed over, nobody is nudged, and a session that ended is not started.

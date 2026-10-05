@@ -2048,3 +2048,123 @@ func TestBriefNamesNoViewportWhenTheFleetFileHasNone(t *testing.T) {
 		t.Fatalf("brief:\n%s", brief)
 	}
 }
+
+// resume leaves the request that `shed resume` writes for a worker.
+func (f *fixture) resume(t *testing.T, worker string) {
+	t.Helper()
+	path := filepath.Join(f.StateDir, runlog.ResumeDir, worker)
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLimitHoldIsDroppedWhenTheWorkerIsSeenWorkingAgain(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, limited(360), assign(12))
+	f.tick(2 * time.Minute)
+
+	f.term.running(f.now.Add(5 * time.Minute)) // the owner reset the usage and told it to continue
+	f.tick(6 * time.Minute)
+	if c := f.lastCheckin(t); c.Kind != KindLimit || c.Verdict != runlog.VerdictOnTrack {
+		t.Fatalf("check-in = %+v; the worker printed after the limit was seen, so the limit is over", c)
+	}
+	if len(f.reviewer.prompts) != 1 {
+		t.Fatalf("reviews = %d; a worker in the middle of its turn needs no review", len(f.reviewer.prompts))
+	}
+
+	f.tick(2 * time.Minute) // it finished its turn
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; the worker is no longer held and has work", f.term.sent)
+	}
+}
+
+func TestDroppedLimitHoldStaysDroppedAcrossAnAgentRestart(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, limited(360), assign(12))
+	f.tick(2 * time.Minute)
+	f.term.running(f.now.Add(5 * time.Minute))
+	f.tick(6 * time.Minute)
+
+	f.restartAgent()
+	f.tick(2 * time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q; the restart must not bring the hold back", f.term.sent)
+	}
+}
+
+func TestResumeEndsALimitHoldAndTheReviewerIsToldTheLimitIsOver(t *testing.T) {
+	f := started(t, config.Supervisor{}, limited(360), nudge("The usage limit was reset. Continue."))
+	f.tick(2 * time.Minute)
+	f.term.running(f.term.obs.LastActivity)
+	f.tick(3 * time.Hour) // far past the cache lifetime, and the screen has not changed
+
+	f.resume(t, "app")
+	f.tick(time.Minute)
+	// It was cut off mid-task: its context is kept, however cold.
+	if !slices.Equal(f.term.sent, []string{"The usage limit was reset. Continue."}) {
+		t.Fatalf("sent = %q, want the message alone with no clear", f.term.sent)
+	}
+	if last := f.reviewer.prompts[len(f.reviewer.prompts)-1]; !strings.Contains(last, "the owner said the usage limit is over") {
+		t.Fatalf("the reviewer was not told why the hold ended:\n%s", last)
+	}
+	if _, err := os.Stat(filepath.Join(f.StateDir, runlog.ResumeDir, "app")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the request is still there and would end the next hold too: %v", err)
+	}
+}
+
+func TestResumeOfAWorkerThatIsNotHeldCostsNoReview(t *testing.T) {
+	f := started(t, config.Supervisor{}, Verdict{Verdict: runlog.VerdictDone, Reason: "queue is empty"})
+	f.tick(2 * time.Minute)
+	f.term.running(f.term.obs.LastActivity)
+	f.resume(t, "app")
+	f.tick(time.Minute)
+	if len(f.reviewer.prompts) != 1 || len(f.term.sent) != 0 {
+		t.Fatalf("%d review(s), sent %q; a resting worker was at no limit", len(f.reviewer.prompts), f.term.sent)
+	}
+}
+
+func TestResumeTriesALimitedReviewerAgainAtOnce(t *testing.T) {
+	f := started(t, config.Supervisor{}, nudge("The usage limit was reset. Continue."))
+	f.reviewer.err = errors.New("reviewer command: exit status 1: You've hit your weekly limit")
+	f.tick(2 * time.Minute)
+
+	f.reviewer.err = nil
+	f.resume(t, "app")
+	f.tick(time.Minute)
+	if len(f.reviewer.prompts) != 2 || !strings.Contains(f.reviewer.prompts[1], "the owner said the usage limit is over") {
+		t.Fatalf("reviews = %d; the owner said the limit is over, so the worker is looked at now", len(f.reviewer.prompts))
+	}
+	if !slices.Equal(f.term.sent, []string{"The usage limit was reset. Continue."}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+}
+
+func TestReviewerThatAnswersAgainEndsEveryLimitHold(t *testing.T) {
+	done := Verdict{Verdict: runlog.VerdictDone, Reason: "nothing it can act on"}
+	f := twoWorkers(t, limited(360), done, done, done, nudge("The usage limit was reset. Continue."))
+	f.tick(0) // app is found at its limit and held; docs rests
+
+	// The queue changes, so docs is looked at: now the reviewer is limited too.
+	f.lister.issues = append(f.lister.issues, backlog.Issue{Repo: "org/app", Number: 13, Title: "Export the audit log"})
+	f.reviewer.err = errors.New("reviewer command: exit status 1: You've hit your weekly limit")
+	f.tick(queueRecheck)
+	if c := f.lastCheckin(t); c.Worker != "docs" || c.Verdict != runlog.VerdictLimited {
+		t.Fatalf("check-in = %+v, want the reviewer limited on docs", c)
+	}
+
+	f.reviewer.err = nil
+	f.tick(limitRecheck) // docs is tried again and the reviewer answers
+	f.tick(time.Minute)
+	if !slices.Equal(f.term.sent, []string{"The usage limit was reset. Continue."}) {
+		t.Fatalf("sent = %q; the limit that stopped the reviewer is the account's, and it is over for app too", f.term.sent)
+	}
+	if last := f.reviewer.prompts[len(f.reviewer.prompts)-1]; !strings.Contains(last, "<worker>app</worker>") || !strings.Contains(last, "the reviewer answers again") {
+		t.Fatalf("the reviewer was not told why app's hold ended:\n%s", last)
+	}
+}
+
+func TestLimitMessageNamesTheLatestTimeNotThePromisedOne(t *testing.T) {
+	prompt := Prompt(ReviewInput{Worker: "app", Now: t0, LimitedUntil: t0.Add(-time.Minute)})
+	if !strings.Contains(prompt, "at the latest") {
+		t.Fatalf("the reviewer must know that a limit may end before the time its screen names:\n%s", prompt)
+	}
+}

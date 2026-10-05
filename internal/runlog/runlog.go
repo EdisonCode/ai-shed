@@ -19,8 +19,11 @@ const (
 	// RecycleDir holds one file per worker whose session the owner asked to
 	// replace. The file's content is RecycleNow, or empty to wait for the
 	// worker to finish the issue it has in hand.
-	RecycleDir    = "recycle"
-	RecycleNow    = "now"
+	RecycleDir = "recycle"
+	RecycleNow = "now"
+	// ResumeDir holds one file per worker that the owner said is past its
+	// usage limit: `shed resume` writes it and the supervisor removes it.
+	ResumeDir     = "resume"
 	CheckinsFile  = "checkins.jsonl"
 	HeartbeatFile = "heartbeat"
 )

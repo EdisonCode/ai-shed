@@ -47,6 +47,11 @@ const (
 	limitRecheck = 15 * time.Minute
 	limitSlack   = time.Minute
 	limitLongest = 6 * time.Hour
+	// Why a limit is taken to be over before the time the screen named. The
+	// reviewer reads these words.
+	ownerResumed    = "the owner said the usage limit is over"
+	reviewerAnswers = "the reviewer answers again after its own usage limit, which is the same account's"
+	screenMoved     = "its screen moved after the limit was seen"
 
 	terminalLines = 80
 	recentKept    = 3
@@ -145,6 +150,12 @@ type workerState struct {
 	// limitedUntil is set while the worker is at a usage limit. Nothing is
 	// reviewed or typed before then.
 	limitedUntil time.Time
+	// limitOver says why a limit the worker was at is taken to be over
+	// early. The next review is told, since the screen still shows the limit.
+	limitOver string
+	// reviewerLimited is set while the last try to review the worker failed
+	// on the reviewer's own usage limit.
+	reviewerLimited bool
 	// briefStale is set when the brief changed while the worker had an issue
 	// in hand. It is told with the next message, not in the middle of work.
 	briefStale bool
@@ -211,13 +222,17 @@ func (s *Supervisor) Tick(ctx context.Context) {
 	if s.workers == nil {
 		s.workers = make(map[string]*workerState)
 	}
+	// Every worker's state is known before any is checked: the end of one
+	// worker's limit may end the others' holds.
+	for _, w := range s.Machine.Workers {
+		if s.workers[w.Name] == nil {
+			s.workers[w.Name] = s.recover(w.Name)
+		}
+	}
 	for _, w := range s.Machine.Workers {
 		st := s.workers[w.Name]
-		if st == nil {
-			st = s.recover(w.Name)
-			s.workers[w.Name] = st
-		}
 		now := s.Now()
+		s.resume(w.Name, st, now)
 		if now.Before(st.notBefore) {
 			continue
 		}
@@ -236,7 +251,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 		// A reviewer at its usage limit is not a fault and needs nobody: the
 		// worker is simply not looked at until the limit may have reset.
 		if isLimit(err) {
-			st.notBefore = now.Add(limitRecheck)
+			st.notBefore, st.reviewerLimited = now.Add(limitRecheck), true
 			c.Kind, c.Verdict, c.Until = KindLimit, runlog.VerdictLimited, st.notBefore
 			c.Reason = "the reviewer is at its usage limit: " + err.Error()
 		}
@@ -351,11 +366,17 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		}
 	}
 	switch {
+	case now.Before(st.limitedUntil) && obs.LastActivity.After(st.reviewedActivity):
+		// A worker at its limit prints nothing. It printed, so the limit ended
+		// before the time its screen named, or somebody typed into it. Either
+		// way it is looked at again like any worker.
+		s.dropHold(w.Name, st, now, screenMoved)
+		return nil
 	case now.Before(st.limitedUntil):
 		return nil
-	case !st.limitedUntil.IsZero():
-		// The limit was due to reset. The screen has not changed, so only
-		// this makes the supervisor look again.
+	case !st.limitedUntil.IsZero() || (st.limitOver != "" && idle >= settle && toolState != runlog.MarkWorking):
+		// The limit was due to reset, or something said it is over. The
+		// screen has not changed, so only this makes the supervisor look again.
 		return s.review(ctx, w, st, obs, now, KindLimit, nil)
 	case idle < settle || toolState == runlog.MarkWorking:
 		// A turn in progress may print nothing for a long time: a test run, a
@@ -441,7 +462,11 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 		return err
 	}
 	idle := now.Sub(obs.LastActivity)
-	in := ReviewInput{Worker: w.Name, Brief: s.scope(w), Queue: queue, Recent: st.recent, Terminal: terminal, Now: now, LimitedUntil: st.limitedUntil, InHand: st.issue}
+	// A reviewer that was limited and reads this is past its limit.
+	if st.reviewerLimited && st.limitOver == "" {
+		st.limitOver = reviewerAnswers
+	}
+	in := ReviewInput{Worker: w.Name, Brief: s.scope(w), Queue: queue, Recent: st.recent, Terminal: terminal, Now: now, LimitedUntil: st.limitedUntil, LimitOver: st.limitOver, InHand: st.issue}
 	if st.task != "" {
 		in.Task = st.task
 		in.TaskBrief, _ = runlog.TakenTask(s.StateDir, st.task)
@@ -454,6 +479,18 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	verdict, err := s.Reviewer.Review(ctx, Prompt(in))
 	if err != nil {
 		return err
+	}
+	st.limitOver = ""
+	if st.reviewerLimited {
+		// The workers run on the reviewer's account. Its limit is over, so
+		// theirs is, whatever time their screens named.
+		st.reviewerLimited = false
+		for _, other := range s.Machine.Workers {
+			if held := s.workers[other.Name]; other.Name != w.Name && held != nil && !held.limitedUntil.IsZero() {
+				held.limitOver = reviewerAnswers
+				s.dropHold(other.Name, held, now, reviewerAnswers)
+			}
+		}
 	}
 	// The worker has reached a point where nothing is in progress: it is done,
 	// or it is about to be given another issue. A fresh session that was
@@ -732,10 +769,39 @@ func (s *Supervisor) recycle(w config.Worker, st *workerState, now time.Time) er
 	return nil
 }
 
+// resume acts on the owner's `shed resume`: the worker's usage limit is over,
+// whatever its screen says. A worker that was at no limit is left as it is.
+func (s *Supervisor) resume(worker string, st *workerState, now time.Time) {
+	path := filepath.Join(s.StateDir, runlog.ResumeDir, worker)
+	if _, err := os.Stat(path); err != nil {
+		return
+	}
+	// The request is removed first: one that stayed would end the next hold too.
+	if err := os.Remove(path); err != nil {
+		s.Logf("worker %s: clear the resume request: %v", worker, err)
+		return
+	}
+	held := !st.limitedUntil.IsZero()
+	if !held && !st.reviewerLimited {
+		return
+	}
+	st.limitOver, st.notBefore, st.lastError = ownerResumed, time.Time{}, ""
+	if held {
+		s.dropHold(worker, st, now, ownerResumed)
+	}
+}
+
+// dropHold ends a limit hold before its time. It is written to the check-in
+// log, so a restarted agent does not bring the hold back.
+func (s *Supervisor) dropHold(worker string, st *workerState, now time.Time, why string) {
+	st.limitedUntil, st.reviewedActivity, st.lastReview = time.Time{}, time.Time{}, now
+	s.record(st, runlog.Checkin{Time: now, Worker: worker, Kind: KindLimit, Verdict: runlog.VerdictOnTrack, Reason: "its usage limit hold was dropped: " + why})
+}
+
 // isLimit reports whether a reviewer failed because it reached a usage limit.
 func isLimit(err error) bool {
 	text := strings.ToLower(err.Error())
-	for _, phrase := range []string{"usage limit", "rate limit", "limit reached", "hit your limit"} {
+	for _, phrase := range []string{"usage limit", "rate limit", "limit reached", "hit your limit", "weekly limit"} {
 		if strings.Contains(text, phrase) {
 			return true
 		}
@@ -756,6 +822,7 @@ func (s *Supervisor) recover(worker string) *workerState {
 			continue
 		}
 		st.recent = append(st.recent, c)
+		st.reviewerLimited = false
 		switch {
 		case c.Verdict == runlog.VerdictStarted:
 			// A new session: nothing in hand, the model its command gave it.
@@ -773,6 +840,7 @@ func (s *Supervisor) recover(worker string) *workerState {
 			st.markSeen, st.waiting = c.Time, c.Verdict == runlog.VerdictNeedsOwner
 		case c.Verdict == runlog.VerdictLimited && c.Activity.IsZero():
 			// The reviewer was limited; the worker itself was not reviewed.
+			st.reviewerLimited = true
 		case c.Kind == KindIdle || c.Kind == KindScope || c.Kind == KindQueue || c.Kind == KindLimit || c.Kind == KindCapacity || c.Kind == KindTask:
 			if c.Verdict == runlog.VerdictDone {
 				st.task = ""
