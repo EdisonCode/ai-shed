@@ -87,6 +87,11 @@ wants one worker in particular to do.
    Note the task id it prints.
 3. `shed status` shows it as queued, in hand, then finished. It is handed
    over when the worker has nothing in progress; a worker is not interrupted.
+   A task pushed with `-worker` waits for that worker however long it is
+   busy. If it is still `queued` and another worker has come free,
+   `shed task -cancel <id> <machine>` removes it; then push it again. Never
+   push a second copy without cancelling: both would run. A task `in hand`
+   cannot be cancelled.
 4. `shed task -report <id> <machine>` prints the worker's report. Read the
    artifact it points to before you tell the owner it is done.
 

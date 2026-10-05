@@ -639,6 +639,11 @@ func (s *Supervisor) busy(ctx context.Context) string {
 func (s *Supervisor) release(ctx context.Context, w config.Worker, st *workerState, obs Observation, now time.Time, reason string) error {
 	held := st.held
 	st.held = nil
+	// A one-off task that was pushed while the issue was held comes before
+	// it, as before any hand-over. The reviewer chooses again after the task.
+	if task, ok := s.pendingTask(ctx, w, st, now); ok {
+		return s.deliverTask(w, st, obs, now, task)
+	}
 	queue, err := s.queue(ctx, w)
 	if err != nil {
 		return err

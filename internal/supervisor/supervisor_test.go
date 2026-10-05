@@ -1790,6 +1790,19 @@ func TestBusyMachineHoldsATaskLikeAHandOver(t *testing.T) {
 	}
 }
 
+func TestTaskPushedWhileAHandOverIsHeldComesBeforeIt(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12))
+	busy := busyMachine(f)
+	f.tick(2 * time.Minute) // #12 is held
+	f.pushTask(t, runlog.TaskAny, "t1", "A task.")
+	*busy = false
+	f.tick(time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{taskMessage}) {
+		t.Fatalf("sent = %q; a task goes ahead of the queue, held or not", f.term.sent)
+	}
+}
+
 func TestRecycleWaitsForATaskInHand(t *testing.T) {
 	f := started(t, config.Supervisor{CacheTTL: "1h"}, done, onTrack)
 	f.tick(2 * time.Minute)

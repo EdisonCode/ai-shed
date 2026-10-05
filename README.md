@@ -266,6 +266,7 @@ some-command | shed task linux-box -       # the brief on standard input
 - **Afterwards the worker goes back to its queue**, on a clear context when
   it has `fresh_per_issue`.
 - A busy machine holds a task like any hand-over, for `max_wait` at most. A
+  task that arrives while an issue is held goes ahead of that issue. A
   session that ends in the middle gives the task to that worker's next
   session.
 
@@ -279,6 +280,16 @@ task in place of an issue for the worker that has it:
     20261004-143210-512  in hand  app
     20261004-150102-090  queued   any worker
 ```
+
+A task that still waits can be cancelled, for example to push it again for a
+worker that has since come free:
+
+```sh
+shed task -cancel 20261004-150102-090 linux-box
+```
+
+A task a worker was already handed is not cancelled: the worker has its
+brief and may be halfway through.
 
 A task has no issue behind it, so nothing in the queue rules applies to it:
 no rework, no signals, no retries. If it leads to a pull request, that pull

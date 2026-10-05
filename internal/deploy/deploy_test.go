@@ -261,6 +261,35 @@ func TestRecycleLeavesARequestForTheAgent(t *testing.T) {
 	}
 }
 
+func TestCancelRemovesOnlyATaskThatStillWaits(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ctx, r := context.Background(), probe.ShellRunner{}
+	tasks := filepath.Join(home, ".local/state/shed/tasks")
+	if err := PushTask(ctx, r, here, "", "t1", []byte("for anyone")); err != nil {
+		t.Fatal(err)
+	}
+	if err := PushTask(ctx, r, here, "app", "t2", []byte("for app")); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(tasks, "_taken"), 0o755)
+	if err := os.Rename(filepath.Join(tasks, "app/t2.md"), filepath.Join(tasks, "_taken/t2.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	for id, want := range map[string]string{"t1": TaskCancelled, "t2": TaskTaken, "t3": TaskAbsent} {
+		if got, err := CancelTask(ctx, r, here, id); err != nil || got != want {
+			t.Errorf("cancel %s = %q, %v; want %q", id, got, err, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "_any/t1.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the cancelled task is still on the machine: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "_taken/t2.md")); err != nil {
+		t.Errorf("a task in a worker's hands was removed: %v", err)
+	}
+}
+
 func TestSecondDeployOfAMachineIsRefused(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx, r := context.Background(), probe.ShellRunner{}
