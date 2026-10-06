@@ -90,6 +90,7 @@ const (
 	VerdictDone       = "done"        // nothing left that it can act on
 	VerdictStuck      = "stuck"       // nudges or restarts did not get it moving
 	VerdictLimited    = "limited"     // at a usage limit; left alone until it resets
+	VerdictToolError  = "tool_error"  // its tool stopped on an API error; it is told to continue after a wait
 	VerdictHeld       = "held"        // its next issue waits for the machine to have room
 	VerdictStarted    = "started"     // the supervisor started its session
 	VerdictRecycled   = "recycled"    // the supervisor ended its session to start a fresh one
@@ -116,7 +117,8 @@ type Checkin struct {
 	// back, so it does not review again what it has already reviewed.
 	Activity time.Time `json:"activity,omitzero"`
 	Queue    string    `json:"queue,omitempty"`
-	// Until is when a limited worker is looked at again.
+	// Until is when a limited worker is looked at again, or when a worker
+	// whose tool stopped on an error is told to continue.
 	Until time.Time `json:"until,omitzero"`
 	// Rework is set when the issue was handed back to a worker because its
 	// pull request could not merge; it says why.
@@ -124,6 +126,9 @@ type Checkin struct {
 	// Look is set when the issue was handed over for an eye check on
 	// staging, not to be built.
 	Look bool `json:"look,omitempty"`
+	// Backfill is set when the issue was taken from a backfill source: the
+	// queue had nothing else the worker could act on.
+	Backfill bool `json:"backfill,omitempty"`
 	// Task is set when the message handed the worker a one-off task.
 	Task string `json:"task,omitempty"`
 }
@@ -168,6 +173,61 @@ func ReadCheckins(dir string) ([]Checkin, error) {
 	return checkins, nil
 }
 
+// Why a worker is idle, as shed digest totals it.
+const (
+	IdleNoWork    = "no work"
+	IdleToolError = "tool error"
+	IdleOwner     = "waits on you"
+	IdleLimit     = "usage limit"
+)
+
+// IdleCauses lists the causes in the order they are reported.
+var IdleCauses = []string{IdleNoWork, IdleToolError, IdleOwner, IdleLimit}
+
+// idleCause says why the worker was idle after this check-in; "" when it
+// was working, or was about to.
+func idleCause(c Checkin) string {
+	switch {
+	case c.Verdict == VerdictDone:
+		return IdleNoWork
+	case c.Verdict == VerdictToolError, c.Kind == "retry" && c.Verdict == VerdictNeedsOwner:
+		return IdleToolError
+	case c.Verdict == VerdictNeedsOwner, c.Verdict == VerdictStuck:
+		return IdleOwner
+	case c.Verdict == VerdictLimited:
+		return IdleLimit
+	}
+	return ""
+}
+
+// IdleByCause totals how long the workers were idle between since and now,
+// by cause. A worker's state after a check-in lasts until its next one.
+// Check-ins are in log order. A log that starts after since says nothing of
+// the time before its first line.
+func IdleByCause(checkins []Checkin, since, now time.Time) map[string]time.Duration {
+	idle := map[string]time.Duration{}
+	last := map[string]Checkin{}
+	add := func(c Checkin, until time.Time) {
+		from := c.Time
+		if from.Before(since) {
+			from = since
+		}
+		if cause := idleCause(c); cause != "" && until.After(from) {
+			idle[cause] += until.Sub(from)
+		}
+	}
+	for _, c := range checkins {
+		if prev, ok := last[c.Worker]; ok {
+			add(prev, c.Time)
+		}
+		last[c.Worker] = c
+	}
+	for _, c := range last {
+		add(c, now)
+	}
+	return idle
+}
+
 // IssueInHand returns the issue the worker was last handed since its session
 // last started, or 0. Check-ins are in log order.
 func IssueInHand(checkins []Checkin, worker string) int {
@@ -203,6 +263,26 @@ func Builder(checkins []Checkin, issue int) string {
 		}
 	}
 	return worker
+}
+
+// A worker takes at most BackfillLimit issues from a backfill source in
+// BackfillWindow. Real work takes longer than that allows; a run of issues
+// that are not ready to be worked must not cost a review each, all night.
+const (
+	BackfillLimit  = 4
+	BackfillWindow = time.Hour
+)
+
+// BackfillSpent reports whether the worker has taken as many backfill issues
+// as allowed.
+func BackfillSpent(checkins []Checkin, worker string, now time.Time) bool {
+	count := 0
+	for _, c := range checkins {
+		if c.Sent && c.Worker == worker && c.Backfill && now.Sub(c.Time) < BackfillWindow {
+			count++
+		}
+	}
+	return count >= BackfillLimit
 }
 
 // An issue is sent back to a worker over its pull request at most

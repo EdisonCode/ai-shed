@@ -42,6 +42,14 @@ machines:
         # Optional. Issues with these labels go first, in this order; then
         # the oldest first.
         priority: ["urgent", "quick"]
+      # Optional. A reserve, so that the queue cannot run dry: taken from
+      # only when the sources above have nothing a worker can act on. An
+      # issue that is taken gets the label above, and is in that queue from
+      # then on.
+      # - repo: my-org/my-app
+      #   query: 'label:"priority: P1" no:assignee'
+      #   backfill: true
+      #   priority: ["urgent"]
     # Optional. When the machine is busy with other work, no worker is handed
     # a new issue; work in progress goes on. A hand-over waits max_wait at
     # most, then goes through anyway.
@@ -116,6 +124,11 @@ machines:
 # Optional. How the agent supervises workers. These are the defaults, except
 # `models`, which is off unless you set it.
 supervisor:
+  # Optional. Tell me (see defaults.notify) when a worker has had nothing it
+  # can act on for this long, and when a queue has fewer issues than this
+  # for a worker to act on.
+  # no_work_after: 30m
+  # low_queue: 3
   # The reviewer: any command that reads a prompt on stdin and prints an answer.
   command: claude -p --model sonnet
   # How long a worker's prompt cache stays warm on your plan. shed cannot see
@@ -159,6 +172,14 @@ signals:
     answered_by: "Owner ruling"
     sends_back: true
     accept: ["accepted"]
+    # Which choices a worker must not make by itself. Every other choice it
+    # makes: the conservative option, recorded in its hand-back after
+    # `decided`. This is the default; write your own list.
+    risky: anything that changes what is merged or deployed, how money or sign-in behaves, a data migration, or a choice about the product that is the owner's or a customer's to make
+    decided: "Decided without you:"
+    # How long you have to answer before the issue is parked and its worker
+    # takes the next one. Your answer brings the issue back ahead of new work.
+    grace: 15m
   - name: eyes
     ask: "Needs eyes:"
     clear: ["nothing", "none"]
@@ -171,6 +192,13 @@ signals:
     # blocked look is not handed out until then. These are the defaults.
     blocked_by: "Eyes blocked"
     unblocked_by: "Eyes unblocked"
+  # Opened by a worker that took an issue from a backfill source and found
+  # that it does not say enough to be worked. You fill the issue in and
+  # comment "Ready now".
+  - name: ready
+    ask: "Not ready:"
+    clear: ["none"]
+    answered_by: "Ready now"
   - name: review
     ask: "**PR:**"
     # A hand-back with no pull request ("**PR:** none") has nothing to review.

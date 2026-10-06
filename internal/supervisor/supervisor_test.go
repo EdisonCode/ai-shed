@@ -469,6 +469,8 @@ func TestParseVerdict(t *testing.T) {
 	}{
 		{"issue is kept on a nudge", `{"verdict":"nudge","message":"Take #12.","issue":12,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12.", Reason: "r", Issue: 12}, ""},
 		{"limited", `{"verdict":"limited","message":"wait","resume_in_minutes":45,"reason":"r"}`, Verdict{Verdict: "limited", Reason: "r", ResumeInMinutes: 45}, ""},
+		{"a tool error keeps its message", `{"verdict":"tool_error","message":"Continue; dispatch the test-runner again.","issue":12,"reason":"r"}`, Verdict{Verdict: "tool_error", Message: "Continue; dispatch the test-runner again.", Reason: "r"}, ""},
+		{"a tool error with no message gets one", `{"verdict":"tool_error","reason":"r"}`, Verdict{Verdict: "tool_error", Message: continueMessage, Reason: "r"}, ""},
 		{"plain", `{"verdict":"done","message":"","reason":"empty queue"}`, Verdict{Verdict: "done", Reason: "empty queue"}, ""},
 		{"wrapped in prose and a fence", "Here you go:\n```json\n{\"verdict\":\"nudge\",\"message\":\"Take #12.\",\"reason\":\"r\"}\n```", Verdict{Verdict: "nudge", Message: "Take #12.", Reason: "r"}, ""},
 		{"message becomes one line", `{"verdict":"nudge","message":"Take #12.\nThen #13.","reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12. Then #13.", Reason: "r"}, ""},
@@ -2166,5 +2168,321 @@ func TestLimitMessageNamesTheLatestTimeNotThePromisedOne(t *testing.T) {
 	prompt := Prompt(ReviewInput{Worker: "app", Now: t0, LimitedUntil: t0.Add(-time.Minute)})
 	if !strings.Contains(prompt, "at the latest") {
 		t.Fatalf("the reviewer must know that a limit may end before the time its screen names:\n%s", prompt)
+	}
+}
+
+func toolError(message string) Verdict {
+	return Verdict{Verdict: runlog.VerdictToolError, Message: message, Reason: "the screen shows an API error 403"}
+}
+
+func TestToolErrorIsRetriedAfterABackoffWithNoPerson(t *testing.T) {
+	f := started(t, config.Supervisor{}, toolError("Continue from where you stopped."), onTrack)
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+	f.tick(2 * time.Minute)
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictToolError || !c.Until.Equal(f.now.Add(5*time.Minute)) {
+		t.Fatalf("check-in = %+v, want tool_error with a retry due in 5 minutes", c)
+	}
+
+	f.tick(4 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q before the backoff was over", f.term.sent)
+	}
+	f.tick(2 * time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Continue from where you stopped."}) {
+		t.Fatalf("sent = %q, want the retry alone with no clear", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Kind != KindRetry || !c.Sent {
+		t.Fatalf("check-in = %+v, want a sent retry", c)
+	}
+	if len(f.reviewer.prompts) != 1 || len(notes) != 0 {
+		t.Fatalf("%d review(s), notifications %q; a retry needs neither a review nor the owner", len(f.reviewer.prompts), notes)
+	}
+}
+
+func TestToolErrorNeedsTheOwnerOnlyAfterTheLastRetryFails(t *testing.T) {
+	f := started(t, config.Supervisor{}, toolError("Continue."))
+	var waits []time.Duration
+	for range len(retryBackoff) {
+		f.tick(2 * time.Minute) // silent again: reviewed, the error is still there
+		c := f.lastCheckin(t)
+		if c.Verdict != runlog.VerdictToolError {
+			t.Fatalf("check-in = %+v, want tool_error", c)
+		}
+		waits = append(waits, c.Until.Sub(f.now))
+		f.tick(c.Until.Sub(f.now)) // the retry is sent
+		f.term.running(f.now)      // and the error is printed again
+	}
+	if !slices.Equal(waits, retryBackoff) {
+		t.Fatalf("waits = %v, want %v", waits, retryBackoff)
+	}
+	if len(f.term.sent) != len(retryBackoff) {
+		t.Fatalf("sent = %q, want %d retries", f.term.sent, len(retryBackoff))
+	}
+
+	f.tick(2 * time.Minute)
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictNeedsOwner || !strings.Contains(c.Reason, "3 retries") {
+		t.Fatalf("check-in = %+v, want needs_owner after the last retry failed", c)
+	}
+	f.tick(time.Hour)
+	if len(f.term.sent) != len(retryBackoff) {
+		t.Fatalf("sent = %q; nothing is typed once the owner is needed", f.term.sent)
+	}
+}
+
+func TestToolErrorIsRetriedAtOnceWhenAnotherWorkerIsSeenWorking(t *testing.T) {
+	f := twoWorkers(t, toolError("Continue."), onTrack)
+	f.tick(0) // app shows the error; docs is on track, after the error
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+	f.tick(30 * time.Second)
+	if !slices.Equal(f.term.sent, []string{"Continue."}) {
+		t.Fatalf("sent = %q, want the retry at once: the account works for the other worker", f.term.sent)
+	}
+}
+
+func TestToolErrorThatClearsByItselfIsNotRetried(t *testing.T) {
+	f := started(t, config.Supervisor{}, toolError("Continue."), onTrack)
+	f.tick(2 * time.Minute)
+	f.term.running(f.now.Add(time.Minute)) // it went on, or somebody typed
+	f.tick(6 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; the worker moved, so it is reviewed, not retried", f.term.sent)
+	}
+	if len(f.reviewer.prompts) != 2 {
+		t.Fatalf("reviews = %d, want 2", len(f.reviewer.prompts))
+	}
+}
+
+func TestPendingRetryAndItsCountSurviveAnAgentRestart(t *testing.T) {
+	f := started(t, config.Supervisor{}, toolError("Continue."))
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	f.tick(4 * time.Minute)
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("after a restart: %d review(s), sent %q; the retry is not due", f.reviews(), f.term.sent)
+	}
+	f.tick(2 * time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Continue."}) {
+		t.Fatalf("sent = %q, want the retry", f.term.sent)
+	}
+
+	f.term.running(f.now)
+	f.restartAgent()
+	f.tick(2 * time.Minute)
+	if c := f.lastCheckin(t); !c.Until.Equal(f.now.Add(retryBackoff[1])) {
+		t.Fatalf("check-in = %+v, want the second backoff: the first retry is remembered", c)
+	}
+}
+
+// asksADecision is an issue whose last hand-back asked the owner a question
+// at the time given.
+func asksADecision(number int, at time.Time, more ...string) backlog.Issue {
+	i := labeled(number)
+	i.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** none\n**Decisions needed:**\n1. Drop the legacy column?", CreatedAt: at}}
+	for _, body := range more {
+		i.Comments = append(i.Comments, backlog.Comment{Body: body})
+	}
+	return i
+}
+
+func TestDecisionKeepsItsWorkerUntilTheGracePeriodIsOverThenParks(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack, assign(13))
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(13)}
+	f.tick(2 * time.Minute) // it takes #12
+
+	f.lister.issues = []backlog.Issue{asksADecision(12, f.now.Add(time.Minute)), labeled(13)}
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute) // silent after its question: reviewed, 2 minutes into the 15
+	if prompt := f.reviewer.prompts[1]; !strings.Contains(prompt, "#12 Issue [waits on the owner: decision; not parked yet: the owner has until 22:18 to answer]") {
+		t.Fatalf("the reviewer was not told that the clock runs:\n%s", prompt)
+	}
+
+	f.tick(10 * time.Minute)
+	if len(f.reviewer.prompts) != 2 || len(f.term.sent) != 1 {
+		t.Fatalf("inside the grace period: %d review(s), sent %q; want it left on #12", len(f.reviewer.prompts), f.term.sent)
+	}
+
+	f.tick(6 * time.Minute) // the owner did not answer in time
+	if len(f.reviewer.prompts) != 3 || !strings.Contains(f.reviewer.prompts[2], "[waits on the owner: decision; parked]") {
+		t.Fatalf("after the grace period: %d review(s); want one that shows #12 parked", len(f.reviewer.prompts))
+	}
+	if c := f.lastCheckin(t); c.Issue != 13 || !c.Sent {
+		t.Fatalf("check-in = %+v, want #13 handed over", c)
+	}
+}
+
+func TestIssueTheOwnerRuledOnComesBeforeNewWork(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.Machine.Issues[0].Priority = []string{"p0"}
+	f.lister.issues = []backlog.Issue{labeled(5, "p0"), asksADecision(12, t0, "Owner ruling: drop it."), labeled(7)}
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if got := queueShown(t, prompt); !slices.Equal(got, []int{12, 5, 7}) {
+		t.Fatalf("queue = %v, want the ruled issue first", got)
+	}
+	if !strings.Contains(prompt, "#12 Issue [the owner answered its question") {
+		t.Fatalf("the reviewer was not told of the answer:\n%s", prompt)
+	}
+}
+
+func TestBriefSaysWhichChoicesAreTheWorkersOwn(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	f.Signals[0].Risky = "anything that touches billing"
+	f.Signals[0].Grace = "10m"
+	brief := f.briefText(f.Machine.Workers[0])
+	for _, part := range []string{"Risky: anything that touches billing.", "The owner has 10m to answer", "after the words `Decided without you:`", "Safe: every other choice."} {
+		if !strings.Contains(brief, part) {
+			t.Fatalf("brief lacks %q:\n%s", part, brief)
+		}
+	}
+	// The reviewer judges a worker that stopped against the same words.
+	if prompt := Prompt(ReviewInput{Brief: f.scope(f.Machine.Workers[0])}); !strings.Contains(prompt, "anything that touches billing") || !strings.Contains(prompt, "this is a safe default") {
+		t.Fatal("the reviewer is not told which choices are risky, or what to say to a worker that stopped on a safe one")
+	}
+}
+
+type fakeClaimer struct {
+	claimed []string
+	err     error
+}
+
+func (f *fakeClaimer) Claim(_ context.Context, repo string, number int, label string) error {
+	if f.err == nil {
+		f.claimed = append(f.claimed, fmt.Sprintf("%s#%d %s", repo, number, label))
+	}
+	return f.err
+}
+
+// withBackfill gives the machine a backfill source. The labelled queue holds
+// the issues given; the backlog holds #50 and #51, and #52, which another
+// machine of the fleet took.
+func withBackfill(f *fixture, queue ...backlog.Issue) *fakeClaimer {
+	claimer := &fakeClaimer{}
+	f.Claimer, f.QueueLabels = claimer, []string{"machine:box", "machine:other"}
+	f.Machine.Issues = append(f.Machine.Issues, config.IssueSource{Repo: "org/app", Query: `label:"p1" no:assignee`, Backfill: true, Priority: []string{"p1"}})
+	f.lister.issues = nil
+	f.lister.byLabel = map[string][]backlog.Issue{
+		"machine:box": queue,
+		"":            {labeled(51), labeled(50, "p1"), labeled(52, "p1", "machine:other")},
+	}
+	return claimer
+}
+
+func TestWorkerWithNothingWorkableIsHandedAnIssueFromTheBacklog(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(50))
+	claimer := withBackfill(f, asksADecision(12, t0.Add(-time.Hour)))
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if got := queueShown(t, prompt); !slices.Equal(got, []int{12, 50, 51}) {
+		t.Fatalf("queue = %v, want the parked issue, then the backlog by priority, without the one another machine took", got)
+	}
+	if !strings.Contains(prompt, "#50 Issue [backlog]") {
+		t.Fatalf("the reviewer was not told where #50 comes from:\n%s", prompt)
+	}
+	if !slices.Equal(claimer.claimed, []string{"org/app#50 machine:box"}) {
+		t.Fatalf("claimed = %q, want #50 put in this machine's queue", claimer.claimed)
+	}
+	c := f.lastCheckin(t)
+	if c.Issue != 50 || !c.Backfill || !c.Sent || !strings.Contains(c.Message, "#50 is from the backlog") {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestBacklogIsNotTouchedWhileTheQueueHasWork(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	claimer := withBackfill(f, labeled(12))
+	f.tick(2 * time.Minute)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
+		t.Fatalf("queue = %v, want the labelled issue alone", got)
+	}
+	if len(claimer.claimed) != 0 {
+		t.Fatalf("claimed = %q", claimer.claimed)
+	}
+}
+
+func TestBacklogIssueThatCannotBeMarkedIsNotHandedOver(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(50))
+	withBackfill(f).err = errors.New("gh issue edit: HTTP 403")
+	f.tick(2 * time.Minute)
+
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; an issue that is not marked could be taken twice", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictError {
+		t.Fatalf("check-in = %+v, want the failure recorded", c)
+	}
+}
+
+func TestBacklogIsHandedOutOnlySoOftenInAnHour(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(50), assign(51), assign(50), assign(51), Verdict{Verdict: runlog.VerdictDone, Reason: "nothing workable"})
+	withBackfill(f)
+	for range runlog.BackfillLimit {
+		f.term.running(f.now) // it said the issue is not ready, and stopped
+		f.tick(2 * time.Minute)
+	}
+	if len(f.term.sent) != runlog.BackfillLimit {
+		t.Fatalf("sent = %q, want %d hand-overs", f.term.sent, runlog.BackfillLimit)
+	}
+
+	f.term.running(f.now)
+	f.tick(2 * time.Minute)
+	if got := queueShown(t, f.reviewer.prompts[runlog.BackfillLimit]); len(got) != 0 {
+		t.Fatalf("queue = %v; the backlog is closed to this worker for the rest of the hour", got)
+	}
+}
+
+func TestBriefTellsAWorkerHowToSayABacklogIssueIsNotReady(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	if brief := f.briefText(f.Machine.Workers[0]); strings.Contains(brief, "backlog") {
+		t.Fatalf("a worker with no backfill source is told of a backlog:\n%s", brief)
+	}
+	withBackfill(f)
+	brief := f.briefText(f.Machine.Workers[0])
+	for _, part := range []string{"that match `label:\"p1\" no:assignee`", "post one comment headed `Hand-back` with `Not ready:` and what is missing"} {
+		if !strings.Contains(brief, part) {
+			t.Fatalf("brief lacks %q:\n%s", part, brief)
+		}
+	}
+}
+
+func TestOwnerIsToldOnceWhenAWorkerHasHadNoWorkForTooLong(t *testing.T) {
+	f := started(t, config.Supervisor{NoWorkAfter: "30m"}, Verdict{Verdict: runlog.VerdictDone, Reason: "every item waits on the owner"})
+	f.lister.issues = []backlog.Issue{asksADecision(12, t0.Add(-time.Hour))}
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+
+	f.tick(2 * time.Minute) // found with nothing to do
+	f.tick(20 * time.Minute)
+	if len(notes) != 0 {
+		t.Fatalf("notifications = %q before the time set", notes)
+	}
+	f.tick(15 * time.Minute)
+	f.tick(15 * time.Minute)
+	if want := []string{"box: worker app has had no work for 35m: 1 issue(s) of its queue wait on you"}; !slices.Equal(notes, want) {
+		t.Fatalf("notifications = %q, want %q", notes, want)
+	}
+}
+
+func TestOwnerIsToldOnceWhenAQueueRunsShort(t *testing.T) {
+	f := started(t, config.Supervisor{LowQueue: 2}, onTrack)
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(13), asksADecision(14, t0)}
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+
+	f.tick(2 * time.Minute)
+	if len(notes) != 0 {
+		t.Fatalf("notifications = %q with two issues to work", notes)
+	}
+	f.lister.issues = f.lister.issues[1:]
+	for range 3 {
+		f.tick(queueRecheck)
+	}
+	if want := []string{"box: the queue of worker app has 1 issue(s) a worker can act on, fewer than 2; 1 wait on you"}; !slices.Equal(notes, want) {
+		t.Fatalf("notifications = %q, want %q", notes, want)
 	}
 }

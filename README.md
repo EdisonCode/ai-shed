@@ -92,6 +92,7 @@ one verdict:
 | `done` | nothing left that it can act on | leaves it idle |
 | `held` | (set by the agent, not the reviewer) its next issue waits for the machine to have room | delivers it when there is room, or after `max_wait` |
 | `limited` | it reached a usage limit and must wait for the reset | types nothing, looks again just after the reset (every 15 minutes when the screen names no time), then tells it to continue. The time on the screen is the latest: see below for a limit that ends sooner |
+| `tool_error` | its tool stopped on an API error (a 403, a 429, a 5xx, "overloaded"), not on its work | tells it to continue after 5 minutes, then 15, then 45; `needs_owner` only when the third retry fails |
 
 The terminal is captured with its styles. Text that the worker's tool draws
 faint, such as a placeholder or a suggestion of what to type next in an empty
@@ -100,9 +101,10 @@ taken for something that was typed or sent. The reviewer is also told which
 issue the supervisor's own log says the worker has in hand; the screen is not
 the record of what was handed over.
 
-The reviewer may not make your decisions. It tells the worker to write the
-question in the issue and take the next item. It never tells a worker to
-merge, deploy, or weaken a test.
+The reviewer may not make your decisions, and it sends a worker on that
+stopped for one that was not yours to make; see
+[Choices](#choices-yours-and-the-workers). It never tells a worker to merge,
+deploy, or weaken a test.
 
 Guards against wasted tokens:
 
@@ -115,6 +117,7 @@ Guards against wasted tokens:
   - The worker's screen moves. A worker at its limit prints nothing, so one that prints is reviewed like any other.
   - The reviewer answers again after its own limit. It runs on the workers' account, so every held worker is looked at and told to continue.
 - `shed status` shows on a `limited` line how long the hold lasts at the most, when the worker last printed anything, and the `shed resume` command that ends it.
+- An API error is not yours to fix until it has outlasted three retries. Such an error often clears by itself, and a worker that sits at one for hours has lost them for nothing. When the reviewer saw another worker of the machine on track after the error, the account works, and the retry is sent at once. A sub-agent that died with the error is named in the retry, so the worker dispatches it again. A retry keeps the worker's context and is not counted as a nudge.
 - An idle worker is reviewed once per silence, not once per tick.
 - A resting worker is reviewed again only when its queue has something new it can act on. A label, a comment or a hand-back that leaves an issue waiting on you costs no review.
 
@@ -127,6 +130,8 @@ at a time, in this order:
 1. **Rework.** An issue that was handed back and needs a worker again while
    its pull request is still open. Finishing started work comes before
    starting more. There are two causes:
+   - *You answered a question.* An issue that was parked on a decision
+     comes back when you rule on it, with or without a pull request.
    - *You answered.* A comment with the answering phrase of a `sends_back`
      signal (by default `Owner ruling`) came after the hand-back. The worker
      is told to read your answer and apply it. So "yes, and also fix X" needs
@@ -171,6 +176,85 @@ never handed to another, whatever their queues. A worker's brief also tells it
 to look, before it starts an issue, for an open pull request or an unmerged
 branch that already covers it. If it finds one that it was not sent back to,
 it does not start: it reports the overlap in the issue as a decision for you.
+
+### A queue that cannot run dry
+
+A queue is what somebody labelled. When each of those issues waits on you,
+the workers have nothing, however long the backlog is. A `backfill` source is
+a reserve for that case:
+
+```yaml
+machines:
+  - name: linux-box
+    issues:
+      - repo: my-org/my-app
+        label: "machine:linux-box"
+      - repo: my-org/my-app
+        query: 'label:"priority: P1" no:assignee'
+        backfill: true
+        priority: ["urgent"]
+```
+
+- `query` is a GitHub issue search. A source may have one in place of a
+  label, with or without `backfill`.
+- The reserve is listed only when the sources beside it have nothing the
+  worker can act on. Its issues come after everything else, in its own
+  `priority` order and then oldest first. `shed status` does not list them.
+- An issue that is handed over gets the label of the first labelled source
+  of the same repository in that list, here `machine:linux-box`. That is the
+  one thing shed changes on GitHub. From then on the issue is in the
+  machine's queue like one you labelled, and it shows in `shed status`. An
+  issue that carries the queue label of any machine in the fleet file is
+  never taken, so two machines can share one `query`. A backfill source
+  needs such a labelled source beside it.
+- Nobody prepared a backlog issue for a worker. The worker is told to check
+  first that it says the goal or the root cause and has acceptance it can
+  test. If not, it changes nothing and posts a hand-back with `Not ready:`
+  and what is missing. That opens the `ready` signal: the issue waits on
+  you, and no worker is handed it until you fill it in and comment
+  `Ready now`.
+- A worker takes at most four backlog issues in an hour. Real work takes
+  longer than that allows; a run of issues that are not ready must not cost
+  a review each, all night.
+- The worker's brief still names what it works on. A backlog issue is in
+  scope for the worker that is handed it even where the brief does not cover
+  it, as a bumped issue is; your standing orders hold.
+
+### Choices: yours and the worker's
+
+Nobody answers while a worker works, so a choice must not stop it unless the
+choice is really yours. The `decision` signal says which those are:
+
+```yaml
+signals:
+  - name: decision
+    ask: "Decisions needed:"
+    answered_by: "Owner ruling"
+    sends_back: true
+    accept: ["accepted"]
+    risky: anything that changes what is merged or deployed, how money or sign-in behaves, a data migration, or a product choice
+    grace: 15m
+    decided: "Decided without you:"
+```
+
+- **A safe default.** Every choice that `risky` does not name. The worker
+  takes the conservative option and goes on. It records the choice in its
+  hand-back after `Decided without you:`, with the alternative and how to
+  reverse it. `shed status` and `shed digest` show these as information.
+  They hold nothing and put no `!` line anywhere. To overrule one, write
+  `Owner ruling: ...` on the issue; while its pull request is open the issue
+  goes back to a worker.
+- **A risky choice.** The worker writes the question and its recommendation
+  after `Decisions needed:`, and a clock starts. For `grace` the worker
+  stays on the issue and does the parts the question does not touch. An
+  answer in that time reaches a worker that still has the issue in its
+  context. After it the issue is parked, and the worker is handed the next
+  one. Your ruling un-parks it, ahead of new work.
+
+A worker that stops on a choice outside your `risky` list is told by the
+reviewer that it is a safe default, to take it and to record it. The words
+of `risky` are in each worker's brief and in front of the reviewer, so write
+them for both.
 
 ### Putting an issue first
 
@@ -574,6 +658,8 @@ supervisor:
   when_cold: clear                    # or: resume
   clear_command: /clear               # typed into a worker to empty its context
   model_command: "/model {model}"     # typed into a worker to switch model
+  no_work_after: 30m                  # optional: notify when a worker has had no work this long
+  low_queue: 3                        # optional: notify when a queue has fewer workable issues
 ```
 
 For another agent tool, set the worker's `command`, the reviewer's `command`,
@@ -589,6 +675,7 @@ and the two typed commands to what that tool understands.
 | check failed | a readiness check (auth, config, a tool) exited non-zero |
 | disk is N% full | 90% or more of the home filesystem is used |
 | agent is not running | the machine has tasks or workers but no fresh heartbeat (3 minutes) |
+| workers have no work | workers rest with nothing they can act on while issues of the queue wait on you: `2 of 3 workers have no work: every queued issue waits on you (oldest 27h)`. It is the first line of the machine |
 | worker needs you | the last check-in ended with `needs_owner` |
 | worker is stuck | nudges or restarts did not get it moving |
 | worker could not be checked | the check-in itself failed |
@@ -616,6 +703,10 @@ hand-back: a comment that contains the word `Hand-back` (configurable as
 | decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker, unless it reads `Owner ruling: accepted`) |
 | eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked`, or `Eyes failed` from a worker that looked on staging |
 | review | `**PR:** #41` | `none` | that pull request is merged or closed |
+| ready | `Not ready:` | `none` | `Ready now` |
+
+`Decided without you:` in a hand-back is no signal: it tells you what a
+worker chose and asks nothing.
 
 While that pull request is open but cannot merge (a conflict, a failed check),
 the issue does not wait on you: it goes back to a worker. See *The queue*.
@@ -623,6 +714,18 @@ the issue does not wait on you: it goes back to a worker. See *The queue*.
 The review signal follows its pull request (`follows_pr`). An issue that takes
 several pull requests comes back into the queue each time one is merged, and
 the worker picks up the rest from what the issue says.
+
+A hand-back may name two pull requests on its `**PR:**` line, the part that
+merged and the part that is still open: `#41 (backend, merged) and #42
+(frontend, ready)`. The review, and a conflict or a failed check, follow the
+first one that is still open. The eye check is of the first one named.
+
+A draft that is a draft on purpose says what it waits for, in the brackets
+after its number: `**PR:** #41 (draft: waits for #40 to merge)`. While that
+pull request is a draft on GitHub it is not yours to review: the issue shows
+as `draft` with those words, puts no `!` line on the machine and is not
+counted in `Waiting on you`. A draft that gives no reason is a review like
+any other, and so is one that was marked ready since.
 
 A hand-back with no pull request, such as a plan for you to rule on, writes
 `**PR:** none`: there is nothing to review, so the review signal stays closed.
@@ -864,6 +967,8 @@ Eye checks: my-org/my-app
     #123  PR #131  passed  3h ago  Retry the export when the API times out
     #125  PR #138  FAILED  1h ago  Paginate the audit log
 
+Idle worker-hours: no work 6.5h, tool error 0.3h, waits on you 2.0h
+
 Waiting on you: 2
   30h  decision     my-org/my-app#124  Drop the legacy column
   2h   review #141  my-org/my-app#130  Split the importer
@@ -871,6 +976,11 @@ Waiting on you: 2
 Also needs you: 1
   ! mac-mini: unreachable: me@mac-mini: exit status 255: Operation timed out
 ```
+
+`Idle worker-hours` totals the time workers spent not working in the window,
+by cause: no work in the queue, an error of the tool, waiting on you, a usage
+limit. It is read from the last 500 check-ins of each machine, so on a busy
+fleet it may reach back less far than the window.
 
 It changes nothing and exits 1 when something needs you. To get it every
 morning, run it from a scheduler on the watcher and send the output wherever
@@ -902,6 +1012,12 @@ defaults:
 The message is in `SHED_MESSAGE`; `SHED_MACHINE` and `SHED_WORKER` say where
 it came from. It runs once when the state begins, not while it lasts. A usage
 limit, a nudge and a finished queue do not notify.
+
+Idle workers stop nothing, so by default nobody hears of them. Two settings
+under `supervisor` change that: `no_work_after: 30m` notifies when a worker
+has had nothing it can act on for that long, and `low_queue: 3` when a queue
+has fewer issues than that for a worker to act on. Each says how many issues
+of the queue wait on you.
 
 ### Scheduled tasks
 

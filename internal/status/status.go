@@ -34,6 +34,7 @@ const (
 	Queued  = "queued"    // nobody is on it
 	Waiting = "waiting"   // it waits on the owner
 	Look    = "eye check" // its merged work waits for a worker to look at it on staging
+	Draft   = "draft"     // its pull request is a draft on purpose and says what it waits for
 )
 
 // Task states.
@@ -80,10 +81,16 @@ type IssueStatus struct {
 	State   string   `json:"state"`
 	Waiting []string `json:"waiting,omitempty"`
 	// Asks are the open signals behind Waiting, with when each was asked.
-	Asks   []backlog.Ask `json:"asks,omitempty"`
+	Asks []backlog.Ask `json:"asks,omitempty"`
+	// Drafts are the pull requests that are drafts on purpose: each says
+	// what it waits for. They ask nothing of the owner yet.
+	Drafts []backlog.Ask `json:"drafts,omitempty"`
 	Worker string        `json:"worker,omitempty"`
 	// Rework says why the issue's pull request cannot merge as it stands.
 	Rework string `json:"rework,omitempty"`
+	// Decided lists the choices a worker made by itself and recorded in its
+	// last hand-back. They are for the owner to read; they hold nothing.
+	Decided []string `json:"decided,omitempty"`
 	// Bumped is set when the owner put the issue first in line with
 	// `shed bump`, and BumpedTo names the worker it was moved to, if any.
 	Bumped   bool   `json:"bumped,omitempty"`
@@ -346,11 +353,19 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 	queued, working := 0, 0
 	for _, issue := range issues {
 		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
-			State: Queued, Asks: backlog.Asks(issue, signals), Rework: backlog.Rework(issue, signals)}
+			State: Queued, Asks: backlog.Asks(issue, signals), Rework: backlog.Rework(issue, signals),
+			Decided: backlog.Decided(issue, signals)}
 		workerLook := workerLooks[issueKey(issue.Repo, issue.Number)]
 		if workerLook {
 			st.Asks = slices.DeleteFunc(st.Asks, func(a backlog.Ask) bool { return a.Name == config.EyesSignal })
 		}
+		// A draft that says what it waits for is not the owner's to review.
+		for _, a := range st.Asks {
+			if a.WaitsFor != "" {
+				st.Drafts = append(st.Drafts, a)
+			}
+		}
+		st.Asks = slices.DeleteFunc(st.Asks, func(a backlog.Ask) bool { return a.WaitsFor != "" })
 		for _, a := range st.Asks {
 			st.Waiting = append(st.Waiting, a.Name)
 		}
@@ -393,6 +408,10 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		case workerLook:
 			// Nobody builds it and nobody is asked: it waits for its look.
 			st.State = Look
+		case len(st.Drafts) > 0:
+			// Nobody builds it and nobody is asked: it waits for what its
+			// hand-back names.
+			st.State = Draft
 		case hasWindow:
 			working++
 			if quiet := res.Now.Sub(window.LastActivity); quiet > workerQuiet {
@@ -403,12 +422,51 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		}
 		report.Issues = append(report.Issues, st)
 	}
+	if line := noWork(report, now); line != "" {
+		// It goes above the rest: it is why the other lines matter.
+		report.Attention = append([]string{line}, report.Attention...)
+	}
 	// On a machine with supervised workers the supervisor hands out the
 	// queue, and says so when it cannot.
 	if res != nil && queued > 0 && working == 0 && len(m.Workers) == 0 {
 		attend("%d issue(s) queued and no worker is running", queued)
 	}
 	return report
+}
+
+// noWork says how many of the machine's workers have nothing to do because
+// of what waits on the owner, as in "5 of 8 workers have no work: every
+// queued issue waits on you (oldest 27h)". "" when no worker is idle for
+// that reason: an empty queue is not the owner's backlog.
+func noWork(r MachineReport, now time.Time) string {
+	idle := 0
+	for _, w := range r.Workers {
+		if w.Last != nil && w.Last.Verdict == runlog.VerdictDone && w.Task == "" {
+			idle++
+		}
+	}
+	waiting, oldest := 0, time.Duration(0)
+	for _, i := range r.Issues {
+		if len(i.Asks) > 0 {
+			waiting++
+		}
+		for _, a := range i.Asks {
+			if !a.Since.IsZero() {
+				oldest = max(oldest, now.Sub(a.Since))
+			}
+		}
+	}
+	if idle == 0 || waiting == 0 {
+		return ""
+	}
+	why := fmt.Sprintf("%d of the %d queued issues wait on you", waiting, len(r.Issues))
+	if waiting == len(r.Issues) {
+		why = "every queued issue waits on you"
+	}
+	if oldest > 0 {
+		why += fmt.Sprintf(" (oldest %s)", Short(oldest))
+	}
+	return fmt.Sprintf("%d of %d workers have no work: %s", idle, len(r.Workers), why)
 }
 
 // askWords says what an issue asks of the owner and for how long, as in

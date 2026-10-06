@@ -322,3 +322,111 @@ func TestFindLooksInEverySourceForAnOpenIssue(t *testing.T) {
 		t.Fatal("a source that cannot be listed must be an error, not a missing issue")
 	}
 }
+
+func TestRuled(t *testing.T) {
+	plan := "## Hand-back\n**PR:** none (plan-only pass)\n**Decisions needed:**\n1. Build it this way?"
+	cases := []struct {
+		name     string
+		comments []string
+		want     bool
+	}{
+		{"a question nobody answered", []string{plan}, false},
+		{"the owner answered and no worker has been back", []string{plan, ruling}, true},
+		{"a worker handed back after the answer", []string{plan, ruling, handBackClean}, false},
+		{"a ruling with no question before it", []string{handBackClean, ruling}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var issue Issue
+			for _, body := range tc.comments {
+				issue.Comments = append(issue.Comments, Comment{Body: body})
+			}
+			if got := Ruled(issue, config.DefaultSignals()); got != tc.want {
+				t.Fatalf("ruled = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDecided(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{"a list", "## Hand-back\n**PR:** #41 (ready)\n**Decided without you:**\n- Kept the old column; the alternative is to drop it; revert commit abc123.\n- Page size 50, not 100.\n**Decisions needed:** none", []string{"Kept the old column; the alternative is to drop it; revert commit abc123.", "Page size 50, not 100."}},
+		{"one line", "## Hand-back\n**Decided without you:** kept the old column\n\nNotes follow.", []string{"kept the old column"}},
+		{"none", "## Hand-back\n**Decided without you:** none\n**Decisions needed:** none", nil},
+		{"no such part", handBackClean, nil},
+		{"outside a hand-back", "Plan: list them under Decided without you: later", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Decided(Issue{Comments: []Comment{{Body: tc.body}}}, config.DefaultSignals())
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("decided = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChoicesAWorkerMadeDoNotHoldAnIssue(t *testing.T) {
+	body := "## Hand-back\n**PR:** none\n**Decided without you:**\n- Kept the old column.\n**Decisions needed:** none"
+	if got := Waiting(Issue{Comments: []Comment{{Body: body}}}, config.DefaultSignals()); len(got) != 0 {
+		t.Fatalf("waiting = %v, want nothing", got)
+	}
+}
+
+func TestIssueAWorkerFoundNotReadyWaitsOnTheOwnerUntilTheySayItIs(t *testing.T) {
+	notReady := "## Hand-back\n**PR:** none\n**Not ready:** it names no acceptance a worker can test."
+	issue := Issue{Comments: []Comment{{Body: notReady}}}
+	if got := Waiting(issue, config.DefaultSignals()); !slices.Equal(got, []string{"ready"}) {
+		t.Fatalf("waiting = %v, want ready", got)
+	}
+	issue.Comments = append(issue.Comments, Comment{Body: "Ready now: acceptance added."})
+	if got := Waiting(issue, config.DefaultSignals()); len(got) != 0 {
+		t.Fatalf("waiting = %v, want nothing after the owner's word", got)
+	}
+}
+
+func TestHandBackThatNamesTwoPullRequestsFollowsTheOneThatIsOpen(t *testing.T) {
+	issue := Issue{
+		Comments: []Comment{{Body: "## Hand-back\n**PR:** #41 (backend, merged) and #42 (frontend, ready)\n**Needs eyes:** open /orders"}},
+		OpenPRs:  map[int]PR{42: {Problem: "conflicts with the base branch"}},
+	}
+	if got := Rework(issue, config.DefaultSignals()); got != "pull request #42 conflicts with the base branch" {
+		t.Fatalf("rework = %q, want the open pull request sent back", got)
+	}
+	if got := Waiting(issue, config.DefaultSignals()); len(got) != 0 {
+		t.Fatalf("waiting = %v; a look at work that is about to change is not asked for", got)
+	}
+
+	issue.OpenPRs = map[int]PR{42: {}}
+	if asks := Asks(issue, config.DefaultSignals()); len(asks) != 2 || asks[1].What() != "review #42" {
+		t.Fatalf("asks = %+v, want the review of the open pull request", asks)
+	}
+	if state, pr, _, _ := EyeCheck(issue, config.DefaultSignals()); state != EyesAsked || pr != 41 {
+		t.Fatalf("eye check = %s of #%d, want the look at the merged #41", state, pr)
+	}
+}
+
+func TestDraftThatSaysWhatItWaitsForIsNotAReviewYet(t *testing.T) {
+	cases := []struct {
+		name, line string
+		pr         PR
+		want       string
+	}{
+		{"a draft on purpose", "#41 (draft: waits for #40 to merge)", PR{Draft: true}, "draft #41 (waits for #40 to merge)"},
+		{"a draft that gives no reason", "#41 (draft)", PR{Draft: true}, "review #41"},
+		{"marked ready since the hand-back", "#41 (draft: waits for #40 to merge)", PR{}, "review #41"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issue := Issue{Comments: []Comment{{Body: "## Hand-back\n**PR:** " + tc.line}}, OpenPRs: map[int]PR{41: tc.pr}}
+			asks := Asks(issue, config.DefaultSignals())
+			if len(asks) != 1 || asks[0].What() != tc.want {
+				t.Fatalf("asks = %+v, want %q", asks, tc.want)
+			}
+		})
+	}
+}
