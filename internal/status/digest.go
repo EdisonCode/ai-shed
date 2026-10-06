@@ -145,6 +145,27 @@ func RenderDigest(w io.Writer, d Digest) {
 	}
 	tw.Flush()
 
+	// What the workers chose by themselves. It asks nothing of the owner,
+	// who may overrule a choice with a ruling on the issue.
+	var decided []string
+	seen = map[string]bool{}
+	for _, m := range d.Report.Machines {
+		for _, i := range m.Issues {
+			if key := issueKey(i.Repo, i.Number); !seen[key] {
+				seen[key] = true
+				for _, choice := range i.Decided {
+					decided = append(decided, fmt.Sprintf("%s  %s", key, choice))
+				}
+			}
+		}
+	}
+	if len(decided) > 0 {
+		fmt.Fprintf(w, "\nDecided without you: %d\n", len(decided))
+		for _, line := range decided {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+	}
+
 	// Everything else that needs the owner: a machine, a worker, a task.
 	var other []string
 	for _, m := range d.Report.Machines {

@@ -101,9 +101,10 @@ taken for something that was typed or sent. The reviewer is also told which
 issue the supervisor's own log says the worker has in hand; the screen is not
 the record of what was handed over.
 
-The reviewer may not make your decisions. It tells the worker to write the
-question in the issue and take the next item. It never tells a worker to
-merge, deploy, or weaken a test.
+The reviewer may not make your decisions, and it sends a worker on that
+stopped for one that was not yours to make; see
+[Choices](#choices-yours-and-the-workers). It never tells a worker to merge,
+deploy, or weaken a test.
 
 Guards against wasted tokens:
 
@@ -129,6 +130,8 @@ at a time, in this order:
 1. **Rework.** An issue that was handed back and needs a worker again while
    its pull request is still open. Finishing started work comes before
    starting more. There are two causes:
+   - *You answered a question.* An issue that was parked on a decision
+     comes back when you rule on it, with or without a pull request.
    - *You answered.* A comment with the answering phrase of a `sends_back`
      signal (by default `Owner ruling`) came after the hand-back. The worker
      is told to read your answer and apply it. So "yes, and also fix X" needs
@@ -173,6 +176,42 @@ never handed to another, whatever their queues. A worker's brief also tells it
 to look, before it starts an issue, for an open pull request or an unmerged
 branch that already covers it. If it finds one that it was not sent back to,
 it does not start: it reports the overlap in the issue as a decision for you.
+
+### Choices: yours and the worker's
+
+Nobody answers while a worker works, so a choice must not stop it unless the
+choice is really yours. The `decision` signal says which those are:
+
+```yaml
+signals:
+  - name: decision
+    ask: "Decisions needed:"
+    answered_by: "Owner ruling"
+    sends_back: true
+    accept: ["accepted"]
+    risky: anything that changes what is merged or deployed, how money or sign-in behaves, a data migration, or a product choice
+    grace: 15m
+    decided: "Decided without you:"
+```
+
+- **A safe default.** Every choice that `risky` does not name. The worker
+  takes the conservative option and goes on. It records the choice in its
+  hand-back after `Decided without you:`, with the alternative and how to
+  reverse it. `shed status` and `shed digest` show these as information.
+  They hold nothing and put no `!` line anywhere. To overrule one, write
+  `Owner ruling: ...` on the issue; while its pull request is open the issue
+  goes back to a worker.
+- **A risky choice.** The worker writes the question and its recommendation
+  after `Decisions needed:`, and a clock starts. For `grace` the worker
+  stays on the issue and does the parts the question does not touch. An
+  answer in that time reaches a worker that still has the issue in its
+  context. After it the issue is parked, and the worker is handed the next
+  one. Your ruling un-parks it, ahead of new work.
+
+A worker that stops on a choice outside your `risky` list is told by the
+reviewer that it is a safe default, to take it and to record it. The words
+of `risky` are in each worker's brief and in front of the reviewer, so write
+them for both.
 
 ### Putting an issue first
 
@@ -618,6 +657,9 @@ hand-back: a comment that contains the word `Hand-back` (configurable as
 | decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker, unless it reads `Owner ruling: accepted`) |
 | eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked`, or `Eyes failed` from a worker that looked on staging |
 | review | `**PR:** #41` | `none` | that pull request is merged or closed |
+
+`Decided without you:` in a hand-back is no signal: it tells you what a
+worker chose and asks nothing.
 
 While that pull request is open but cannot merge (a conflict, a failed check),
 the issue does not wait on you: it goes back to a worker. See *The queue*.

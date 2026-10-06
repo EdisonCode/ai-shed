@@ -84,6 +84,9 @@ type IssueStatus struct {
 	Worker string        `json:"worker,omitempty"`
 	// Rework says why the issue's pull request cannot merge as it stands.
 	Rework string `json:"rework,omitempty"`
+	// Decided lists the choices a worker made by itself and recorded in its
+	// last hand-back. They are for the owner to read; they hold nothing.
+	Decided []string `json:"decided,omitempty"`
 	// Bumped is set when the owner put the issue first in line with
 	// `shed bump`, and BumpedTo names the worker it was moved to, if any.
 	Bumped   bool   `json:"bumped,omitempty"`
@@ -346,7 +349,8 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 	queued, working := 0, 0
 	for _, issue := range issues {
 		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
-			State: Queued, Asks: backlog.Asks(issue, signals), Rework: backlog.Rework(issue, signals)}
+			State: Queued, Asks: backlog.Asks(issue, signals), Rework: backlog.Rework(issue, signals),
+			Decided: backlog.Decided(issue, signals)}
 		workerLook := workerLooks[issueKey(issue.Repo, issue.Number)]
 		if workerLook {
 			st.Asks = slices.DeleteFunc(st.Asks, func(a backlog.Ask) bool { return a.Name == config.EyesSignal })

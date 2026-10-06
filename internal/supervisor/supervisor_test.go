@@ -2275,3 +2275,71 @@ func TestPendingRetryAndItsCountSurviveAnAgentRestart(t *testing.T) {
 		t.Fatalf("check-in = %+v, want the second backoff: the first retry is remembered", c)
 	}
 }
+
+// asksADecision is an issue whose last hand-back asked the owner a question
+// at the time given.
+func asksADecision(number int, at time.Time, more ...string) backlog.Issue {
+	i := labeled(number)
+	i.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** none\n**Decisions needed:**\n1. Drop the legacy column?", CreatedAt: at}}
+	for _, body := range more {
+		i.Comments = append(i.Comments, backlog.Comment{Body: body})
+	}
+	return i
+}
+
+func TestDecisionKeepsItsWorkerUntilTheGracePeriodIsOverThenParks(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack, assign(13))
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(13)}
+	f.tick(2 * time.Minute) // it takes #12
+
+	f.lister.issues = []backlog.Issue{asksADecision(12, f.now.Add(time.Minute)), labeled(13)}
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute) // silent after its question: reviewed, 2 minutes into the 15
+	if prompt := f.reviewer.prompts[1]; !strings.Contains(prompt, "#12 Issue [waits on the owner: decision; not parked yet: the owner has until 22:18 to answer]") {
+		t.Fatalf("the reviewer was not told that the clock runs:\n%s", prompt)
+	}
+
+	f.tick(10 * time.Minute)
+	if len(f.reviewer.prompts) != 2 || len(f.term.sent) != 1 {
+		t.Fatalf("inside the grace period: %d review(s), sent %q; want it left on #12", len(f.reviewer.prompts), f.term.sent)
+	}
+
+	f.tick(6 * time.Minute) // the owner did not answer in time
+	if len(f.reviewer.prompts) != 3 || !strings.Contains(f.reviewer.prompts[2], "[waits on the owner: decision; parked]") {
+		t.Fatalf("after the grace period: %d review(s); want one that shows #12 parked", len(f.reviewer.prompts))
+	}
+	if c := f.lastCheckin(t); c.Issue != 13 || !c.Sent {
+		t.Fatalf("check-in = %+v, want #13 handed over", c)
+	}
+}
+
+func TestIssueTheOwnerRuledOnComesBeforeNewWork(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.Machine.Issues[0].Priority = []string{"p0"}
+	f.lister.issues = []backlog.Issue{labeled(5, "p0"), asksADecision(12, t0, "Owner ruling: drop it."), labeled(7)}
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if got := queueShown(t, prompt); !slices.Equal(got, []int{12, 5, 7}) {
+		t.Fatalf("queue = %v, want the ruled issue first", got)
+	}
+	if !strings.Contains(prompt, "#12 Issue [the owner answered its question") {
+		t.Fatalf("the reviewer was not told of the answer:\n%s", prompt)
+	}
+}
+
+func TestBriefSaysWhichChoicesAreTheWorkersOwn(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	f.Signals[0].Risky = "anything that touches billing"
+	f.Signals[0].Grace = "10m"
+	brief := f.briefText(f.Machine.Workers[0])
+	for _, part := range []string{"Risky: anything that touches billing.", "The owner has 10m to answer", "after the words `Decided without you:`", "Safe: every other choice."} {
+		if !strings.Contains(brief, part) {
+			t.Fatalf("brief lacks %q:\n%s", part, brief)
+		}
+	}
+	// The reviewer judges a worker that stopped against the same words.
+	if prompt := Prompt(ReviewInput{Brief: f.scope(f.Machine.Workers[0])}); !strings.Contains(prompt, "anything that touches billing") || !strings.Contains(prompt, "this is a safe default") {
+		t.Fatal("the reviewer is not told which choices are risky, or what to say to a worker that stopped on a safe one")
+	}
+}

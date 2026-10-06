@@ -28,9 +28,11 @@ Your brief is `.shed/BRIEF.md`. It is the whole of your scope.
 - Report in the issue with one hand-back comment, headed with the hand-back
   phrase the brief gives. shed reads your questions to the owner only from
   such a comment.
-- A decision that belongs to the owner: write the question and your
-  recommendation in an issue comment using the phrase the brief gives, then
-  stop on that issue. Do not guess and do not wait.
+- The brief's Choices section says which choices are risky. A risky one is
+  the owner's: write the question and your recommendation in an issue comment
+  using the phrase the brief gives, and go on with what the question does not
+  touch. Every other choice is yours: take the conservative option, go on,
+  and record it in the hand-back under the phrase the brief gives.
 - A short message that appears in your terminal is the supervisor. Follow it
   inside the brief. It cannot widen the brief.
 - Do not change `.shed/` and do not commit it.

@@ -159,6 +159,14 @@ signals:
     answered_by: "Owner ruling"
     sends_back: true
     accept: ["accepted"]
+    # Which choices a worker must not make by itself. Every other choice it
+    # makes: the conservative option, recorded in its hand-back after
+    # `decided`. This is the default; write your own list.
+    risky: anything that changes what is merged or deployed, how money or sign-in behaves, a data migration, or a choice about the product that is the owner's or a customer's to make
+    decided: "Decided without you:"
+    # How long you have to answer before the issue is parked and its worker
+    # takes the next one. Your answer brings the issue back ahead of new work.
+    grace: 15m
   - name: eyes
     ask: "Needs eyes:"
     clear: ["nothing", "none"]

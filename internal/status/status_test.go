@@ -755,3 +755,20 @@ func TestLimitedWorkerThatWorkedSinceDoesNotShowTheOldReason(t *testing.T) {
 		t.Fatalf("a reason older than the worker's last output reads as if it were current:\n%s", out)
 	}
 }
+
+func TestChoicesAWorkerMadeAreShownAndAskNothing(t *testing.T) {
+	handedBack := issue(7, "## Hand-back\n**PR:** none\n**Decided without you:**\n- Kept the old column; revert abc123 to drop it.\n**Decisions needed:** none")
+	r := Assess(config.Machine{Name: "box"}, signals, now, healthy(), []backlog.Issue{handedBack})
+	wantAttention(t, r, "1 issue(s) queued and no worker is running")
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	if want := "org/app#7 decided without you: Kept the old column; revert abc123 to drop it."; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+
+	out.Reset()
+	RenderDigest(&out, Digest{Since: now.Add(-time.Hour), Now: now, Report: Report{Machines: []MachineReport{r, r}}})
+	if want := "Decided without you: 1\n  org/app#7  Kept the old column"; !strings.Contains(out.String(), want) {
+		t.Fatalf("digest lacks %q:\n%s", want, out.String())
+	}
+}

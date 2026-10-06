@@ -322,3 +322,57 @@ func TestFindLooksInEverySourceForAnOpenIssue(t *testing.T) {
 		t.Fatal("a source that cannot be listed must be an error, not a missing issue")
 	}
 }
+
+func TestRuled(t *testing.T) {
+	plan := "## Hand-back\n**PR:** none (plan-only pass)\n**Decisions needed:**\n1. Build it this way?"
+	cases := []struct {
+		name     string
+		comments []string
+		want     bool
+	}{
+		{"a question nobody answered", []string{plan}, false},
+		{"the owner answered and no worker has been back", []string{plan, ruling}, true},
+		{"a worker handed back after the answer", []string{plan, ruling, handBackClean}, false},
+		{"a ruling with no question before it", []string{handBackClean, ruling}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var issue Issue
+			for _, body := range tc.comments {
+				issue.Comments = append(issue.Comments, Comment{Body: body})
+			}
+			if got := Ruled(issue, config.DefaultSignals()); got != tc.want {
+				t.Fatalf("ruled = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDecided(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{"a list", "## Hand-back\n**PR:** #41 (ready)\n**Decided without you:**\n- Kept the old column; the alternative is to drop it; revert commit abc123.\n- Page size 50, not 100.\n**Decisions needed:** none", []string{"Kept the old column; the alternative is to drop it; revert commit abc123.", "Page size 50, not 100."}},
+		{"one line", "## Hand-back\n**Decided without you:** kept the old column\n\nNotes follow.", []string{"kept the old column"}},
+		{"none", "## Hand-back\n**Decided without you:** none\n**Decisions needed:** none", nil},
+		{"no such part", handBackClean, nil},
+		{"outside a hand-back", "Plan: list them under Decided without you: later", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Decided(Issue{Comments: []Comment{{Body: tc.body}}}, config.DefaultSignals())
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("decided = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChoicesAWorkerMadeDoNotHoldAnIssue(t *testing.T) {
+	body := "## Hand-back\n**PR:** none\n**Decided without you:**\n- Kept the old column.\n**Decisions needed:** none"
+	if got := Waiting(Issue{Comments: []Comment{{Body: body}}}, config.DefaultSignals()); len(got) != 0 {
+		t.Fatalf("waiting = %v, want nothing", got)
+	}
+}

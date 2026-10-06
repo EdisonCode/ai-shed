@@ -302,9 +302,55 @@ type Signal struct {
 	// empty one gets its default.
 	BlockedBy   string `yaml:"blocked_by"`
 	UnblockedBy string `yaml:"unblocked_by"`
+	// Grace is how long the owner has to answer before the issue is parked
+	// and its worker takes the next one. Until then the worker stays on the
+	// issue and does the parts the question does not touch. It is for the
+	// decision signal, where an empty one gets DefaultGrace.
+	Grace string `yaml:"grace"`
+	// Risky says which choices a worker must not make by itself. Every other
+	// choice is a safe default: the worker takes the conservative option and
+	// records it after Decided. Both are for the decision signal, where an
+	// empty one gets its default.
+	Risky   string `yaml:"risky"`
+	Decided string `yaml:"decided"`
 	// HandBack is the config's hand-back phrase, copied onto each signal
 	// when the config is read.
 	HandBack string `yaml:"-"`
+}
+
+// DecisionSignal is the name of the signal that asks the owner to decide.
+const DecisionSignal = "decision"
+
+// The defaults of the decision signal.
+const (
+	DefaultGrace   = 15 * time.Minute
+	DefaultDecided = "Decided without you:"
+	DefaultRisky   = "anything that changes what is merged or deployed, how money or sign-in behaves, a data migration, or a choice about the product that is the owner's or a customer's to make"
+)
+
+// GraceOrDefault is how long the owner has to answer; 0 for a signal that
+// parks nothing.
+func (s Signal) GraceOrDefault() time.Duration {
+	if s.Name != DecisionSignal {
+		return durationOr(s.Grace, 0)
+	}
+	return durationOr(s.Grace, DefaultGrace)
+}
+
+// withDecisionDefaults fills in what a decision signal does not say.
+func withDecisionDefaults(signals []Signal) []Signal {
+	for i, s := range signals {
+		if s.Name != DecisionSignal {
+			continue
+		}
+		if s.Risky == "" {
+			signals[i].Risky = DefaultRisky
+		}
+		if s.Decided == "" {
+			signals[i].Decided = DefaultDecided
+		}
+	}
+	return signals
 }
 
 // EyesSignal is the name of the signal that asks for an eye check. A worker
@@ -320,11 +366,11 @@ const (
 
 // DefaultSignals returns the built-in signals, counted in hand-back comments.
 func DefaultSignals() []Signal {
-	return withHandBack(DefaultHandBack, []Signal{
-		{Name: "decision", Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true, Accept: []string{"accepted"}},
+	return withDecisionDefaults(withHandBack(DefaultHandBack, []Signal{
+		{Name: DecisionSignal, Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true, Accept: []string{"accepted"}},
 		{Name: EyesSignal, Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked", FailedBy: "Eyes failed", BlockedBy: DefaultBlockedBy, UnblockedBy: DefaultUnblockedBy},
 		{Name: "review", Ask: "**PR:**", Clear: []string{"none"}, FollowsPR: true},
-	})
+	}))
 }
 
 func withHandBack(phrase string, signals []Signal) []Signal {
@@ -388,7 +434,7 @@ func Parse(data []byte) (*Config, error) {
 	if cfg.HandBack != nil {
 		handBack = *cfg.HandBack
 	}
-	withHandBack(handBack, cfg.Signals)
+	withDecisionDefaults(withHandBack(handBack, cfg.Signals))
 	// A fleet file written before a look could be recorded as blocked names
 	// no phrases for it.
 	for i, s := range cfg.Signals {
@@ -550,6 +596,11 @@ func (c *Config) validate() error {
 	for _, s := range c.Signals {
 		if s.Name == "" || s.Ask == "" {
 			fail("a signal needs name and ask")
+		}
+		if s.Grace != "" {
+			if d, err := time.ParseDuration(s.Grace); err != nil || d <= 0 {
+				fail("signal %q: grace %q is not a positive duration such as 15m", s.Name, s.Grace)
+			}
 		}
 	}
 	repos := map[string]bool{}

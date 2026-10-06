@@ -13,7 +13,7 @@ decision that is really the owner's, and even then it takes other work.
 **Goal**: A safe default is taken and recorded under `Decided without you:` and never holds an issue. A risky decision starts a clock (`signals.decision.grace`); after it the issue is parked and the worker takes the next. A ruling brings it back ahead of new work. The fleet file says what "risky" means.
 **Success Criteria**: A hand-back with only `Decided without you:` entries does not hold its issue. A risky decision with no ruling parks its issue after `grace`, and a later ruling brings it back first.
 **Tests**: signal parsing, queue order after a ruling, brief and reviewer wording, status and digest lines.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: A queue that cannot run dry
 **Goal**: A lower-priority `backfill` source per machine, taken from only when the first sources have nothing workable; a readiness check; a mark so that two machines do not take the same issue.

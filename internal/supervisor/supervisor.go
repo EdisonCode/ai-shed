@@ -423,6 +423,11 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		}
 		st.lastQueueCheck = now
 		seen := fingerprint(queue)
+		// The owner did not answer in time: the issue in hand is parked, and
+		// the worker takes the next one.
+		if item, inHand := find(queue, st.issue); inHand && item.parkedSince(st.lastReview, now) && slices.ContainsFunc(queue, QueueItem.Workable) {
+			return s.review(ctx, w, st, obs, now, KindQueue, queue)
+		}
 		if seen == st.queueSeen {
 			return nil
 		}
@@ -570,7 +575,7 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 		wait := retryBackoff[st.retries]
 		st.retryAt, st.retryMessage = now.Add(wait), verdict.Message
 		c.Until, c.Message = st.retryAt, verdict.Message
-		c.Reason = fmt.Sprintf("%s; retry %d of %d in %s", verdict.Reason, st.retries+1, len(retryBackoff), wait)
+		c.Reason = fmt.Sprintf("%s; retry %d of %d in %s", verdict.Reason, st.retries+1, len(retryBackoff), spell(wait))
 	}
 	if verdict.Verdict == runlog.VerdictNudge {
 		// A different issue is a hand-over: new work for the machine. It is
@@ -971,8 +976,9 @@ func (s *Supervisor) recover(worker string) *workerState {
 }
 
 // queue lists the worker's open issues in the order to work them: the ones
-// the owner put first, then rework, since finishing started work beats
-// starting more, then the eye checks that are due on staging, then by the
+// the owner put first, then rework and the issues whose question the owner
+// answered, since finishing started work beats starting more, then the eye
+// checks that are due on staging, then by the
 // owner's priority, then oldest first. An issue that another worker has in
 // hand is not in it, and neither is one the owner moved to another worker.
 func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, error) {
@@ -1018,8 +1024,8 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		case x.Bumped != y.Bumped:
 			// The owner's own word comes before every rule.
 			return x.Bumped
-		case (x.Rework != "") != (y.Rework != ""):
-			return x.Rework != ""
+		case x.resumes() != y.resumes():
+			return x.resumes()
 		case (x.Look != "") != (y.Look != ""):
 			// Merged work that waits for a look holds up a release.
 			return x.Look != ""
@@ -1037,6 +1043,12 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []runlog.Checkin) QueueItem {
 	item := QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title, Waiting: backlog.Waiting(i, s.Signals),
 		Model: s.Settings.Models.For(i.LabelNames()), rank: src.Rank(i.LabelNames())}
+	item.Ruled = backlog.Ruled(i, s.Signals)
+	for _, ask := range backlog.Asks(i, s.Signals) {
+		if grace := s.signal(ask.Name).GraceOrDefault(); grace > 0 && !ask.Since.IsZero() {
+			item.ParksAt = ask.Since.Add(grace)
+		}
+	}
 	if reason := backlog.Rework(i, s.Signals); reason != "" {
 		if runlog.ReworkSpent(checkins, i.Number, s.Now()) {
 			item.Waiting = append(item.Waiting, fmt.Sprintf("%s after %d tries", reason, runlog.ReworkLimit))
@@ -1199,7 +1211,7 @@ func fingerprint(queue []QueueItem) string {
 	h := sha256.New()
 	for _, q := range queue {
 		if q.Workable() {
-			fmt.Fprintf(h, "%s#%d:%s:%s;", q.Repo, q.Number, q.Rework, q.Look)
+			fmt.Fprintf(h, "%s#%d:%s:%s:%t;", q.Repo, q.Number, q.Rework, q.Look, q.Ruled)
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
@@ -1289,14 +1301,7 @@ and may type a short message. Treat it as guidance inside this brief, not as a
 new brief.
 
 - Stay inside this brief. Work that it does not cover is out of scope: note it in the issue and leave it.
-- Do not wait for an answer. When a decision belongs to the owner, write the question and your recommendation in an issue comment`)
-	if phrase, handBack := s.decisionPhrase(); phrase != "" {
-		fmt.Fprintf(&b, " after the words `%s`", phrase)
-		if handBack != "" {
-			fmt.Fprintf(&b, ", in a comment headed `%s`", handBack)
-		}
-	}
-	b.WriteString(`, then take the next item.
+- Do not wait for an answer that nobody is there to give. The Choices section says which choices are yours and what to do with one that is not.
 - Before you stop for any reason, write your plan and your progress in the issue. Your context may be cleared between items. What is not in the issue, the branch or a pull request is lost.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
 `)
@@ -1361,26 +1366,38 @@ func (s *Supervisor) signal(name string) config.Signal {
 	return config.Signal{}
 }
 
-// scope is what the worker must stay inside: its brief and the owner's
-// standing orders. The worker reads it and the reviewer judges against it.
+// scope is what the worker must stay inside: its brief, the owner's standing
+// orders, and which choices are its own to make. The worker reads it and the
+// reviewer judges against it.
 func (s *Supervisor) scope(w config.Worker) string {
 	scope := strings.TrimSpace(w.Brief)
 	if orders := strings.TrimSpace(s.StandingOrders); orders != "" {
 		scope += "\n\n## Standing orders\n\n" + orders
 	}
-	return scope
+	return scope + s.choices()
 }
 
-// decisionPhrase is the phrase that makes shed status show an issue as
-// waiting on a decision, and the phrase that must head the comment for it to
-// count.
-func (s *Supervisor) decisionPhrase() (ask, handBack string) {
-	for _, sig := range s.Signals {
-		if sig.Name == "decision" {
-			return sig.Ask, sig.HandBack
-		}
+// choices tells a worker which choices to make by itself and which to ask
+// the owner. Nobody answers while it works, so only a risky choice stops an
+// issue, and it stops that issue alone.
+func (s *Supervisor) choices() string {
+	d := s.signal(config.DecisionSignal)
+	if d.Ask == "" {
+		return ""
 	}
-	return "", ""
+	where := fmt.Sprintf("after the words `%s`", d.Ask)
+	if d.HandBack != "" {
+		where += fmt.Sprintf(", in a comment headed `%s`", d.HandBack)
+	}
+	return fmt.Sprintf(`
+
+## Choices
+
+Nobody answers while you work. A choice is one of two kinds.
+
+- Risky: %s. Do not make such a choice. Write the question and your recommendation in an issue comment %s. The owner has %s to answer. Until then go on with the parts of the issue that the question does not touch; when none is left, say so here and stop. After that time the issue is parked and the supervisor gives you the next one. The owner's answer brings it back, ahead of new work.
+- Safe: every other choice. Take the conservative option, the one that is easy to reverse, and go on. Do not stop and do not ask. Record it in your hand-back after the words `+"`%s`"+`: what you chose, the alternative, and how to reverse it. The owner reads these and may overrule one; the issue then comes back to a worker.
+`, strings.TrimSpace(d.Risky), where, spell(d.GraceOrDefault()), d.Decided)
 }
 
 // excludeFromGit keeps the brief out of the worker's commits. It is best
@@ -1418,6 +1435,18 @@ func expandHome(dir string) string {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// spell writes a whole number of hours or minutes as a person would: 15m,
+// not 15m0s.
+func spell(d time.Duration) string {
+	switch {
+	case d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	}
+	return d.String()
 }
 
 // within keeps the times inside loopWindow of now.

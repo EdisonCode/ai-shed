@@ -261,3 +261,26 @@ func TestEyesSignalOfAnOlderFleetFileGetsThePhrasesForABlockedLook(t *testing.T)
 		t.Fatalf("decision = %+v; only an eye check can be blocked", cfg.Signals[1])
 	}
 }
+
+func TestDecisionSignalGetsItsDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + "signals: [{name: decision, ask: \"Decisions needed:\", grace: 10m}, {name: eyes, ask: \"Needs eyes:\"}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := cfg.Signals[0]; d.GraceOrDefault() != 10*time.Minute || d.Risky != DefaultRisky || d.Decided != DefaultDecided {
+		t.Fatalf("decision = %+v", d)
+	}
+	if e := cfg.Signals[1]; e.GraceOrDefault() != 0 || e.Risky != "" {
+		t.Fatalf("eyes = %+v; only a decision has a grace period", e)
+	}
+	if d := DefaultSignals()[0]; d.GraceOrDefault() != DefaultGrace || d.Decided != DefaultDecided {
+		t.Fatalf("default decision = %+v", d)
+	}
+}
+
+func TestGraceMustBeADuration(t *testing.T) {
+	_, err := Parse([]byte(minimal + "signals: [{name: decision, ask: \"Decisions needed:\", grace: soon}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "grace") {
+		t.Fatalf("error = %v", err)
+	}
+}

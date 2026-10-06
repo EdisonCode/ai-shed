@@ -266,6 +266,80 @@ func Rework(issue Issue, signals []config.Signal) string {
 	return strings.Join(reasons, "; ")
 }
 
+// Ruled reports whether the owner answered a question of the issue's last
+// hand-back and no worker has handed back since: the answer waits for a
+// worker. Such an issue goes ahead of new work.
+func Ruled(issue Issue, signals []config.Signal) bool {
+	for _, s := range signals {
+		if !s.SendsBack || s.AnsweredBy == "" {
+			continue
+		}
+		question, last := -1, -1
+		for i, c := range issue.Comments {
+			body := strings.ToLower(c.Body)
+			if s.HandBack == "" || strings.Contains(body, strings.ToLower(s.HandBack)) {
+				last = i
+			}
+			if value, found := asked(body, s); found && !isClear(value, s.Clear) {
+				question = i
+			}
+		}
+		if answer := lastComment(issue, s.AnsweredBy); question >= 0 && answer > question && answer > last {
+			return true
+		}
+	}
+	return false
+}
+
+// Decided returns the choices a worker made by itself and recorded in the
+// issue's last hand-back, one per entry; nil for none.
+func Decided(issue Issue, signals []config.Signal) []string {
+	for _, s := range signals {
+		if s.Decided == "" {
+			continue
+		}
+		for i := len(issue.Comments) - 1; i >= 0; i-- {
+			body := issue.Comments[i].Body
+			if s.HandBack != "" && !strings.Contains(strings.ToLower(body), strings.ToLower(s.HandBack)) {
+				continue
+			}
+			return decidedIn(body, s)
+		}
+	}
+	return nil
+}
+
+// decidedIn reads the entries after the signal's Decided phrase: the rest of
+// its line, then the lines of the list that follows, up to an empty line or
+// the next of the hand-back's own headings ("**PR:**").
+func decidedIn(body string, s config.Signal) []string {
+	at := strings.Index(strings.ToLower(body), strings.ToLower(s.Decided))
+	if at < 0 {
+		return nil
+	}
+	var entries []string
+	for n, line := range strings.Split(body[at+len(s.Decided):], "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "*_"))
+		switch {
+		case line == "" && n == 0:
+			continue
+		case line == "" || strings.HasPrefix(line, "#") || headingRE.MatchString(line):
+			return entries
+		case n == 0 && isClear(strings.ToLower(line), s.Clear):
+			return nil
+		}
+		entries = append(entries, strings.TrimSpace(entryRE.ReplaceAllString(line, "")))
+	}
+	return entries
+}
+
+var (
+	// headingRE matches a line that opens another part of a hand-back, such
+	// as "PR:** #41" once the leading emphasis is cut.
+	headingRE = regexp.MustCompile(`^[A-Z][A-Za-z ]{1,30}:\*\*`)
+	entryRE   = regexp.MustCompile(`^([-*]|\d+[.)])\s+`)
+)
+
 // accepts reports whether an answer takes the work as it stands: the text
 // after the answering phrase starts with one of the signal's accept words.
 func accepts(body string, s config.Signal) bool {
