@@ -98,6 +98,18 @@ type Supervisor struct {
 	// replaced with the model's name.
 	ModelCommand string `yaml:"model_command"`
 	Models       Models `yaml:"models"`
+	// NoWorkAfter is how long a worker may have no work before the owner is
+	// told. Empty tells nobody.
+	NoWorkAfter string `yaml:"no_work_after"`
+	// LowQueue tells the owner when a queue has fewer issues than this that
+	// a worker can act on. 0 tells nobody.
+	LowQueue int `yaml:"low_queue"`
+}
+
+// NoWorkAfterOrZero is how long a worker may have no work before the owner
+// is told; 0 for never.
+func (s Supervisor) NoWorkAfterOrZero() time.Duration {
+	return durationOr(s.NoWorkAfter, 0)
 }
 
 // Models picks the model for an issue from its labels, so the cost of the
@@ -608,7 +620,10 @@ func (c *Config) validate() error {
 			checkSources(fmt.Sprintf("%s: worker %q", where, w.Name), w.Issues)
 		}
 	}
-	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery} {
+	if c.Supervisor.LowQueue < 0 {
+		fail("supervisor: low_queue must not be negative")
+	}
+	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery, "no_work_after": c.Supervisor.NoWorkAfter} {
 		if value == "" {
 			continue
 		}

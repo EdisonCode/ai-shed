@@ -147,6 +147,9 @@ type Supervisor struct {
 	lookError string
 	// blockedTold holds the blocked looks the owner was told of.
 	blockedTold map[string]bool
+	// lowTold holds the queues the owner was told are short, by their
+	// sources.
+	lowTold map[string]bool
 	// wasPaused is whether the last tick found the machine paused, so that
 	// a pause is logged when it starts and when it ends.
 	wasPaused bool
@@ -213,7 +216,11 @@ type workerState struct {
 	// and waiting is set while that mark says it waits for a person.
 	markSeen time.Time
 	waiting  bool
-	recent   []runlog.Checkin
+	// doneSince is when the worker was first found with nothing it can act
+	// on; zero while it has work. noWorkTold is set once the owner was told.
+	doneSince  time.Time
+	noWorkTold bool
+	recent     []runlog.Checkin
 }
 
 // handsOver reports whether a nudge that names this queue item gives the
@@ -221,6 +228,18 @@ type workerState struct {
 // eye check of work it built earlier and still has in hand is new work.
 func (st *workerState) handsOver(issue int, item QueueItem) bool {
 	return issue != 0 && (issue != st.issue || (item.Look != "") != st.look)
+}
+
+// noted keeps what a check-in says about how long the worker has had no
+// work. A check-in that says nothing new of the worker leaves it as it is.
+func (st *workerState) noted(c runlog.Checkin) {
+	switch {
+	case c.Verdict == runlog.VerdictDone && st.doneSince.IsZero():
+		st.doneSince = c.Time
+	case c.Verdict == runlog.VerdictDone, c.Kind == KindBrief, c.Kind == KindHook, c.Kind == KindError:
+	default:
+		st.doneSince, st.noWorkTold = time.Time{}, false
+	}
 }
 
 // lastVerdict is the verdict of the worker's latest check-in.
@@ -435,6 +454,7 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 			return err
 		}
 		st.lastQueueCheck = now
+		s.tellStarved(w, st, queue, now)
 		seen := fingerprint(queue)
 		// The owner did not answer in time: the issue in hand is parked, and
 		// the worker takes the next one.
@@ -566,6 +586,7 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	}
 	st.lastReview, st.reviewedActivity = now, obs.LastActivity
 	st.lastQueueCheck, st.queueSeen = now, fingerprint(queue)
+	s.tellStarved(w, st, queue, now)
 
 	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: verdict.Verdict, Reason: verdict.Reason,
 		Activity: obs.LastActivity, Queue: st.queueSeen}
@@ -926,6 +947,7 @@ func (s *Supervisor) recover(worker string) *workerState {
 			continue
 		}
 		st.recent = append(st.recent, c)
+		st.noted(c)
 		st.reviewerLimited = false
 		switch {
 		case c.Verdict == runlog.VerdictStarted:
@@ -1251,6 +1273,41 @@ func (s *Supervisor) tellBlocked(look looks.Look) {
 	}
 }
 
+// tellStarved tells the owner, once each, that a worker has had no work for
+// too long and that its queue is short. Neither stops anything, so nothing
+// else would say so while the laptop is closed. What was told is not kept
+// across a restart of the agent.
+func (s *Supervisor) tellStarved(w config.Worker, st *workerState, queue []QueueItem, now time.Time) {
+	if s.Notify == nil {
+		return
+	}
+	workable, waiting := 0, 0
+	for _, q := range queue {
+		switch {
+		case q.Workable():
+			workable++
+		case len(q.Waiting) > 0:
+			waiting++
+		}
+	}
+	if after := s.Settings.NoWorkAfterOrZero(); after > 0 && !st.noWorkTold && !st.doneSince.IsZero() && now.Sub(st.doneSince) >= after {
+		st.noWorkTold = true
+		s.Notify(w.Name, fmt.Sprintf("%s: worker %s has had no work for %s: %d issue(s) of its queue wait on you", s.Machine.Name, w.Name, spell(now.Sub(st.doneSince).Truncate(time.Minute)), waiting))
+	}
+	if s.Settings.LowQueue == 0 {
+		return
+	}
+	key := fmt.Sprint(s.Machine.SourcesFor(w))
+	low := workable < s.Settings.LowQueue
+	if low && !s.lowTold[key] {
+		s.Notify(w.Name, fmt.Sprintf("%s: the queue of worker %s has %d issue(s) a worker can act on, fewer than %d; %d wait on you", s.Machine.Name, w.Name, workable, s.Settings.LowQueue, waiting))
+	}
+	if s.lowTold == nil {
+		s.lowTold = map[string]bool{}
+	}
+	s.lowTold[key] = low
+}
+
 // find returns the queue item with this number.
 func find(queue []QueueItem, number int) (QueueItem, bool) {
 	for _, q := range queue {
@@ -1296,6 +1353,7 @@ func (s *Supervisor) record(st *workerState, c runlog.Checkin) {
 		s.Notify(c.Worker, fmt.Sprintf("%s: worker %s %s: %s", s.Machine.Name, c.Worker, phrase, c.Reason))
 	}
 	st.recent = append(st.recent, c)
+	st.noted(c)
 	if len(st.recent) > recentKept {
 		st.recent = st.recent[len(st.recent)-recentKept:]
 	}

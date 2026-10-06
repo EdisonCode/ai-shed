@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -785,5 +786,45 @@ func TestDraftOnPurposeIsShownAndAsksNothing(t *testing.T) {
 	Render(&out, []MachineReport{r}, nil)
 	if want := "(draft #41 (waits for #40 to merge))"; !strings.Contains(out.String(), want) || strings.Contains(out.String(), "Waiting on you") {
 		t.Fatalf("output lacks %q, or counts the draft as waiting:\n%s", want, out.String())
+	}
+}
+
+func TestStatusSaysInOneLineHowManyWorkersHaveNoWorkAndWhy(t *testing.T) {
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app"}, {Name: "docs"}, {Name: "api"}}}
+	res := healthy()
+	done := func(worker string) runlog.Checkin {
+		return runlog.Checkin{Time: now.Add(-time.Hour), Worker: worker, Kind: "idle", Verdict: runlog.VerdictDone, Reason: "nothing workable"}
+	}
+	res.Checkins = []runlog.Checkin{done("app"), done("docs"), {Time: now.Add(-time.Minute), Worker: "api", Kind: "scope", Verdict: runlog.VerdictOnTrack}}
+	asked := issue(7)
+	asked.Comments = []backlog.Comment{{Body: "## Hand-back\nDecisions needed: 1. which one?", CreatedAt: now.Add(-27 * time.Hour)}}
+
+	r := Assess(m, signals, now, res, []backlog.Issue{asked})
+	wantAttention(t, r, "2 of 3 workers have no work: every queued issue waits on you (oldest 27h)", "org/app#7 waits on you")
+
+	// A queue that is simply empty is not the owner's backlog.
+	wantAttention(t, Assess(m, signals, now, res, nil))
+}
+
+func TestDigestTotalsIdleWorkerHoursByCause(t *testing.T) {
+	at := func(ago time.Duration, worker, kind, verdict string) runlog.Checkin {
+		return runlog.Checkin{Time: now.Add(-ago), Worker: worker, Kind: kind, Verdict: verdict}
+	}
+	idle := runlog.IdleByCause([]runlog.Checkin{
+		at(30*time.Hour, "app", "idle", runlog.VerdictDone), // only the 24 hours of the window count
+		at(4*time.Hour, "docs", "idle", runlog.VerdictNudge),
+		at(3*time.Hour, "docs", "idle", runlog.VerdictToolError),
+		at(2*time.Hour, "docs", "retry", runlog.VerdictNudge),
+		at(time.Hour, "docs", "idle", runlog.VerdictNeedsOwner),
+	}, now.Add(-24*time.Hour), now)
+	want := map[string]time.Duration{runlog.IdleNoWork: 24 * time.Hour, runlog.IdleToolError: time.Hour, runlog.IdleOwner: time.Hour}
+	if !maps.Equal(idle, want) {
+		t.Fatalf("idle = %v, want %v", idle, want)
+	}
+
+	var out bytes.Buffer
+	RenderDigest(&out, Digest{Since: now.Add(-24 * time.Hour), Now: now, IdleHours: map[string]float64{runlog.IdleNoWork: 24, runlog.IdleToolError: 1, runlog.IdleOwner: 1}})
+	if want := "Idle worker-hours: no work 24.0h, tool error 1.0h, waits on you 1.0h\n"; !strings.Contains(out.String(), want) {
+		t.Fatalf("digest lacks %q:\n%s", want, out.String())
 	}
 }

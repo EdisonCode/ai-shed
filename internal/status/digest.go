@@ -11,6 +11,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/looks"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
 // MergedLister lists a repository's pull requests merged after a time.
@@ -27,6 +28,9 @@ type Digest struct {
 	Merged []RepoMerged `json:"merged"`
 	// Report is the state now: machines, and each repository's release state.
 	Report Report `json:"report"`
+	// IdleHours is how long the workers were idle in the window, in worker-
+	// hours by cause, as far back as each machine's check-in log reaches.
+	IdleHours map[string]float64 `json:"idle_hours,omitempty"`
 	// Problems lists what could not be read.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -42,6 +46,17 @@ type RepoMerged struct {
 // every repository a machine takes issues from.
 func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged MergedLister, since, now time.Time) Digest {
 	d := Digest{Since: since, Now: now, Report: c.CollectAll(ctx, cfg), Merged: []RepoMerged{}}
+	for _, m := range d.Report.Machines {
+		if m.Probe == nil {
+			continue
+		}
+		for cause, idle := range runlog.IdleByCause(m.Probe.Checkins, since, m.Probe.Now) {
+			if d.IdleHours == nil {
+				d.IdleHours = map[string]float64{}
+			}
+			d.IdleHours[cause] += idle.Hours()
+		}
+	}
 	var repos []string
 	for _, m := range cfg.Machines {
 		for _, src := range m.AllSources() {
@@ -89,6 +104,17 @@ func RenderDigest(w io.Writer, d Digest) {
 		}
 	}
 	tw.Flush()
+
+	// What the idle time was lost to: each cause has its own remedy.
+	var idle []string
+	for _, cause := range runlog.IdleCauses {
+		if hours := d.IdleHours[cause]; hours >= 0.05 {
+			idle = append(idle, fmt.Sprintf("%s %.1fh", cause, hours))
+		}
+	}
+	if len(idle) > 0 {
+		fmt.Fprintf(w, "\nIdle worker-hours: %s\n", strings.Join(idle, ", "))
+	}
 
 	for _, r := range d.Report.Repos {
 		fmt.Fprintf(w, "\nEye checks: %s\n", r.Repo)
@@ -170,7 +196,7 @@ func RenderDigest(w io.Writer, d Digest) {
 	var other []string
 	for _, m := range d.Report.Machines {
 		for _, a := range m.Attention {
-			if !strings.Contains(a, " waits on you (") {
+			if !strings.Contains(a, " waits on you (") || strings.Contains(a, "have no work") {
 				other = append(other, m.Name+": "+a)
 			}
 		}

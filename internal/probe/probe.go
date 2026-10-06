@@ -74,7 +74,7 @@ const footer = `tmux list-windows -a -F '@@win|#{window_activity}|#{session_name
 s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.HeartbeatFile + `" ] && echo "@@heartbeat $(cat "$s/` + runlog.HeartbeatFile + `")"
 [ -f "$s/` + runlog.RunsFile + `" ] && tail -n 200 "$s/` + runlog.RunsFile + `" | sed 's/^/@@run /'
-[ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 100 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
+[ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 500 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
 [ -d "$s/` + runlog.RecycleDir + `" ] && ls "$s/` + runlog.RecycleDir + `" | sed 's/^/@@recycle /'
 for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(basename "$(dirname "$f")") $(basename "$f" .md)"; done
 [ -f "$s/` + runlog.PauseFile + `" ] && echo "@@pause $(cat "$s/` + runlog.PauseFile + `")"

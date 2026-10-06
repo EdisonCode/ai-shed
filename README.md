@@ -658,6 +658,8 @@ supervisor:
   when_cold: clear                    # or: resume
   clear_command: /clear               # typed into a worker to empty its context
   model_command: "/model {model}"     # typed into a worker to switch model
+  no_work_after: 30m                  # optional: notify when a worker has had no work this long
+  low_queue: 3                        # optional: notify when a queue has fewer workable issues
 ```
 
 For another agent tool, set the worker's `command`, the reviewer's `command`,
@@ -673,6 +675,7 @@ and the two typed commands to what that tool understands.
 | check failed | a readiness check (auth, config, a tool) exited non-zero |
 | disk is N% full | 90% or more of the home filesystem is used |
 | agent is not running | the machine has tasks or workers but no fresh heartbeat (3 minutes) |
+| workers have no work | workers rest with nothing they can act on while issues of the queue wait on you: `2 of 3 workers have no work: every queued issue waits on you (oldest 27h)`. It is the first line of the machine |
 | worker needs you | the last check-in ended with `needs_owner` |
 | worker is stuck | nudges or restarts did not get it moving |
 | worker could not be checked | the check-in itself failed |
@@ -964,6 +967,8 @@ Eye checks: my-org/my-app
     #123  PR #131  passed  3h ago  Retry the export when the API times out
     #125  PR #138  FAILED  1h ago  Paginate the audit log
 
+Idle worker-hours: no work 6.5h, tool error 0.3h, waits on you 2.0h
+
 Waiting on you: 2
   30h  decision     my-org/my-app#124  Drop the legacy column
   2h   review #141  my-org/my-app#130  Split the importer
@@ -971,6 +976,11 @@ Waiting on you: 2
 Also needs you: 1
   ! mac-mini: unreachable: me@mac-mini: exit status 255: Operation timed out
 ```
+
+`Idle worker-hours` totals the time workers spent not working in the window,
+by cause: no work in the queue, an error of the tool, waiting on you, a usage
+limit. It is read from the last 500 check-ins of each machine, so on a busy
+fleet it may reach back less far than the window.
 
 It changes nothing and exits 1 when something needs you. To get it every
 morning, run it from a scheduler on the watcher and send the output wherever
@@ -1002,6 +1012,12 @@ defaults:
 The message is in `SHED_MESSAGE`; `SHED_MACHINE` and `SHED_WORKER` say where
 it came from. It runs once when the state begins, not while it lasts. A usage
 limit, a nudge and a finished queue do not notify.
+
+Idle workers stop nothing, so by default nobody hears of them. Two settings
+under `supervisor` change that: `no_work_after: 30m` notifies when a worker
+has had nothing it can act on for that long, and `low_queue: 3` when a queue
+has fewer issues than that for a worker to act on. Each says how many issues
+of the queue wait on you.
 
 ### Scheduled tasks
 

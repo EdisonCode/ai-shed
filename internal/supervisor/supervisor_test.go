@@ -2449,3 +2449,40 @@ func TestBriefTellsAWorkerHowToSayABacklogIssueIsNotReady(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnerIsToldOnceWhenAWorkerHasHadNoWorkForTooLong(t *testing.T) {
+	f := started(t, config.Supervisor{NoWorkAfter: "30m"}, Verdict{Verdict: runlog.VerdictDone, Reason: "every item waits on the owner"})
+	f.lister.issues = []backlog.Issue{asksADecision(12, t0.Add(-time.Hour))}
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+
+	f.tick(2 * time.Minute) // found with nothing to do
+	f.tick(20 * time.Minute)
+	if len(notes) != 0 {
+		t.Fatalf("notifications = %q before the time set", notes)
+	}
+	f.tick(15 * time.Minute)
+	f.tick(15 * time.Minute)
+	if want := []string{"box: worker app has had no work for 35m: 1 issue(s) of its queue wait on you"}; !slices.Equal(notes, want) {
+		t.Fatalf("notifications = %q, want %q", notes, want)
+	}
+}
+
+func TestOwnerIsToldOnceWhenAQueueRunsShort(t *testing.T) {
+	f := started(t, config.Supervisor{LowQueue: 2}, onTrack)
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(13), asksADecision(14, t0)}
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+
+	f.tick(2 * time.Minute)
+	if len(notes) != 0 {
+		t.Fatalf("notifications = %q with two issues to work", notes)
+	}
+	f.lister.issues = f.lister.issues[1:]
+	for range 3 {
+		f.tick(queueRecheck)
+	}
+	if want := []string{"box: the queue of worker app has 1 issue(s) a worker can act on, fewer than 2; 1 wait on you"}; !slices.Equal(notes, want) {
+		t.Fatalf("notifications = %q, want %q", notes, want)
+	}
+}

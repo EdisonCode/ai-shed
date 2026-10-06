@@ -422,12 +422,51 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		}
 		report.Issues = append(report.Issues, st)
 	}
+	if line := noWork(report, now); line != "" {
+		// It goes above the rest: it is why the other lines matter.
+		report.Attention = append([]string{line}, report.Attention...)
+	}
 	// On a machine with supervised workers the supervisor hands out the
 	// queue, and says so when it cannot.
 	if res != nil && queued > 0 && working == 0 && len(m.Workers) == 0 {
 		attend("%d issue(s) queued and no worker is running", queued)
 	}
 	return report
+}
+
+// noWork says how many of the machine's workers have nothing to do because
+// of what waits on the owner, as in "5 of 8 workers have no work: every
+// queued issue waits on you (oldest 27h)". "" when no worker is idle for
+// that reason: an empty queue is not the owner's backlog.
+func noWork(r MachineReport, now time.Time) string {
+	idle := 0
+	for _, w := range r.Workers {
+		if w.Last != nil && w.Last.Verdict == runlog.VerdictDone && w.Task == "" {
+			idle++
+		}
+	}
+	waiting, oldest := 0, time.Duration(0)
+	for _, i := range r.Issues {
+		if len(i.Asks) > 0 {
+			waiting++
+		}
+		for _, a := range i.Asks {
+			if !a.Since.IsZero() {
+				oldest = max(oldest, now.Sub(a.Since))
+			}
+		}
+	}
+	if idle == 0 || waiting == 0 {
+		return ""
+	}
+	why := fmt.Sprintf("%d of the %d queued issues wait on you", waiting, len(r.Issues))
+	if waiting == len(r.Issues) {
+		why = "every queued issue waits on you"
+	}
+	if oldest > 0 {
+		why += fmt.Sprintf(" (oldest %s)", Short(oldest))
+	}
+	return fmt.Sprintf("%d of %d workers have no work: %s", idle, len(r.Workers), why)
 }
 
 // askWords says what an issue asks of the owner and for how long, as in

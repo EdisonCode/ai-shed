@@ -124,6 +124,11 @@ machines:
 # Optional. How the agent supervises workers. These are the defaults, except
 # `models`, which is off unless you set it.
 supervisor:
+  # Optional. Tell me (see defaults.notify) when a worker has had nothing it
+  # can act on for this long, and when a queue has fewer issues than this
+  # for a worker to act on.
+  # no_work_after: 30m
+  # low_queue: 3
   # The reviewer: any command that reads a prompt on stdin and prints an answer.
   command: claude -p --model sonnet
   # How long a worker's prompt cache stays warm on your plan. shed cannot see

@@ -173,6 +173,61 @@ func ReadCheckins(dir string) ([]Checkin, error) {
 	return checkins, nil
 }
 
+// Why a worker is idle, as shed digest totals it.
+const (
+	IdleNoWork    = "no work"
+	IdleToolError = "tool error"
+	IdleOwner     = "waits on you"
+	IdleLimit     = "usage limit"
+)
+
+// IdleCauses lists the causes in the order they are reported.
+var IdleCauses = []string{IdleNoWork, IdleToolError, IdleOwner, IdleLimit}
+
+// idleCause says why the worker was idle after this check-in; "" when it
+// was working, or was about to.
+func idleCause(c Checkin) string {
+	switch {
+	case c.Verdict == VerdictDone:
+		return IdleNoWork
+	case c.Verdict == VerdictToolError, c.Kind == "retry" && c.Verdict == VerdictNeedsOwner:
+		return IdleToolError
+	case c.Verdict == VerdictNeedsOwner, c.Verdict == VerdictStuck:
+		return IdleOwner
+	case c.Verdict == VerdictLimited:
+		return IdleLimit
+	}
+	return ""
+}
+
+// IdleByCause totals how long the workers were idle between since and now,
+// by cause. A worker's state after a check-in lasts until its next one.
+// Check-ins are in log order. A log that starts after since says nothing of
+// the time before its first line.
+func IdleByCause(checkins []Checkin, since, now time.Time) map[string]time.Duration {
+	idle := map[string]time.Duration{}
+	last := map[string]Checkin{}
+	add := func(c Checkin, until time.Time) {
+		from := c.Time
+		if from.Before(since) {
+			from = since
+		}
+		if cause := idleCause(c); cause != "" && until.After(from) {
+			idle[cause] += until.Sub(from)
+		}
+	}
+	for _, c := range checkins {
+		if prev, ok := last[c.Worker]; ok {
+			add(prev, c.Time)
+		}
+		last[c.Worker] = c
+	}
+	for _, c := range last {
+		add(c, now)
+	}
+	return idle
+}
+
 // IssueInHand returns the issue the worker was last handed since its session
 // last started, or 0. Check-ins are in log order.
 func IssueInHand(checkins []Checkin, worker string) int {
