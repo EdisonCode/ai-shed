@@ -772,3 +772,18 @@ func TestChoicesAWorkerMadeAreShownAndAskNothing(t *testing.T) {
 		t.Fatalf("digest lacks %q:\n%s", want, out.String())
 	}
 }
+
+func TestDraftOnPurposeIsShownAndAsksNothing(t *testing.T) {
+	draft := issue(7, "## Hand-back\n**PR:** #41 (draft: waits for #40 to merge)")
+	draft.OpenPRs = map[int]backlog.PR{41: {Draft: true}}
+	r := Assess(config.Machine{Name: "box"}, signals, now, healthy(), []backlog.Issue{draft})
+	wantAttention(t, r)
+	if r.Issues[0].State != Draft || len(r.Issues[0].Asks) != 0 {
+		t.Fatalf("issue = %+v, want a draft that asks nothing", r.Issues[0])
+	}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	if want := "(draft #41 (waits for #40 to merge))"; !strings.Contains(out.String(), want) || strings.Contains(out.String(), "Waiting on you") {
+		t.Fatalf("output lacks %q, or counts the draft as waiting:\n%s", want, out.String())
+	}
+}

@@ -21,11 +21,12 @@ decision that is really the owner's, and even then it takes other work.
 **Tests**: config validation, queue order, claim, not-ready pass and its cap.
 **Status**: Complete
 
-## Stage 4: Waits that do not hold a worker, and no finished work handed out
-**Goal**: A draft that says what it waits for is not a review for the owner; a pull request that conflicts reads `rework`, not `eyes`; an issue whose pull request merged after its last hand-back is not handed out as new work.
-**Success Criteria**: Each case has a test in backlog or supervisor and shows correctly in `shed status`.
-**Tests**: backlog signal states, queue contents, status rendering.
-**Status**: Not Started
+## Stage 4: Waits that do not hold a worker
+**Goal**: A draft that says what it waits for is not a review for the owner; a pull request that conflicts reads `rework`, not `eyes`, also when the hand-back named a merged pull request before it.
+**Success Criteria**: Each case has a test in backlog and shows correctly in `shed status`.
+**Tests**: backlog signal states, status rendering.
+**Status**: Complete
+**Left for the owner to rule on**: whether an open issue whose pull request merged is finished (not handed out) or has more parts (handed out, as the README says today); whether a worker with an open pull request continues on a stacked branch.
 
 ## Stage 5: Say that the fleet is starved
 **Goal**: One `!` line per machine that says how many workers have no work and why; a notification when a worker has had no work for a set time or the workable queue is short; idle worker-hours by cause in `shed digest`.

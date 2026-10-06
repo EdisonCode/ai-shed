@@ -35,6 +35,8 @@ type PR struct {
 	// Problem says why the pull request cannot merge as it stands, for
 	// example "conflicts with the base branch". Empty when nothing is wrong.
 	Problem string
+	// Draft is set while the pull request is a draft.
+	Draft bool
 }
 
 type Label struct {
@@ -158,7 +160,7 @@ func (GH) Claim(ctx context.Context, repo string, number int, label string) erro
 
 func openPRs(ctx context.Context, repo string) (map[int]PR, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000",
-		"--json", "number,mergeable,statusCheckRollup")
+		"--json", "number,mergeable,isDraft,statusCheckRollup")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -181,6 +183,7 @@ func parsePRs(data []byte) (map[int]PR, error) {
 	var prs []struct {
 		Number    int     `json:"number"`
 		Mergeable string  `json:"mergeable"`
+		Draft     bool    `json:"isDraft"`
 		Checks    []check `json:"statusCheckRollup"`
 	}
 	if err := json.Unmarshal(data, &prs); err != nil {
@@ -188,7 +191,7 @@ func parsePRs(data []byte) (map[int]PR, error) {
 	}
 	open := make(map[int]PR, len(prs))
 	for _, pr := range prs {
-		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks)}
+		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks), Draft: pr.Draft}
 	}
 	return open, nil
 }
@@ -233,11 +236,17 @@ type Ask struct {
 	// NoPR is set when a follows_pr signal is open and its ask named no pull
 	// request. No merge can close such an ask.
 	NoPR bool `json:"no_pr,omitempty"`
+	// WaitsFor is set when the pull request is a draft on purpose: the
+	// hand-back says what it waits for, as in "#41 (draft: waits for #40)".
+	// Such a pull request is not ready for the owner to review.
+	WaitsFor string `json:"waits_for,omitempty"`
 }
 
 // What names the ask and the pull request it waits on, as in "review #41".
 func (a Ask) What() string {
 	switch {
+	case a.WaitsFor != "":
+		return fmt.Sprintf("draft #%d (%s)", a.PR, a.WaitsFor)
 	case a.PR != 0:
 		return fmt.Sprintf("%s #%d", a.Name, a.PR)
 	case a.NoPR:
@@ -252,13 +261,16 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 	rework := Rework(issue, signals) != ""
 	var asks []Ask
 	for _, s := range signals {
-		isOpen, pr, since := signalState(issue, s)
+		isOpen, pr, since, line := signalState(issue, s)
 		if !isOpen || (rework && !s.SendsBack) {
 			continue
 		}
 		ask := Ask{Name: s.Name, Since: since}
 		if s.FollowsPR {
 			ask.PR, ask.NoPR = pr, pr == 0
+			if issue.OpenPRs[pr].Draft {
+				ask.WaitsFor = draftNote(line)
+			}
 		}
 		asks = append(asks, ask)
 	}
@@ -377,6 +389,13 @@ func accepts(body string, s config.Signal) bool {
 // lastHandBack returns the position of the last comment in which a worker
 // handed back a pull request, and that pull request's number; -1 for none.
 func lastHandBack(issue Issue, signals []config.Signal) (index, pr int) {
+	index, pr, _ = handBack(issue, signals)
+	return index, pr
+}
+
+// handBack is lastHandBack that also returns the first pull request the
+// hand-back named, which may have merged while a later one is still open.
+func handBack(issue Issue, signals []config.Signal) (index, pr, first int) {
 	index = -1
 	for _, s := range signals {
 		if !s.FollowsPR {
@@ -384,13 +403,13 @@ func lastHandBack(issue Issue, signals []config.Signal) (index, pr int) {
 		}
 		for i, c := range issue.Comments {
 			if value, found := asked(strings.ToLower(c.Body), s); found && i >= index {
-				if n := prNumber(value); n != 0 {
-					index, pr = i, n
+				if n := openPR(issue, value); n != 0 {
+					index, pr, first = i, n, prNumbers(value)[0]
 				}
 			}
 		}
 	}
-	return index, pr
+	return index, pr, first
 }
 
 // lastComment returns the position of the last comment that has the phrase;
@@ -406,8 +425,10 @@ func lastComment(issue Issue, phrase string) int {
 }
 
 // signalState reports whether the signal is open on the issue, the pull
-// request its last ask named (0 for none), and when that ask was made.
-func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Time) {
+// request its last ask named (0 for none), when that ask was made, and the
+// line that named the pull request, as the worker wrote it. An ask may name
+// several pull requests: the one that counts is the first that is still open.
+func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Time, line string) {
 	for _, c := range issue.Comments {
 		body := strings.ToLower(c.Body)
 		// The answer is tested first: a comment that both cites an earlier
@@ -416,7 +437,8 @@ func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Ti
 			open = false
 		}
 		if value, found := asked(body, s); found {
-			open, pr, since = !isClear(value, s.Clear), prNumber(value), c.CreatedAt
+			open, pr, since = !isClear(value, s.Clear), openPR(issue, value), c.CreatedAt
+			line, _ = noteAfter(c.Body, s.Ask)
 		}
 		// A check that was done and failed is not asked for any more. It is
 		// tested last: the comment that reports it may repeat the ask.
@@ -428,23 +450,53 @@ func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Ti
 	// merged or closed.
 	if open && s.FollowsPR && pr != 0 && issue.OpenPRs != nil {
 		if _, stillOpen := issue.OpenPRs[pr]; !stillOpen {
-			return false, pr, since
+			return false, pr, since, line
 		}
 	}
-	return open, pr, since
+	return open, pr, since, line
+}
+
+var draftRE = regexp.MustCompile(`(?i)\(draft\b[\s:,;-]*([^)]*)\)`)
+
+// draftNote returns what a hand-back says its draft pull request waits for:
+// the words after "draft" in the brackets that follow the number. "" when it
+// says nothing, which leaves the draft a review like any other.
+func draftNote(line string) string {
+	if m := draftRE.FindStringSubmatch(line); m != nil {
+		return strings.TrimSpace(m[1])
+	}
+	return ""
 }
 
 var prRE = regexp.MustCompile(`#(\d+)`)
 
-// prNumber returns the pull request named on the first line of the text, or 0.
-func prNumber(value string) int {
+// prNumbers returns the pull requests named on the first line of the text.
+func prNumbers(value string) []int {
 	line, _, _ := strings.Cut(value, "\n")
-	m := prRE.FindStringSubmatch(line)
-	if m == nil {
+	var numbers []int
+	for _, m := range prRE.FindAllStringSubmatch(line, -1) {
+		if n, _ := strconv.Atoi(m[1]); n != 0 {
+			numbers = append(numbers, n)
+		}
+	}
+	return numbers
+}
+
+// openPR returns the pull request that the first line of the text hands
+// back: the first it names that is still open, or the first it names when
+// none is, or 0. A hand-back may name the part that merged and the part
+// that is still to be reviewed on one line.
+func openPR(issue Issue, value string) int {
+	numbers := prNumbers(value)
+	for _, n := range numbers {
+		if _, open := issue.OpenPRs[n]; open {
+			return n
+		}
+	}
+	if len(numbers) == 0 {
 		return 0
 	}
-	n, _ := strconv.Atoi(m[1])
-	return n
+	return numbers[0]
 }
 
 // asked returns what follows the signal's ask in a comment. The ask counts
@@ -494,7 +546,9 @@ const (
 // the pull request of the last hand-back, since is when the state began, and
 // note is what stopped a blocked look.
 func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since time.Time, note string) {
-	_, pr = lastHandBack(issue, signals)
+	// The look is of work that merged: the first pull request the hand-back
+	// named, whatever else it has open.
+	_, _, pr = handBack(issue, signals)
 	if pr == 0 {
 		return "", 0, time.Time{}, ""
 	}

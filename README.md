@@ -712,6 +712,18 @@ The review signal follows its pull request (`follows_pr`). An issue that takes
 several pull requests comes back into the queue each time one is merged, and
 the worker picks up the rest from what the issue says.
 
+A hand-back may name two pull requests on its `**PR:**` line, the part that
+merged and the part that is still open: `#41 (backend, merged) and #42
+(frontend, ready)`. The review, and a conflict or a failed check, follow the
+first one that is still open. The eye check is of the first one named.
+
+A draft that is a draft on purpose says what it waits for, in the brackets
+after its number: `**PR:** #41 (draft: waits for #40 to merge)`. While that
+pull request is a draft on GitHub it is not yours to review: the issue shows
+as `draft` with those words, puts no `!` line on the machine and is not
+counted in `Waiting on you`. A draft that gives no reason is a review like
+any other, and so is one that was marked ready since.
+
 A hand-back with no pull request, such as a plan for you to rule on, writes
 `**PR:** none`: there is nothing to review, so the review signal stays closed.
 Your `Owner ruling` then closes the decision and the issue is in the queue

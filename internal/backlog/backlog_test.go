@@ -388,3 +388,45 @@ func TestIssueAWorkerFoundNotReadyWaitsOnTheOwnerUntilTheySayItIs(t *testing.T) 
 		t.Fatalf("waiting = %v, want nothing after the owner's word", got)
 	}
 }
+
+func TestHandBackThatNamesTwoPullRequestsFollowsTheOneThatIsOpen(t *testing.T) {
+	issue := Issue{
+		Comments: []Comment{{Body: "## Hand-back\n**PR:** #41 (backend, merged) and #42 (frontend, ready)\n**Needs eyes:** open /orders"}},
+		OpenPRs:  map[int]PR{42: {Problem: "conflicts with the base branch"}},
+	}
+	if got := Rework(issue, config.DefaultSignals()); got != "pull request #42 conflicts with the base branch" {
+		t.Fatalf("rework = %q, want the open pull request sent back", got)
+	}
+	if got := Waiting(issue, config.DefaultSignals()); len(got) != 0 {
+		t.Fatalf("waiting = %v; a look at work that is about to change is not asked for", got)
+	}
+
+	issue.OpenPRs = map[int]PR{42: {}}
+	if asks := Asks(issue, config.DefaultSignals()); len(asks) != 2 || asks[1].What() != "review #42" {
+		t.Fatalf("asks = %+v, want the review of the open pull request", asks)
+	}
+	if state, pr, _, _ := EyeCheck(issue, config.DefaultSignals()); state != EyesAsked || pr != 41 {
+		t.Fatalf("eye check = %s of #%d, want the look at the merged #41", state, pr)
+	}
+}
+
+func TestDraftThatSaysWhatItWaitsForIsNotAReviewYet(t *testing.T) {
+	cases := []struct {
+		name, line string
+		pr         PR
+		want       string
+	}{
+		{"a draft on purpose", "#41 (draft: waits for #40 to merge)", PR{Draft: true}, "draft #41 (waits for #40 to merge)"},
+		{"a draft that gives no reason", "#41 (draft)", PR{Draft: true}, "review #41"},
+		{"marked ready since the hand-back", "#41 (draft: waits for #40 to merge)", PR{}, "review #41"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issue := Issue{Comments: []Comment{{Body: "## Hand-back\n**PR:** " + tc.line}}, OpenPRs: map[int]PR{41: tc.pr}}
+			asks := Asks(issue, config.DefaultSignals())
+			if len(asks) != 1 || asks[0].What() != tc.want {
+				t.Fatalf("asks = %+v, want %q", asks, tc.want)
+			}
+		})
+	}
+}

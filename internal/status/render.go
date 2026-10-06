@@ -220,6 +220,9 @@ func renderMachine(w io.Writer, r MachineReport) {
 			if i.Rework != "" {
 				title += " (" + i.Rework + ")"
 			}
+			for _, d := range i.Drafts {
+				title += " (" + d.What() + ")"
+			}
 			fmt.Fprintf(tw, "    %s#%d\t%s\t%s\t%s\n", i.Repo, i.Number, state, i.Worker, title)
 		}
 		tw.Flush()
