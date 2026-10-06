@@ -64,6 +64,11 @@ type QueueItem struct {
 	// Bumped is set when the owner put the issue first in line with
 	// `shed bump`. It may come from another worker's queue.
 	Bumped bool
+	// Backfill is set when the issue is in no queue yet: it comes from a
+	// backfill source, and claim is the label that puts it in this worker's
+	// queue when it is handed over.
+	Backfill bool
+	claim    string
 	// rank is the issue's place in its source's priority order.
 	rank int
 }
@@ -134,6 +139,7 @@ Rules for the message of a nudge:
 - A worker that was sent back to an item and says nothing needs to change has not finished until it hands back again. If its terminal does not show a new hand-back, tell it once to post a new hand-back that says so. Do not tell it to look for changes to make.
 - When <in_hand> shows a one-off task from the owner, its brief is the owner's own words for that task. Work it covers is in scope even where the worker's brief does not cover it. Judge the worker against it until the task is done and its report is written. Then hand over the first workable queue item, or choose done.
 - An item marked as put first by the owner is the owner's direct order, and may come from another worker's queue. It is in scope for this worker even where its brief does not cover it. When it is workable, hand it over before any other item.
+- An item marked backlog comes from the owner's reserve of issues. It is shown only when the queue has nothing else the worker can act on, so that the worker is never idle beside open work. It is workable and in scope for this worker even where its brief does not cover it: hand it over like any other item. The worker first checks that the issue is ready to be worked, and its brief says what to do when it is not.
 - Keep the worker inside its brief. Work that the brief does not cover is out of scope, however useful.
 - The Choices section of the brief says which choices are risky. Do not make a risky choice for the owner, and neither may the worker: it writes the question and its recommendation in the issue.
 - A worker that stopped on a choice the brief does not name as risky stopped for nothing. Tell it once: this is a safe default, take the conservative option, record it in the hand-back as the brief says, and go on.
@@ -174,6 +180,9 @@ func Prompt(in ReviewInput) string {
 		}
 		if q.Look != "" {
 			fmt.Fprintf(&b, " [eye check: %s]", q.Look)
+		}
+		if q.Backfill {
+			b.WriteString(" [backlog]")
 		}
 		if q.Ruled && q.Workable() {
 			b.WriteString(" [the owner answered its question: the answer is in the issue]")

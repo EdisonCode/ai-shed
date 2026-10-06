@@ -376,3 +376,15 @@ func TestChoicesAWorkerMadeDoNotHoldAnIssue(t *testing.T) {
 		t.Fatalf("waiting = %v, want nothing", got)
 	}
 }
+
+func TestIssueAWorkerFoundNotReadyWaitsOnTheOwnerUntilTheySayItIs(t *testing.T) {
+	notReady := "## Hand-back\n**PR:** none\n**Not ready:** it names no acceptance a worker can test."
+	issue := Issue{Comments: []Comment{{Body: notReady}}}
+	if got := Waiting(issue, config.DefaultSignals()); !slices.Equal(got, []string{"ready"}) {
+		t.Fatalf("waiting = %v, want ready", got)
+	}
+	issue.Comments = append(issue.Comments, Comment{Body: "Ready now: acceptance added."})
+	if got := Waiting(issue, config.DefaultSignals()); len(got) != 0 {
+		t.Fatalf("waiting = %v, want nothing after the owner's word", got)
+	}
+}

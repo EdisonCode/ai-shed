@@ -177,6 +177,49 @@ to look, before it starts an issue, for an open pull request or an unmerged
 branch that already covers it. If it finds one that it was not sent back to,
 it does not start: it reports the overlap in the issue as a decision for you.
 
+### A queue that cannot run dry
+
+A queue is what somebody labelled. When each of those issues waits on you,
+the workers have nothing, however long the backlog is. A `backfill` source is
+a reserve for that case:
+
+```yaml
+machines:
+  - name: linux-box
+    issues:
+      - repo: my-org/my-app
+        label: "machine:linux-box"
+      - repo: my-org/my-app
+        query: 'label:"priority: P1" no:assignee'
+        backfill: true
+        priority: ["urgent"]
+```
+
+- `query` is a GitHub issue search. A source may have one in place of a
+  label, with or without `backfill`.
+- The reserve is listed only when the sources beside it have nothing the
+  worker can act on. Its issues come after everything else, in its own
+  `priority` order and then oldest first. `shed status` does not list them.
+- An issue that is handed over gets the label of the first labelled source
+  of the same repository in that list, here `machine:linux-box`. That is the
+  one thing shed changes on GitHub. From then on the issue is in the
+  machine's queue like one you labelled, and it shows in `shed status`. An
+  issue that carries the queue label of any machine in the fleet file is
+  never taken, so two machines can share one `query`. A backfill source
+  needs such a labelled source beside it.
+- Nobody prepared a backlog issue for a worker. The worker is told to check
+  first that it says the goal or the root cause and has acceptance it can
+  test. If not, it changes nothing and posts a hand-back with `Not ready:`
+  and what is missing. That opens the `ready` signal: the issue waits on
+  you, and no worker is handed it until you fill it in and comment
+  `Ready now`.
+- A worker takes at most four backlog issues in an hour. Real work takes
+  longer than that allows; a run of issues that are not ready must not cost
+  a review each, all night.
+- The worker's brief still names what it works on. A backlog issue is in
+  scope for the worker that is handed it even where the brief does not cover
+  it, as a bumped issue is; your standing orders hold.
+
 ### Choices: yours and the worker's
 
 Nobody answers while a worker works, so a choice must not stop it unless the
@@ -657,6 +700,7 @@ hand-back: a comment that contains the word `Hand-back` (configurable as
 | decision | `Decisions needed:` | `none` | `Owner ruling` (and sends the issue back to a worker, unless it reads `Owner ruling: accepted`) |
 | eyes | `Needs eyes:` | `nothing`, `none` | `Eyes checked`, or `Eyes failed` from a worker that looked on staging |
 | review | `**PR:** #41` | `none` | that pull request is merged or closed |
+| ready | `Not ready:` | `none` | `Ready now` |
 
 `Decided without you:` in a hand-back is no signal: it tells you what a
 worker chose and asks nothing.

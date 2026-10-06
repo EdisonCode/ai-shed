@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"duplicate task", minimal + "    tasks:\n      - {name: t, schedule: '@daily', run: 'true'}\n      - {name: t, schedule: '@daily', run: 'true'}\n", "duplicate task"},
 		{"bad timeout", minimal + "    tasks:\n      - {name: t, schedule: '@daily', run: 'true', timeout: soon}\n", "timeout"},
 		{"bad repo", minimal + "    issues:\n      - {repo: app, label: x}\n", "owner/name"},
-		{"issue source without filter", minimal + "    issues:\n      - {repo: org/app}\n", "label or an assignee"},
+		{"issue source without filter", minimal + "    issues:\n      - {repo: org/app}\n", "needs a label, an assignee or a query"},
 		{"check without run", minimal + "    checks:\n      - {name: c}\n", "name and run"},
 		{"worker without dir", minimal + "    workers:\n      - {name: w, brief: do it}\n", "has no dir"},
 		{"worker without brief", minimal + "    workers:\n      - {name: w, dir: /tmp}\n", "has no brief"},
@@ -281,6 +282,44 @@ func TestDecisionSignalGetsItsDefaults(t *testing.T) {
 func TestGraceMustBeADuration(t *testing.T) {
 	_, err := Parse([]byte(minimal + "signals: [{name: decision, ask: \"Decisions needed:\", grace: soon}]\n"))
 	if err == nil || !strings.Contains(err.Error(), "grace") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+const withBackfillSource = `machines:
+  - name: box
+    host: local
+    issues:
+      - {repo: org/app, label: "machine:box"}
+      - {repo: org/app, query: "label:p1 no:assignee", backfill: true}
+  - name: other
+    host: local
+    issues: [{repo: org/app, label: "machine:other"}]
+`
+
+func TestBackfillSourceIsAReserveBesideTheQueue(t *testing.T) {
+	cfg, err := Parse([]byte(withBackfillSource + "signals: [{name: decision, ask: \"Decisions needed:\"}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, w := cfg.Machines[0], Worker{}
+	if q := m.SourcesFor(w); len(q) != 1 || q[0].Label != "machine:box" || len(m.AllSources()) != 1 {
+		t.Fatalf("queue = %+v, all = %+v; a backfill source is in neither", q, m.AllSources())
+	}
+	if b := m.BackfillFor(w); len(b) != 1 || b[0].Query != "label:p1 no:assignee" || m.ClaimLabel(w, "org/app") != "machine:box" {
+		t.Fatalf("backfill = %+v, claim label = %q", b, m.ClaimLabel(w, "org/app"))
+	}
+	if got := cfg.QueueLabels(); !slices.Equal(got, []string{"machine:box", "machine:other"}) {
+		t.Fatalf("queue labels = %v", got)
+	}
+	if last := cfg.Signals[len(cfg.Signals)-1]; last.Name != ReadySignal {
+		t.Fatalf("signals = %+v; a fleet with a backfill source needs the ready signal", cfg.Signals)
+	}
+}
+
+func TestBackfillSourceNeedsALabelToMarkWhatItTakes(t *testing.T) {
+	_, err := Parse([]byte("machines:\n  - name: box\n    host: local\n    issues: [{repo: org/app, query: \"label:p1\", backfill: true}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "backfill source org/app needs a source with a label") {
 		t.Fatalf("error = %v", err)
 	}
 }

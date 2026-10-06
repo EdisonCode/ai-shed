@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -241,14 +242,33 @@ type IssueSource struct {
 	// worked before an issue with a later one or with none; within one
 	// priority the oldest issue goes first.
 	Priority []string `yaml:"priority"`
+	// Query is a GitHub issue search, such as `label:"priority: P1"
+	// no:assignee`. It selects issues nobody put in a queue by hand.
+	Query string `yaml:"query"`
+	// Backfill makes the source a reserve: an issue is taken from it only
+	// when the other sources of the list have nothing a worker can act on.
+	// An issue that is taken gets the label of the list's first labelled
+	// source of the same repository, and is in that queue from then on.
+	Backfill bool `yaml:"backfill"`
 }
 
 // IssueSourceKey says which issues a source selects. Two sources with the
 // same key list the same issues.
-type IssueSourceKey struct{ Repo, Label, Assignee string }
+type IssueSourceKey struct{ Repo, Label, Assignee, Query string }
 
 func (s IssueSource) Key() IssueSourceKey {
-	return IssueSourceKey{s.Repo, s.Label, s.Assignee}
+	return IssueSourceKey{s.Repo, s.Label, s.Assignee, s.Query}
+}
+
+// claimLabel is the label a backfill issue of this repository gets when a
+// worker with these sources takes it; "" when no source gives one.
+func claimLabel(sources []IssueSource, repo string) string {
+	for _, src := range sources {
+		if !src.Backfill && src.Repo == repo && src.Label != "" {
+			return src.Label
+		}
+	}
+	return ""
 }
 
 // Rank is the place of an issue with these labels in the source's priority
@@ -318,6 +338,14 @@ type Signal struct {
 	HandBack string `yaml:"-"`
 }
 
+// ReadySignal is the name of the signal a worker opens when an issue it took
+// from a backfill source does not say enough to be worked.
+const ReadySignal = "ready"
+
+func readySignal() Signal {
+	return Signal{Name: ReadySignal, Ask: "Not ready:", Clear: []string{"none"}, AnsweredBy: "Ready now"}
+}
+
 // DecisionSignal is the name of the signal that asks the owner to decide.
 const DecisionSignal = "decision"
 
@@ -370,6 +398,7 @@ func DefaultSignals() []Signal {
 		{Name: DecisionSignal, Ask: "Decisions needed:", Clear: []string{"none"}, AnsweredBy: "Owner ruling", SendsBack: true, Accept: []string{"accepted"}},
 		{Name: EyesSignal, Ask: "Needs eyes:", Clear: []string{"nothing", "none"}, AnsweredBy: "Eyes checked", FailedBy: "Eyes failed", BlockedBy: DefaultBlockedBy, UnblockedBy: DefaultUnblockedBy},
 		{Name: "review", Ask: "**PR:**", Clear: []string{"none"}, FollowsPR: true},
+		readySignal(),
 	}))
 }
 
@@ -433,6 +462,11 @@ func Parse(data []byte) (*Config, error) {
 	handBack := DefaultHandBack
 	if cfg.HandBack != nil {
 		handBack = *cfg.HandBack
+	}
+	// A fleet file with signals of its own and a backfill source needs the
+	// signal that keeps an unready issue from being handed out again.
+	if cfg.hasBackfill() && !slices.ContainsFunc(cfg.Signals, func(s Signal) bool { return s.Name == ReadySignal }) {
+		cfg.Signals = append(cfg.Signals, readySignal())
 	}
 	withDecisionDefaults(withHandBack(handBack, cfg.Signals))
 	// A fleet file written before a look could be recorded as blocked names
@@ -518,8 +552,11 @@ func (c *Config) validate() error {
 				if !repoRE.MatchString(src.Repo) {
 					fail("%s: issue repo %q must be owner/name", where, src.Repo)
 				}
-				if src.Label == "" && src.Assignee == "" {
-					fail("%s: issue source %s needs a label or an assignee", where, src.Repo)
+				if src.Label == "" && src.Assignee == "" && src.Query == "" {
+					fail("%s: issue source %s needs a label, an assignee or a query", where, src.Repo)
+				}
+				if src.Backfill && claimLabel(sources, src.Repo) == "" {
+					fail("%s: backfill source %s needs a source with a label for the same repo beside it: an issue that is taken gets that label", where, src.Repo)
 				}
 			}
 		}
@@ -648,22 +685,46 @@ func (c *Config) Machine(name string) (Machine, bool) {
 }
 
 // SourcesFor returns the worker's queue: its own issue sources, or the
-// machine's when it has none.
+// machine's when it has none. A backfill source is not among them.
 func (m Machine) SourcesFor(w Worker) []IssueSource {
+	return m.sources(w, false)
+}
+
+// BackfillFor returns the worker's backfill sources: where it takes an issue
+// from when its queue has nothing it can act on.
+func (m Machine) BackfillFor(w Worker) []IssueSource {
+	return m.sources(w, true)
+}
+
+func (m Machine) sources(w Worker, backfill bool) []IssueSource {
+	all := m.Issues
 	if len(w.Issues) > 0 {
-		return w.Issues
+		all = w.Issues
 	}
-	return m.Issues
+	var sources []IssueSource
+	for _, src := range all {
+		if src.Backfill == backfill {
+			sources = append(sources, src)
+		}
+	}
+	return sources
+}
+
+// ClaimLabel is the label a backfill issue of the repository gets when this
+// worker takes it.
+func (m Machine) ClaimLabel(w Worker, repo string) string {
+	return claimLabel(m.SourcesFor(w), repo)
 }
 
 // AllSources returns every issue source on the machine, each once: the
-// machine's and its workers'.
+// machine's and its workers'. A backfill source is not among them: its
+// issues are in nobody's queue until a worker takes one.
 func (m Machine) AllSources() []IssueSource {
 	var all []IssueSource
 	seen := map[IssueSourceKey]bool{}
 	add := func(sources []IssueSource) {
 		for _, src := range sources {
-			if !seen[src.Key()] {
+			if !src.Backfill && !seen[src.Key()] {
 				seen[src.Key()] = true
 				all = append(all, src)
 			}
@@ -674,6 +735,36 @@ func (m Machine) AllSources() []IssueSource {
 		add(w.Issues)
 	}
 	return all
+}
+
+// QueueLabels returns the labels that put an issue in a queue of the fleet.
+// An issue with one of them is taken, whatever a backfill source lists.
+func (c *Config) QueueLabels() []string {
+	var labels []string
+	for _, m := range c.Machines {
+		for _, src := range m.AllSources() {
+			if src.Label != "" && !slices.Contains(labels, src.Label) {
+				labels = append(labels, src.Label)
+			}
+		}
+	}
+	return labels
+}
+
+// hasBackfill reports whether any list of the fleet has a backfill source.
+func (c *Config) hasBackfill() bool {
+	for _, m := range c.Machines {
+		lists := [][]IssueSource{m.Issues}
+		for _, w := range m.Workers {
+			lists = append(lists, w.Issues)
+		}
+		for _, list := range lists {
+			if slices.ContainsFunc(list, func(src IssueSource) bool { return src.Backfill }) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ChecksFor returns the default checks followed by the machine's own.

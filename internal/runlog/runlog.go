@@ -126,6 +126,9 @@ type Checkin struct {
 	// Look is set when the issue was handed over for an eye check on
 	// staging, not to be built.
 	Look bool `json:"look,omitempty"`
+	// Backfill is set when the issue was taken from a backfill source: the
+	// queue had nothing else the worker could act on.
+	Backfill bool `json:"backfill,omitempty"`
 	// Task is set when the message handed the worker a one-off task.
 	Task string `json:"task,omitempty"`
 }
@@ -205,6 +208,26 @@ func Builder(checkins []Checkin, issue int) string {
 		}
 	}
 	return worker
+}
+
+// A worker takes at most BackfillLimit issues from a backfill source in
+// BackfillWindow. Real work takes longer than that allows; a run of issues
+// that are not ready to be worked must not cost a review each, all night.
+const (
+	BackfillLimit  = 4
+	BackfillWindow = time.Hour
+)
+
+// BackfillSpent reports whether the worker has taken as many backfill issues
+// as allowed.
+func BackfillSpent(checkins []Checkin, worker string, now time.Time) bool {
+	count := 0
+	for _, c := range checkins {
+		if c.Sent && c.Worker == worker && c.Backfill && now.Sub(c.Time) < BackfillWindow {
+			count++
+		}
+	}
+	return count >= BackfillLimit
 }
 
 // An issue is sent back to a worker over its pull request at most

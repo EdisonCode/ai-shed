@@ -19,7 +19,7 @@ decision that is really the owner's, and even then it takes other work.
 **Goal**: A lower-priority `backfill` source per machine, taken from only when the first sources have nothing workable; a readiness check; a mark so that two machines do not take the same issue.
 **Success Criteria**: With every labelled issue waiting on the owner and a backfill source set, no worker is idle for more than one check-in.
 **Tests**: config validation, queue order, claim, not-ready pass and its cap.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Waits that do not hold a worker, and no finished work handed out
 **Goal**: A draft that says what it waits for is not a review for the owner; a pull request that conflicts reads `rework`, not `eyes`; an issue whose pull request merged after its last hand-back is not handed out as new work.

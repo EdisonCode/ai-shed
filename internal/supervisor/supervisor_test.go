@@ -2343,3 +2343,109 @@ func TestBriefSaysWhichChoicesAreTheWorkersOwn(t *testing.T) {
 		t.Fatal("the reviewer is not told which choices are risky, or what to say to a worker that stopped on a safe one")
 	}
 }
+
+type fakeClaimer struct {
+	claimed []string
+	err     error
+}
+
+func (f *fakeClaimer) Claim(_ context.Context, repo string, number int, label string) error {
+	if f.err == nil {
+		f.claimed = append(f.claimed, fmt.Sprintf("%s#%d %s", repo, number, label))
+	}
+	return f.err
+}
+
+// withBackfill gives the machine a backfill source. The labelled queue holds
+// the issues given; the backlog holds #50 and #51, and #52, which another
+// machine of the fleet took.
+func withBackfill(f *fixture, queue ...backlog.Issue) *fakeClaimer {
+	claimer := &fakeClaimer{}
+	f.Claimer, f.QueueLabels = claimer, []string{"machine:box", "machine:other"}
+	f.Machine.Issues = append(f.Machine.Issues, config.IssueSource{Repo: "org/app", Query: `label:"p1" no:assignee`, Backfill: true, Priority: []string{"p1"}})
+	f.lister.issues = nil
+	f.lister.byLabel = map[string][]backlog.Issue{
+		"machine:box": queue,
+		"":            {labeled(51), labeled(50, "p1"), labeled(52, "p1", "machine:other")},
+	}
+	return claimer
+}
+
+func TestWorkerWithNothingWorkableIsHandedAnIssueFromTheBacklog(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(50))
+	claimer := withBackfill(f, asksADecision(12, t0.Add(-time.Hour)))
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if got := queueShown(t, prompt); !slices.Equal(got, []int{12, 50, 51}) {
+		t.Fatalf("queue = %v, want the parked issue, then the backlog by priority, without the one another machine took", got)
+	}
+	if !strings.Contains(prompt, "#50 Issue [backlog]") {
+		t.Fatalf("the reviewer was not told where #50 comes from:\n%s", prompt)
+	}
+	if !slices.Equal(claimer.claimed, []string{"org/app#50 machine:box"}) {
+		t.Fatalf("claimed = %q, want #50 put in this machine's queue", claimer.claimed)
+	}
+	c := f.lastCheckin(t)
+	if c.Issue != 50 || !c.Backfill || !c.Sent || !strings.Contains(c.Message, "#50 is from the backlog") {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestBacklogIsNotTouchedWhileTheQueueHasWork(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	claimer := withBackfill(f, labeled(12))
+	f.tick(2 * time.Minute)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
+		t.Fatalf("queue = %v, want the labelled issue alone", got)
+	}
+	if len(claimer.claimed) != 0 {
+		t.Fatalf("claimed = %q", claimer.claimed)
+	}
+}
+
+func TestBacklogIssueThatCannotBeMarkedIsNotHandedOver(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(50))
+	withBackfill(f).err = errors.New("gh issue edit: HTTP 403")
+	f.tick(2 * time.Minute)
+
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; an issue that is not marked could be taken twice", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictError {
+		t.Fatalf("check-in = %+v, want the failure recorded", c)
+	}
+}
+
+func TestBacklogIsHandedOutOnlySoOftenInAnHour(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(50), assign(51), assign(50), assign(51), Verdict{Verdict: runlog.VerdictDone, Reason: "nothing workable"})
+	withBackfill(f)
+	for range runlog.BackfillLimit {
+		f.term.running(f.now) // it said the issue is not ready, and stopped
+		f.tick(2 * time.Minute)
+	}
+	if len(f.term.sent) != runlog.BackfillLimit {
+		t.Fatalf("sent = %q, want %d hand-overs", f.term.sent, runlog.BackfillLimit)
+	}
+
+	f.term.running(f.now)
+	f.tick(2 * time.Minute)
+	if got := queueShown(t, f.reviewer.prompts[runlog.BackfillLimit]); len(got) != 0 {
+		t.Fatalf("queue = %v; the backlog is closed to this worker for the rest of the hour", got)
+	}
+}
+
+func TestBriefTellsAWorkerHowToSayABacklogIssueIsNotReady(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	if brief := f.briefText(f.Machine.Workers[0]); strings.Contains(brief, "backlog") {
+		t.Fatalf("a worker with no backfill source is told of a backlog:\n%s", brief)
+	}
+	withBackfill(f)
+	brief := f.briefText(f.Machine.Workers[0])
+	for _, part := range []string{"that match `label:\"p1\" no:assignee`", "post one comment headed `Hand-back` with `Not ready:` and what is missing"} {
+		if !strings.Contains(brief, part) {
+			t.Fatalf("brief lacks %q:\n%s", part, brief)
+		}
+	}
+}

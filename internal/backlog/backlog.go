@@ -112,6 +112,9 @@ func issueList(ctx context.Context, src config.IssueSource, filter ...string) ([
 	if src.Assignee != "" {
 		args = append(args, "--assignee", src.Assignee)
 	}
+	if src.Query != "" {
+		args = withSearch(args, src.Query)
+	}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -127,6 +130,30 @@ func issueList(ctx context.Context, src config.IssueSource, filter ...string) ([
 		issues[i].Repo = src.Repo
 	}
 	return issues, nil
+}
+
+// withSearch adds a search to the arguments. gh takes one --search: a second
+// would replace the first, so the terms are joined.
+func withSearch(args []string, query string) []string {
+	for i, a := range args {
+		if a == "--search" && i+1 < len(args) {
+			args[i+1] += " " + query
+			return args
+		}
+	}
+	return append(args, "--search", query)
+}
+
+// Claim puts the label on an issue, which puts it in the queue the label
+// selects. shed changes nothing else on GitHub.
+func (GH) Claim(ctx context.Context, repo string, number int, label string) error {
+	cmd := exec.CommandContext(ctx, "gh", "issue", "edit", strconv.Itoa(number), "--repo", repo, "--add-label", label)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("gh issue edit %s#%d: %w: %s", repo, number, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 func openPRs(ctx context.Context, repo string) (map[int]PR, error) {

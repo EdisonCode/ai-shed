@@ -81,6 +81,9 @@ const (
 	// bumpTold goes with the hand-over of an issue the owner put first. It may
 	// come from another worker's queue, and a worker holds to its brief.
 	bumpTold = " The owner put #%d first in your queue: it is yours even where your brief does not cover it."
+	// backfillTold goes with the hand-over of an issue from a backfill
+	// source. Nobody prepared it for a worker.
+	backfillTold = " #%d is from the backlog: it is yours even where your brief does not cover it. Check first that it is ready, as the Queue section of " + BriefFile + " says."
 )
 
 // retryBackoff is how long a worker whose tool stopped on an API error waits
@@ -116,6 +119,11 @@ type Supervisor struct {
 	Terminal       Terminal
 	Reviewer       Reviewer
 	Lister         backlog.Lister
+	// Claimer puts a worker's queue label on a backfill issue it takes, and
+	// QueueLabels are the labels that put an issue in a queue anywhere in
+	// the fleet. Claimer may be nil: then no backfill issue is taken.
+	Claimer     Claimer
+	QueueLabels []string
 	// Repos is what the fleet file says about each repository's deploys, and
 	// Looks reads the eye checks that merged work still owes. Looks may be
 	// nil: then no worker is handed one.
@@ -142,6 +150,11 @@ type Supervisor struct {
 	// wasPaused is whether the last tick found the machine paused, so that
 	// a pause is logged when it starts and when it ends.
 	wasPaused bool
+}
+
+// Claimer marks an issue as taken by putting a label on it.
+type Claimer interface {
+	Claim(ctx context.Context, repo string, number int, label string) error
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.
@@ -585,7 +598,7 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 			st.held = &heldHandOver{verdict: verdict, since: now, activity: obs.LastActivity}
 			c.Verdict, c.Issue = runlog.VerdictHeld, verdict.Issue
 			c.Reason = fmt.Sprintf("#%d is held for this worker: %s", verdict.Issue, reason)
-		} else if err := s.deliver(w, st, now, idle, kind, verdict, item, &c); err != nil {
+		} else if err := s.deliver(ctx, w, st, now, idle, kind, verdict, item, &c); err != nil {
 			return err
 		}
 	}
@@ -595,7 +608,7 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 
 // deliver types a nudge into the worker, unless nudges have stopped helping.
 // It fills in the check-in with what was sent.
-func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, idle time.Duration, kind string, verdict Verdict, item QueueItem, c *runlog.Checkin) error {
+func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerState, now time.Time, idle time.Duration, kind string, verdict Verdict, item QueueItem, c *runlog.Checkin) error {
 	// A hand-over means the worker is done with what it had: the nudges
 	// before it got it moving. Only nudges about the same work, one after
 	// the other, show a worker that is not helped by more of them.
@@ -616,6 +629,14 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 	// issue into the next. In each case a cleared context that
 	// re-reads the brief costs less.
 	c.Cold = idle > s.Settings.CacheTTLOrDefault()
+	if newIssue && item.Backfill {
+		// The label comes first: an issue that was handed over and not
+		// marked could be taken by another machine too.
+		if err := s.Claimer.Claim(ctx, item.Repo, item.Number, item.claim); err != nil {
+			return err
+		}
+		c.Backfill = true
+	}
 	if newIssue && item.Look != "" {
 		verdict.Message, c.Look = fmt.Sprintf(lookOrder, verdict.Issue, item.Look), true
 	}
@@ -659,6 +680,9 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 	}
 	if newIssue && item.Bumped {
 		c.Message += fmt.Sprintf(bumpTold, verdict.Issue)
+	}
+	if c.Backfill {
+		c.Message += fmt.Sprintf(backfillTold, verdict.Issue)
 	}
 	if err := s.Terminal.Send(w.Name, c.Message); err != nil {
 		return err
@@ -805,7 +829,7 @@ func (s *Supervisor) release(ctx context.Context, w config.Worker, st *workerSta
 	}
 	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: KindCapacity, Verdict: runlog.VerdictNudge, Reason: reason,
 		Activity: obs.LastActivity, Queue: fingerprint(queue)}
-	if err := s.deliver(w, st, now, now.Sub(obs.LastActivity), KindCapacity, held.verdict, item, &c); err != nil {
+	if err := s.deliver(ctx, w, st, now, now.Sub(obs.LastActivity), KindCapacity, held.verdict, item, &c); err != nil {
 		return err
 	}
 	st.lastReview, st.reviewedActivity = now, obs.LastActivity
@@ -1018,12 +1042,18 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		return nil, err
 	}
 	items = s.withLooks(ctx, w, items, open, checkins)
+	if items, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
+		return nil, err
+	}
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
 		switch {
 		case x.Bumped != y.Bumped:
 			// The owner's own word comes before every rule.
 			return x.Bumped
+		case x.Backfill != y.Backfill:
+			// The reserve comes after everything a person put in the queue.
+			return y.Backfill
 		case x.resumes() != y.resumes():
 			return x.resumes()
 		case (x.Look != "") != (y.Look != ""):
@@ -1057,6 +1087,36 @@ func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []ru
 		}
 	}
 	return item
+}
+
+// withBackfill adds the issues of the worker's backfill sources when its
+// queue has nothing it can act on. They are listed only then. An issue that
+// waits on the owner, that another worker has in hand, or that carries a
+// label that puts it in a queue of the fleet is left where it is.
+func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []QueueItem, taken map[int]bool, checkins []runlog.Checkin) ([]QueueItem, error) {
+	sources := s.Machine.BackfillFor(w)
+	if len(sources) == 0 || s.Claimer == nil || slices.ContainsFunc(items, QueueItem.Workable) || runlog.BackfillSpent(checkins, w.Name, s.Now()) {
+		return items, nil
+	}
+	for _, src := range sources {
+		issues, err := s.Lister.List(ctx, src)
+		if err != nil {
+			return nil, err
+		}
+		for _, i := range issues {
+			_, queued := find(items, i.Number)
+			if queued || taken[i.Number] || slices.ContainsFunc(i.LabelNames(), func(l string) bool { return slices.Contains(s.QueueLabels, l) }) {
+				continue
+			}
+			item := s.item(i, src, checkins)
+			if !item.Workable() {
+				continue
+			}
+			item.Backfill, item.claim = true, s.Machine.ClaimLabel(w, i.Repo)
+			items = append(items, item)
+		}
+	}
+	return items, nil
 }
 
 // bumps returns the issues the owner put first in line, each with the worker
@@ -1278,8 +1338,12 @@ func (s *Supervisor) briefText(w config.Worker) string {
 			if src.Assignee != "" {
 				fmt.Fprintf(&b, " assigned to `%s`", src.Assignee)
 			}
+			if src.Query != "" {
+				fmt.Fprintf(&b, " that match `%s`", src.Query)
+			}
 			b.WriteString("\n")
 		}
+		s.backfillBrief(&b, w)
 		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nThe owner may put an issue first in your queue, or move one to you from another worker's queue. The supervisor says so when it hands it over. Such an issue is yours even where this brief does not cover it; the standing orders still hold.\nBefore you start an issue, check whether an open pull request or an unmerged branch already covers it (`gh pr list --search <number>`, `git fetch` and `git branch -r`). If one does and the supervisor did not send you back to that pull request, do not start it: another worker has it. Report what you found in the issue as a decision for the owner, say so here, and stop.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\nWhen you are sent back to an issue you already handed back, do what the message says and hand back again, even when nothing needed to change: post a new hand-back comment that names the pull request, as your first one did, and say what you changed or that nothing changed. The new hand-back is what tells the supervisor you are done with it.\n")
 	}
 	s.eyeCheckBrief(&b, w)
@@ -1306,6 +1370,33 @@ new brief.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
 `)
 	return b.String()
+}
+
+// backfillBrief tells a worker that it may be handed an issue nobody
+// prepared for it, and how to say that one is not ready to be worked.
+func (s *Supervisor) backfillBrief(b *strings.Builder, w config.Worker) {
+	ready, sources := s.signal(config.ReadySignal), s.Machine.BackfillFor(w)
+	if len(sources) == 0 || ready.Ask == "" {
+		return
+	}
+	var from []string
+	for _, src := range sources {
+		words := src.Repo
+		if src.Label != "" {
+			words += fmt.Sprintf(" with label `%s`", src.Label)
+		}
+		if src.Query != "" {
+			words += fmt.Sprintf(" that match `%s`", src.Query)
+		}
+		from = append(from, words)
+	}
+	headed := ""
+	if ready.HandBack != "" {
+		headed = fmt.Sprintf(" headed `%s`", ready.HandBack)
+	}
+	fmt.Fprintf(b, `
+When your queue has nothing you can act on, the supervisor hands you an issue from the backlog (the open issues of %s), and says so. Nobody prepared it for a worker. Before you build, check that it is ready: it says the goal or the root cause, and it has acceptance you can test. If it is, work it like any issue of your queue. If it is not, change nothing: post one comment%s with `+"`%s`"+` and what is missing, say so here, and stop. The owner fills it in, and you are given the next one.
+`, strings.Join(from, ", and of "), headed, ready.Ask)
 }
 
 // eyeCheckBrief tells a worker that does eye checks where staging is, what
@@ -1396,8 +1487,7 @@ func (s *Supervisor) choices() string {
 Nobody answers while you work. A choice is one of two kinds.
 
 - Risky: %s. Do not make such a choice. Write the question and your recommendation in an issue comment %s. The owner has %s to answer. Until then go on with the parts of the issue that the question does not touch; when none is left, say so here and stop. After that time the issue is parked and the supervisor gives you the next one. The owner's answer brings it back, ahead of new work.
-- Safe: every other choice. Take the conservative option, the one that is easy to reverse, and go on. Do not stop and do not ask. Record it in your hand-back after the words `+"`%s`"+`: what you chose, the alternative, and how to reverse it. The owner reads these and may overrule one; the issue then comes back to a worker.
-`, strings.TrimSpace(d.Risky), where, spell(d.GraceOrDefault()), d.Decided)
+- Safe: every other choice. Take the conservative option, the one that is easy to reverse, and go on. Do not stop and do not ask. Record it in your hand-back after the words `+"`%s`"+`: what you chose, the alternative, and how to reverse it. The owner reads these and may overrule one; the issue then comes back to a worker.`, strings.TrimSpace(d.Risky), where, spell(d.GraceOrDefault()), d.Decided)
 }
 
 // excludeFromGit keeps the brief out of the worker's commits. It is best
