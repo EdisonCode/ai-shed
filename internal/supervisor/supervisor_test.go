@@ -469,6 +469,8 @@ func TestParseVerdict(t *testing.T) {
 	}{
 		{"issue is kept on a nudge", `{"verdict":"nudge","message":"Take #12.","issue":12,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12.", Reason: "r", Issue: 12}, ""},
 		{"limited", `{"verdict":"limited","message":"wait","resume_in_minutes":45,"reason":"r"}`, Verdict{Verdict: "limited", Reason: "r", ResumeInMinutes: 45}, ""},
+		{"a tool error keeps its message", `{"verdict":"tool_error","message":"Continue; dispatch the test-runner again.","issue":12,"reason":"r"}`, Verdict{Verdict: "tool_error", Message: "Continue; dispatch the test-runner again.", Reason: "r"}, ""},
+		{"a tool error with no message gets one", `{"verdict":"tool_error","reason":"r"}`, Verdict{Verdict: "tool_error", Message: continueMessage, Reason: "r"}, ""},
 		{"plain", `{"verdict":"done","message":"","reason":"empty queue"}`, Verdict{Verdict: "done", Reason: "empty queue"}, ""},
 		{"wrapped in prose and a fence", "Here you go:\n```json\n{\"verdict\":\"nudge\",\"message\":\"Take #12.\",\"reason\":\"r\"}\n```", Verdict{Verdict: "nudge", Message: "Take #12.", Reason: "r"}, ""},
 		{"message becomes one line", `{"verdict":"nudge","message":"Take #12.\nThen #13.","reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12. Then #13.", Reason: "r"}, ""},
@@ -2166,5 +2168,110 @@ func TestLimitMessageNamesTheLatestTimeNotThePromisedOne(t *testing.T) {
 	prompt := Prompt(ReviewInput{Worker: "app", Now: t0, LimitedUntil: t0.Add(-time.Minute)})
 	if !strings.Contains(prompt, "at the latest") {
 		t.Fatalf("the reviewer must know that a limit may end before the time its screen names:\n%s", prompt)
+	}
+}
+
+func toolError(message string) Verdict {
+	return Verdict{Verdict: runlog.VerdictToolError, Message: message, Reason: "the screen shows an API error 403"}
+}
+
+func TestToolErrorIsRetriedAfterABackoffWithNoPerson(t *testing.T) {
+	f := started(t, config.Supervisor{}, toolError("Continue from where you stopped."), onTrack)
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+	f.tick(2 * time.Minute)
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictToolError || !c.Until.Equal(f.now.Add(5*time.Minute)) {
+		t.Fatalf("check-in = %+v, want tool_error with a retry due in 5 minutes", c)
+	}
+
+	f.tick(4 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q before the backoff was over", f.term.sent)
+	}
+	f.tick(2 * time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Continue from where you stopped."}) {
+		t.Fatalf("sent = %q, want the retry alone with no clear", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Kind != KindRetry || !c.Sent {
+		t.Fatalf("check-in = %+v, want a sent retry", c)
+	}
+	if len(f.reviewer.prompts) != 1 || len(notes) != 0 {
+		t.Fatalf("%d review(s), notifications %q; a retry needs neither a review nor the owner", len(f.reviewer.prompts), notes)
+	}
+}
+
+func TestToolErrorNeedsTheOwnerOnlyAfterTheLastRetryFails(t *testing.T) {
+	f := started(t, config.Supervisor{}, toolError("Continue."))
+	var waits []time.Duration
+	for range len(retryBackoff) {
+		f.tick(2 * time.Minute) // silent again: reviewed, the error is still there
+		c := f.lastCheckin(t)
+		if c.Verdict != runlog.VerdictToolError {
+			t.Fatalf("check-in = %+v, want tool_error", c)
+		}
+		waits = append(waits, c.Until.Sub(f.now))
+		f.tick(c.Until.Sub(f.now)) // the retry is sent
+		f.term.running(f.now)      // and the error is printed again
+	}
+	if !slices.Equal(waits, retryBackoff) {
+		t.Fatalf("waits = %v, want %v", waits, retryBackoff)
+	}
+	if len(f.term.sent) != len(retryBackoff) {
+		t.Fatalf("sent = %q, want %d retries", f.term.sent, len(retryBackoff))
+	}
+
+	f.tick(2 * time.Minute)
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictNeedsOwner || !strings.Contains(c.Reason, "3 retries") {
+		t.Fatalf("check-in = %+v, want needs_owner after the last retry failed", c)
+	}
+	f.tick(time.Hour)
+	if len(f.term.sent) != len(retryBackoff) {
+		t.Fatalf("sent = %q; nothing is typed once the owner is needed", f.term.sent)
+	}
+}
+
+func TestToolErrorIsRetriedAtOnceWhenAnotherWorkerIsSeenWorking(t *testing.T) {
+	f := twoWorkers(t, toolError("Continue."), onTrack)
+	f.tick(0) // app shows the error; docs is on track, after the error
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+	f.tick(30 * time.Second)
+	if !slices.Equal(f.term.sent, []string{"Continue."}) {
+		t.Fatalf("sent = %q, want the retry at once: the account works for the other worker", f.term.sent)
+	}
+}
+
+func TestToolErrorThatClearsByItselfIsNotRetried(t *testing.T) {
+	f := started(t, config.Supervisor{}, toolError("Continue."), onTrack)
+	f.tick(2 * time.Minute)
+	f.term.running(f.now.Add(time.Minute)) // it went on, or somebody typed
+	f.tick(6 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent = %q; the worker moved, so it is reviewed, not retried", f.term.sent)
+	}
+	if len(f.reviewer.prompts) != 2 {
+		t.Fatalf("reviews = %d, want 2", len(f.reviewer.prompts))
+	}
+}
+
+func TestPendingRetryAndItsCountSurviveAnAgentRestart(t *testing.T) {
+	f := started(t, config.Supervisor{}, toolError("Continue."))
+	f.tick(2 * time.Minute)
+	f.restartAgent()
+	f.tick(4 * time.Minute)
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("after a restart: %d review(s), sent %q; the retry is not due", f.reviews(), f.term.sent)
+	}
+	f.tick(2 * time.Minute)
+	if !slices.Equal(f.term.sent, []string{"Continue."}) {
+		t.Fatalf("sent = %q, want the retry", f.term.sent)
+	}
+
+	f.term.running(f.now)
+	f.restartAgent()
+	f.tick(2 * time.Minute)
+	if c := f.lastCheckin(t); !c.Until.Equal(f.now.Add(retryBackoff[1])) {
+		t.Fatalf("check-in = %+v, want the second backoff: the first retry is remembered", c)
 	}
 }

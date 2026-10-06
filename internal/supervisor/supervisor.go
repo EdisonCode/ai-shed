@@ -53,6 +53,9 @@ const (
 	reviewerAnswers = "the reviewer answers again after its own usage limit, which is the same account's"
 	screenMoved     = "its screen moved after the limit was seen"
 
+	// accountWorks is why a retry is sent before its backoff is over.
+	accountWorks = "another worker was seen working after the error, so the account works"
+
 	terminalLines = 80
 	recentKept    = 3
 
@@ -80,6 +83,11 @@ const (
 	bumpTold = " The owner put #%d first in your queue: it is yours even where your brief does not cover it."
 )
 
+// retryBackoff is how long a worker whose tool stopped on an API error waits
+// before each try to get it going again. An error that outlasts them all
+// needs the owner.
+var retryBackoff = []time.Duration{5 * time.Minute, 15 * time.Minute, 45 * time.Minute}
+
 // Check-in kinds: why the supervisor looked.
 const (
 	KindStart    = "start"    // the worker had no window
@@ -93,6 +101,7 @@ const (
 	KindCapacity = "capacity" // a held hand-over was delivered
 	KindHook     = "hook"     // its tool said it waits for a person, or no longer does
 	KindTask     = "task"     // it was handed a one-off task from the owner
+	KindRetry    = "retry"    // its tool had stopped on an error and it was told to continue
 	KindError    = "error"
 )
 
@@ -156,6 +165,12 @@ type workerState struct {
 	// reviewerLimited is set while the last try to review the worker failed
 	// on the reviewer's own usage limit.
 	reviewerLimited bool
+	// retryAt is set while the worker's tool sits at an API error: it is when
+	// the worker is told retryMessage. retries counts the tries that were
+	// sent and did not end the error.
+	retryAt      time.Time
+	retryMessage string
+	retries      int
 	// briefStale is set when the brief changed while the worker had an issue
 	// in hand. It is told with the next message, not in the middle of work.
 	briefStale bool
@@ -357,6 +372,19 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		}
 	}
 
+	if !st.retryAt.IsZero() {
+		switch why := s.retryNow(w, st, obs, now); {
+		case !obs.LastActivity.Equal(st.reviewedActivity):
+			// It went on by itself, or somebody typed. It is reviewed like
+			// any worker.
+			st.retryAt = time.Time{}
+		case why == "":
+			return nil
+		default:
+			return s.retry(w, st, obs, now, why)
+		}
+	}
+
 	idle := now.Sub(obs.LastActivity)
 	// A resting worker has nothing in progress: a one-off task that waits
 	// for it is handed over at once. No reviewer is needed to see that.
@@ -532,6 +560,18 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 		st.limitedUntil = now.Add(wait)
 		c.Until = st.limitedUntil
 	}
+	switch {
+	case verdict.Verdict != runlog.VerdictToolError:
+		st.retries = 0
+	case st.retries >= len(retryBackoff):
+		c.Kind, c.Verdict = KindRetry, runlog.VerdictNeedsOwner
+		c.Reason = fmt.Sprintf("its tool still stops on an error after %d retries: %s", st.retries, verdict.Reason)
+	default:
+		wait := retryBackoff[st.retries]
+		st.retryAt, st.retryMessage = now.Add(wait), verdict.Message
+		c.Until, c.Message = st.retryAt, verdict.Message
+		c.Reason = fmt.Sprintf("%s; retry %d of %d in %s", verdict.Reason, st.retries+1, len(retryBackoff), wait)
+	}
 	if verdict.Verdict == runlog.VerdictNudge {
 		// A different issue is a hand-over: new work for the machine. It is
 		// held while the machine is busy with something else.
@@ -620,6 +660,41 @@ func (s *Supervisor) deliver(w config.Worker, st *workerState, now time.Time, id
 	}
 	c.Sent = true
 	st.nudges = append(st.nudges, now)
+	return nil
+}
+
+// retryNow says why a worker whose tool stopped on an error is told to
+// continue now: its backoff is over, or the reviewer found another worker on
+// track after the error, so the account works. "" means not yet.
+func (s *Supervisor) retryNow(w config.Worker, st *workerState, obs Observation, now time.Time) string {
+	if !now.Before(st.retryAt) {
+		return "the wait after its tool's error is over"
+	}
+	for _, other := range s.Machine.Workers {
+		ost := s.workers[other.Name]
+		if other.Name == w.Name || ost == nil || len(ost.recent) == 0 {
+			continue
+		}
+		last := ost.recent[len(ost.recent)-1]
+		if last.Verdict == runlog.VerdictOnTrack && (last.Kind == KindIdle || last.Kind == KindScope) && last.Time.After(obs.LastActivity) {
+			return accountWorks
+		}
+	}
+	return ""
+}
+
+// retry tells a worker whose tool stopped on an error to continue. It was cut
+// off in the middle of its work, so its context is kept, as after a usage
+// limit. A retry is not a nudge: the retries have a count of their own.
+func (s *Supervisor) retry(w config.Worker, st *workerState, obs Observation, now time.Time, why string) error {
+	if err := s.Terminal.Send(w.Name, st.retryMessage); err != nil {
+		return err
+	}
+	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: KindRetry, Verdict: runlog.VerdictNudge, Message: st.retryMessage, Sent: true,
+		Reason: fmt.Sprintf("retry %d of %d: %s", st.retries+1, len(retryBackoff), why), Activity: obs.LastActivity, Queue: st.queueSeen}
+	st.retries++
+	st.retryAt, st.lastReview = time.Time{}, now
+	s.record(st, c)
 	return nil
 }
 
@@ -838,6 +913,13 @@ func (s *Supervisor) recover(worker string) *workerState {
 			st.briefStale = !c.Sent
 		case c.Kind == KindHook:
 			st.markSeen, st.waiting = c.Time, c.Verdict == runlog.VerdictNeedsOwner
+		case c.Kind == KindRetry:
+			// A retry that was sent, or the word that the last one failed.
+			if c.Sent {
+				st.retries++
+			}
+			st.retryAt, st.lastReview = time.Time{}, c.Time
+			st.reviewedActivity = c.Activity
 		case c.Verdict == runlog.VerdictLimited && c.Activity.IsZero():
 			// The reviewer was limited; the worker itself was not reviewed.
 			st.reviewerLimited = true
@@ -850,6 +932,12 @@ func (s *Supervisor) recover(worker string) *workerState {
 			st.limitedUntil = time.Time{}
 			if c.Verdict == runlog.VerdictLimited {
 				st.limitedUntil = c.Until
+			}
+			st.retryAt = time.Time{}
+			if c.Verdict == runlog.VerdictToolError {
+				st.retryAt, st.retryMessage = c.Until, c.Message
+			} else {
+				st.retries = 0
 			}
 			if c.Verdict == runlog.VerdictHeld {
 				// What was held is not in the log in full. The new agent

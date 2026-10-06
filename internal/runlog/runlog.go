@@ -90,6 +90,7 @@ const (
 	VerdictDone       = "done"        // nothing left that it can act on
 	VerdictStuck      = "stuck"       // nudges or restarts did not get it moving
 	VerdictLimited    = "limited"     // at a usage limit; left alone until it resets
+	VerdictToolError  = "tool_error"  // its tool stopped on an API error; it is told to continue after a wait
 	VerdictHeld       = "held"        // its next issue waits for the machine to have room
 	VerdictStarted    = "started"     // the supervisor started its session
 	VerdictRecycled   = "recycled"    // the supervisor ended its session to start a fresh one
@@ -116,7 +117,8 @@ type Checkin struct {
 	// back, so it does not review again what it has already reviewed.
 	Activity time.Time `json:"activity,omitzero"`
 	Queue    string    `json:"queue,omitempty"`
-	// Until is when a limited worker is looked at again.
+	// Until is when a limited worker is looked at again, or when a worker
+	// whose tool stopped on an error is told to continue.
 	Until time.Time `json:"until,omitzero"`
 	// Rework is set when the issue was handed back to a worker because its
 	// pull request could not merge; it says why.

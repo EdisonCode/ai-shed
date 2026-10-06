@@ -92,6 +92,7 @@ one verdict:
 | `done` | nothing left that it can act on | leaves it idle |
 | `held` | (set by the agent, not the reviewer) its next issue waits for the machine to have room | delivers it when there is room, or after `max_wait` |
 | `limited` | it reached a usage limit and must wait for the reset | types nothing, looks again just after the reset (every 15 minutes when the screen names no time), then tells it to continue. The time on the screen is the latest: see below for a limit that ends sooner |
+| `tool_error` | its tool stopped on an API error (a 403, a 429, a 5xx, "overloaded"), not on its work | tells it to continue after 5 minutes, then 15, then 45; `needs_owner` only when the third retry fails |
 
 The terminal is captured with its styles. Text that the worker's tool draws
 faint, such as a placeholder or a suggestion of what to type next in an empty
@@ -115,6 +116,7 @@ Guards against wasted tokens:
   - The worker's screen moves. A worker at its limit prints nothing, so one that prints is reviewed like any other.
   - The reviewer answers again after its own limit. It runs on the workers' account, so every held worker is looked at and told to continue.
 - `shed status` shows on a `limited` line how long the hold lasts at the most, when the worker last printed anything, and the `shed resume` command that ends it.
+- An API error is not yours to fix until it has outlasted three retries. Such an error often clears by itself, and a worker that sits at one for hours has lost them for nothing. When the reviewer saw another worker of the machine on track after the error, the account works, and the retry is sent at once. A sub-agent that died with the error is named in the retry, so the worker dispatches it again. A retry keeps the worker's context and is not counted as a nudge.
 - An idle worker is reviewed once per silence, not once per tick.
 - A resting worker is reviewed again only when its queue has something new it can act on. A label, a comment or a hand-back that leaves an issue waiting on you costs no review.
 
