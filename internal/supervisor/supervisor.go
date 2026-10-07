@@ -68,6 +68,7 @@ const (
 	BriefFile = ".shed/BRIEF.md"
 
 	startPrompt      = "You are an unattended worker. Read " + BriefFile + " in full and carry it out."
+	askPrompt        = "You answer the owner's questions. Read " + BriefFile + " in full, say that you are ready, and wait for a question."
 	briefChanged     = "Your brief changed. Read " + BriefFile + " again and follow it."
 	briefChangedThen = "Your brief changed. Read " + BriefFile + " again. Then: "
 	reorient         = "Your context was cleared. Read " + BriefFile + " first, then check git status, git log and the issue comments to see where the work stands. Then: "
@@ -409,6 +410,13 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		return s.recycle(w, st, now)
 	}
 
+	// A worker that answers the owner's questions is in a conversation with
+	// the owner. Its session is kept running and its brief kept current;
+	// nothing else is typed into it, and no reviewer reads it.
+	if w.Ask {
+		return nil
+	}
+
 	// The worker's tool may say what state it is in. What it says needs no
 	// reviewer to read the screen.
 	mark, _ := runlog.ReadMark(s.StateDir, w.Name)
@@ -552,7 +560,11 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 			return err
 		}
 	}
-	command := w.CommandOrDefault() + " " + shellQuote(startPrompt)
+	prompt := startPrompt
+	if w.Ask {
+		prompt = askPrompt
+	}
+	command := w.CommandOrDefault() + " " + shellQuote(prompt)
 	if err := s.Terminal.Send(w.Name, command); err != nil {
 		return err
 	}
@@ -1211,7 +1223,7 @@ func (s *Supervisor) bumps() (map[int]string, error) {
 		return nil, err
 	}
 	for issue, to := range bumps {
-		if !slices.ContainsFunc(s.Machine.Workers, func(w config.Worker) bool { return w.Name == to }) {
+		if s.Machine.TakesWork(to) != nil {
 			bumps[issue] = ""
 		}
 	}
@@ -1442,6 +1454,9 @@ func (s *Supervisor) writeBrief(w config.Worker) (changed bool, err error) {
 }
 
 func (s *Supervisor) briefText(w config.Worker) string {
+	if w.Ask {
+		return s.askBrief(w)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Brief for worker %s on %s\n\n%s\n", w.Name, s.Machine.Name, s.scope(w))
 	if sources := s.Machine.SourcesFor(w); len(sources) > 0 {
@@ -1484,6 +1499,31 @@ new brief.
 - Do not wait for an answer that nobody is there to give. The Choices section says which choices are yours and what to do with one that is not.
 - Before you stop for any reason, write your plan and your progress in the issue. Your context may be cleared between items. What is not in the issue, the branch or a pull request is lost.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
+`)
+	return b.String()
+}
+
+// askBrief is the brief of a worker that answers the owner's questions. It
+// has the owner's scope and standing orders, and none of the rules for a
+// queue: no issue, no choice and no task is ever put before it.
+func (s *Supervisor) askBrief(w config.Worker) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Brief for worker %s on %s\n\n%s\n", w.Name, s.Machine.Name, strings.TrimSpace(w.Brief))
+	if orders := strings.TrimSpace(s.StandingOrders); orders != "" {
+		fmt.Fprintf(&b, "\n## Standing orders\n\n%s\n", orders)
+	}
+	b.WriteString(`
+## You answer questions
+
+The owner reaches this session from another device and asks about the code
+and the work of this machine. Nobody hands you an issue or a task. When you
+have answered, wait for the next question.
+
+- Answer from what you read: the code, the git history, the issues and the pull requests. Name the file and line, the commit or the issue that an answer rests on. Say what you did not check.
+- Before you answer about recent work, run ` + "`git fetch`" + ` and read from the remote's default branch. The checkout you sit in may be old.
+- Change nothing. Do not edit a file, commit, push, merge or deploy, and do not write to an issue or a pull request. When an answer calls for a change, describe it: the owner queues it for a worker.
+- A reply that is meant for someone else, such as a customer, is a draft for the owner to send. Send nothing yourself.
+- Other sessions on this machine are workers in the middle of their work. You may read their directories. Do not type into their sessions or change their files.
 `)
 	return b.String()
 }

@@ -2611,3 +2611,75 @@ func TestOwnerIsToldOnceWhenAQueueRunsShort(t *testing.T) {
 		t.Fatalf("notifications = %q, want %q", notes, want)
 	}
 }
+
+// askFixture is a machine whose only worker answers the owner's questions.
+func askFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := newFixture(t, config.Supervisor{}, assign(12))
+	f.Machine.Workers[0].Ask = true
+	f.Machine.Workers[0].Command = "claude --remote-control box-ask"
+	f.Machine.Workers[0].Brief = "Answer questions about the app."
+	return f
+}
+
+func TestAskWorkerIsStartedToWaitForAQuestion(t *testing.T) {
+	f := askFixture(t)
+	f.tick(0)
+
+	want := "claude --remote-control box-ask 'You answer the owner'\\''s questions. Read .shed/BRIEF.md in full, say that you are ready, and wait for a question.'"
+	if !slices.Equal(f.term.sent, []string{want}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+	brief, err := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"Answer questions about the app.", "## You answer questions", "Change nothing.", "a draft for the owner to send"} {
+		if !strings.Contains(string(brief), part) {
+			t.Errorf("brief lacks %q:\n%s", part, brief)
+		}
+	}
+	for _, part := range []string{"## Queue", "## One-off tasks", "## Choices", "## You work unattended"} {
+		if strings.Contains(string(brief), part) {
+			t.Errorf("brief has %q, which is for a worker that is handed work:\n%s", part, brief)
+		}
+	}
+}
+
+func TestAskWorkerIsNeverReviewedOrHandedWork(t *testing.T) {
+	f := askFixture(t)
+	f.tick(0)
+	f.term.sent = nil
+	f.term.running(f.now)
+	f.pushTask(t, runlog.TaskAny, "t1", "Compare the two exports.")
+
+	for range 12 {
+		f.tick(10 * time.Minute)
+	}
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("%d review(s), sent %q; want an ask worker left to its conversation", f.reviews(), f.term.sent)
+	}
+}
+
+func TestAskWorkerIsRestartedWhenItsSessionEnds(t *testing.T) {
+	f := askFixture(t)
+	f.tick(0)
+	f.term.sent = nil
+	f.term.exitedToShell(f.now)
+	f.tick(time.Minute)
+
+	if len(f.term.sent) != 1 || !strings.HasPrefix(f.term.sent[0], "claude --remote-control box-ask ") {
+		t.Fatalf("sent = %q, want its session started again", f.term.sent)
+	}
+}
+
+func TestIssueBumpedToAnAskWorkerStaysInItsQueue(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	f.Machine.Workers = append(f.Machine.Workers, config.Worker{Name: "ask", Dir: t.TempDir(), Brief: "Answer.", Ask: true})
+	f.bump(t, 12, "ask")
+	f.tick(2 * time.Minute)
+
+	if c := f.lastCheckin(t); c.Issue != 12 || !c.Sent {
+		t.Fatalf("check-in = %+v, want #12 still handed to the worker that builds", c)
+	}
+}

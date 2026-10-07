@@ -436,6 +436,44 @@ A task has no issue behind it, so nothing in the queue rules applies to it:
 no rework, no signals, no retries. If it leads to a pull request, that pull
 request is reviewed like any other.
 
+### A worker to ask
+
+A worker with `ask: true` builds nothing. It is a session on the machine that
+you ask about the code while you are away from your desk: what does this do,
+where is that decided, what changed last week.
+
+```yaml
+    workers:
+      - name: ask
+        dir: ~/Projects/my-app-ask        # a checkout of its own
+        command: claude --remote-control linux-box-ask --permission-mode default
+        ask: true
+        brief: |
+          Answer questions about my-app. The other checkouts under
+          ~/Projects belong to workers.
+```
+
+- **The agent keeps it running.** Its session is started with the machine and
+  started again when it ends. Its brief is written like any worker's, and it
+  is told when you edit it. `shed recycle` gives it a fresh session.
+- **Nothing else is typed into it.** It has no queue, takes no one-off task,
+  and no reviewer reads its screen. Your conversation with it is never
+  interrupted, and it costs no check-in. A machine's `issues` are not its
+  queue, and `shed bump` and `shed task -worker` refuse it.
+- **Its brief tells it to change nothing.** It answers from the code, the git
+  history, the issues and the pull requests, and names what an answer rests
+  on. It does not edit, commit, push, merge, deploy or comment. A reply meant
+  for someone else is a draft for you to send. The brief is an instruction
+  and not a lock: for a lock, give its `command` a permission mode that asks
+  before a write, and give its directory a checkout of its own.
+- **How you reach it is its `command`.** shed only keeps the session alive.
+  With Claude Code, `--remote-control <name>` makes the session reachable
+  from claude.ai/code and the Claude mobile app under that name; the machine
+  must be signed in to a claude.ai account for it. Any other way to reach a
+  terminal session works the same.
+- `shed status` lists it under `supervised` with `answers questions`. It is
+  not counted among the workers that have no work.
+
 ### Pausing a machine
 
 Sometimes one heavy job on the machine has to finish first: a deploy build,
@@ -1070,6 +1108,10 @@ author's direction.
   issue number on one machine share a match, and share a bump.
 - A missed task run is known only after the task has run once.
 - The log files are not rotated.
+- An `ask` worker is only as reachable as its tool makes it. shed restarts a
+  session that exited; it does not see a session that still runs and has
+  lost its connection. Remote Control on a session that nobody attends for
+  days has not been tested by this project.
 - Linux and macOS only.
 
 ## License

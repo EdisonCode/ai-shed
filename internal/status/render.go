@@ -318,6 +318,9 @@ func limitedWords(r MachineReport, w WorkerStatus) string {
 }
 
 func inHand(w WorkerStatus) string {
+	if w.Ask {
+		return "answers questions"
+	}
 	if w.Task != "" {
 		return "task " + w.Task
 	}

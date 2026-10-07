@@ -828,3 +828,22 @@ func TestDigestTotalsIdleWorkerHoursByCause(t *testing.T) {
 		t.Fatalf("digest lacks %q:\n%s", want, out.String())
 	}
 }
+
+func TestAskWorkerIsShownAsOneAndIsNotCountedAsIdle(t *testing.T) {
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app"}, {Name: "ask", Ask: true}}}
+	res := healthy()
+	res.Checkins = []runlog.Checkin{
+		{Time: now.Add(-time.Hour), Worker: "app", Kind: "idle", Verdict: runlog.VerdictDone, Reason: "nothing workable"},
+		{Time: now.Add(-3 * time.Hour), Worker: "ask", Kind: "start", Verdict: runlog.VerdictStarted, Sent: true},
+	}
+	asked := issue(7)
+	asked.Comments = []backlog.Comment{{Body: "## Hand-back\nDecisions needed: 1. which one?", CreatedAt: now.Add(-27 * time.Hour)}}
+
+	r := Assess(m, signals, now, res, []backlog.Issue{asked})
+	wantAttention(t, r, "1 of 1 workers have no work: every queued issue waits on you (oldest 27h)", "org/app#7 waits on you")
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	if want := "ask  answers questions  started  3h ago"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}

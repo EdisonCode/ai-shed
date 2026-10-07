@@ -166,6 +166,9 @@ a vague brief gives vague supervision.
   build on each other, leave it off.
 - Rules that hold for every worker belong in `defaults.standing_orders`, not in
   each brief.
+- A worker with `ask: true` answers the owner's questions and is handed no
+  work. Its brief says what it should know about, not what to build. Never
+  queue, bump or push a task to it.
 - Never put a secret, customer data or a person's name in the fleet file.
 
 After an edit: `shed validate`, then `shed deploy`. If the fleet file has
