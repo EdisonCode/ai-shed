@@ -458,8 +458,17 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		seen := fingerprint(queue)
 		// The owner did not answer in time: the issue in hand is parked, and
 		// the worker takes the next one.
-		if item, inHand := find(queue, st.issue); inHand && item.parkedSince(st.lastReview, now) && slices.ContainsFunc(queue, QueueItem.Workable) {
-			return s.review(ctx, w, st, obs, now, KindQueue, queue)
+		if item, inHand := find(queue, st.issue); inHand && slices.ContainsFunc(queue, QueueItem.Workable) {
+			if item.parkedSince(st.lastReview, now) {
+				return s.review(ctx, w, st, obs, now, KindQueue, queue)
+			}
+			// A reviewer that leaves a resting worker on a parked issue,
+			// beside work it can act on, has misread the queue. Nothing else
+			// would make it look again, so it is asked as often as it is
+			// about a busy worker.
+			if item.parked(now) && st.lastVerdict() == runlog.VerdictOnTrack && now.Sub(st.lastReview) >= s.Settings.ScopeEveryOrDefault() {
+				return s.review(ctx, w, st, obs, now, KindQueue, queue)
+			}
 		}
 		if seen == st.queueSeen {
 			return nil
@@ -1345,10 +1354,7 @@ var needsOwner = map[string]string{
 func (s *Supervisor) record(st *workerState, c runlog.Checkin) {
 	// The owner is told when a worker starts to need them, not every time
 	// the same state is seen again.
-	previous := ""
-	if len(st.recent) > 0 {
-		previous = st.recent[len(st.recent)-1].Verdict
-	}
+	previous := st.lastVerdict()
 	if phrase, ok := needsOwner[c.Verdict]; ok && c.Verdict != previous && s.Notify != nil {
 		s.Notify(c.Worker, fmt.Sprintf("%s: worker %s %s: %s", s.Machine.Name, c.Worker, phrase, c.Reason))
 	}

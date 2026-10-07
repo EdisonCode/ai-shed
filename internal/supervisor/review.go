@@ -85,10 +85,15 @@ func (q QueueItem) resumes() bool {
 	return q.Rework != "" || (q.Ruled && q.Workable())
 }
 
-// parkedSince reports whether the item's clock ran out after the time given:
-// it waits on a decision and the owner did not answer in time.
+// parked reports whether the item's clock ran out: it waits on a decision and
+// the owner did not answer in time.
+func (q QueueItem) parked(now time.Time) bool {
+	return !q.Workable() && !q.ParksAt.IsZero() && !now.Before(q.ParksAt)
+}
+
+// parkedSince reports whether the item's clock ran out after the time given.
 func (q QueueItem) parkedSince(t, now time.Time) bool {
-	return !q.Workable() && !q.ParksAt.IsZero() && !now.Before(q.ParksAt) && t.Before(q.ParksAt)
+	return q.parked(now) && t.Before(q.ParksAt)
 }
 
 // ReviewInput is everything the reviewer is shown.
@@ -143,7 +148,7 @@ Rules for the message of a nudge:
 - Keep the worker inside its brief. Work that the brief does not cover is out of scope, however useful.
 - The Choices section of the brief says which choices are risky. Do not make a risky choice for the owner, and neither may the worker: it writes the question and its recommendation in the issue.
 - A worker that stopped on a choice the brief does not name as risky stopped for nothing. Tell it once: this is a safe default, take the conservative option, record it in the hand-back as the brief says, and go on.
-- The item in hand waits on a decision and reads "not parked yet": the owner may still answer. The worker goes on with the parts of the item that the question does not touch. When it has none left, choose on_track and hand over nothing: it waits until the time named. Once the item reads "parked", hand over the first workable item, or choose done.
+- The item in hand waits on a decision and reads "not parked yet": the owner may still answer. The worker goes on with the parts of the item that the question does not touch. When it has none left, choose on_track and hand over nothing: it waits until the time named, which is on the clock of <current_time>. Once the item reads "parked", it is parked, whatever an earlier check-in of yours said: hand over the first workable item, or choose done.
 - An item whose question the owner answered is work that was started. The worker reads the answer in the issue and goes on from there.
 - Never tell the worker to skip or weaken a test, bypass a hook, merge, or deploy.
 - A worker's context may be cleared before it continues. If it stopped partway through an item and its terminal does not show that it wrote its plan and progress in the issue, tell it to do that first. Do not ask twice.
@@ -210,7 +215,7 @@ func Prompt(in ReviewInput) string {
 		b.WriteString("printing output now: it is working")
 	}
 	if !in.LimitedUntil.IsZero() {
-		fmt.Fprintf(&b, ". It was at a usage limit that was expected to reset at %s at the latest; if the limit is over, tell it to continue", in.LimitedUntil.Format("15:04"))
+		fmt.Fprintf(&b, ". It was at a usage limit that was expected to reset at %s at the latest; if the limit is over, tell it to continue", in.LimitedUntil.In(in.Now.Location()).Format("15:04"))
 	}
 	if in.LimitOver != "" {
 		fmt.Fprintf(&b, ". It was at a usage limit, and %s. A reset time that its screen still names was the latest the limit could last, and the screen does not change when a limit ends early. If it sits at the limit message, do not answer limited: tell it to continue", in.LimitOver)
@@ -220,7 +225,7 @@ func Prompt(in ReviewInput) string {
 		b.WriteString("(none)\n")
 	}
 	for _, c := range in.Recent {
-		fmt.Fprintf(&b, "%s %s: %s", c.Time.Format("15:04"), c.Verdict, c.Reason)
+		fmt.Fprintf(&b, "%s %s: %s", c.Time.In(in.Now.Location()).Format("15:04"), c.Verdict, c.Reason)
 		if c.Sent {
 			fmt.Fprintf(&b, " | you sent: %s", c.Message)
 		}
@@ -231,14 +236,17 @@ func Prompt(in ReviewInput) string {
 }
 
 // parkWords says where the clock of an item that waits on a decision stands.
+// The deadline comes from a comment's time, which is in UTC: it is written on
+// the reviewer's clock, since a bare hour is read as an hour of that clock.
 func parkWords(q QueueItem, now time.Time) string {
-	switch {
-	case q.ParksAt.IsZero():
+	if q.ParksAt.IsZero() {
 		return ""
-	case now.Before(q.ParksAt):
-		return fmt.Sprintf("; not parked yet: the owner has until %s to answer", q.ParksAt.Format("15:04"))
 	}
-	return "; parked"
+	deadline := q.ParksAt.In(now.Location()).Format("15:04 MST")
+	if now.Before(q.ParksAt) {
+		return fmt.Sprintf("; not parked yet: the owner has until %s to answer", deadline)
+	}
+	return "; parked since " + deadline
 }
 
 // ParseVerdict reads the reviewer's answer: its first JSON object. Text
