@@ -231,7 +231,10 @@ type workerState struct {
 	// on; zero while it has work. noWorkTold is set once the owner was told.
 	doneSince  time.Time
 	noWorkTold bool
-	recent     []runlog.Checkin
+	// restTold is the worker's last output when the owner was told that it
+	// rests beside work it can act on: they are told once per silence.
+	restTold time.Time
+	recent   []runlog.Checkin
 }
 
 // nextUnasked returns the item to hand a worker that has nothing in hand it
@@ -527,6 +530,13 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 			_, waits := find(queue, st.issue)
 			order := Verdict{Verdict: runlog.VerdictNudge, Issue: next.Number, Message: unaskedOrder(st.issue, waits, next), Reason: reason}
 			return s.act(ctx, w, st, obs, now, KindQueue, queue, order)
+		}
+		// The code cannot hand over an issue the worker already has. A rest
+		// beside it that lasts is told to the owner, once per silence.
+		if after := s.Settings.NoWorkAfterOrZero(); last == runlog.VerdictOnTrack && after > 0 && idle >= after && s.Notify != nil && !obs.LastActivity.Equal(st.restTold) {
+			st.restTold = obs.LastActivity
+			first := queue[slices.IndexFunc(queue, QueueItem.Workable)]
+			s.Notify(w.Name, fmt.Sprintf("%s: worker %s has rested %s beside work it can act on, #%d first; the reviewer finds it on track", s.Machine.Name, w.Name, spell(idle.Truncate(time.Minute)), first.Number))
 		}
 		// It may wait on something of its own beside work it can act on. It
 		// is looked at again as often as a busy worker.

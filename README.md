@@ -124,7 +124,7 @@ Guards against wasted tokens:
 Guards against a worker that rests beside work:
 
 - One wrong answer of the reviewer does not hold a worker. A worker that has rested 10 minutes after an `on_track` or a `done`, with nothing in hand that it can act on and an item in its queue that it can, is handed that item by the agent itself. No reviewer is asked: the agent already knows both facts. Nothing in hand means no issue yet, an issue that left the queue, or one that waits on you with no grace period left. `shed status` shows the hand-over with "handed over without the reviewer".
-- A worker with an issue in hand that it can act on is never handed another this way. If it rests there after an `on_track`, it may wait on something it started, so it is reviewed again every `scope_every`, like a busy worker.
+- A worker with an issue in hand that it can act on is never handed another this way. If it rests there after an `on_track`, it may wait on something it started, so it is reviewed again every `scope_every`, like a busy worker. With `no_work_after` set, your `notify` command hears of it once when the rest has lasted that long.
 - A worker that needs you, is at a limit, sits at an API error or was found stuck is left as that verdict says.
 
 ### The queue
@@ -1061,7 +1061,8 @@ Idle workers stop nothing, so by default nobody hears of them. Two settings
 under `supervisor` change that: `no_work_after: 30m` notifies when a worker
 has had nothing it can act on for that long, and `low_queue: 3` when a queue
 has fewer issues than that for a worker to act on. Each says how many issues
-of the queue wait on you.
+of the queue wait on you. `no_work_after` also notifies, once per silence, when
+a worker has rested that long beside an issue in hand that it can act on.
 
 ### Scheduled tasks
 

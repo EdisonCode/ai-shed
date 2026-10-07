@@ -2429,6 +2429,26 @@ func TestRestingWorkerFoundOnTrackBesideItsWorkIsAskedAgainAtTheScopeInterval(t 
 	}
 }
 
+func TestOwnerIsToldOnceOfAWorkerThatRestsBesideItsOwnIssue(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h", NoWorkAfter: "20m"}, assign(12), onTrack)
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+	f.tick(2 * time.Minute) // it takes #12
+	f.term.running(f.now)
+	f.tick(2 * time.Minute) // silent with #12 in hand; the reviewer finds it on track
+
+	f.tick(15 * time.Minute)
+	if len(notes) != 0 {
+		t.Fatalf("told after 17 minutes of rest: %q", notes)
+	}
+	f.tick(5 * time.Minute)
+	f.tick(30 * time.Minute)
+	want := "box: worker app has rested 22m beside work it can act on, #12 first; the reviewer finds it on track"
+	if !slices.Equal(notes, []string{want}) {
+		t.Fatalf("notes = %q, want one: %q", notes, want)
+	}
+}
+
 func TestWorkerThatNeedsTheOwnerIsNotHandedWorkWithoutTheReviewer(t *testing.T) {
 	f := started(t, config.Supervisor{}, Verdict{Verdict: runlog.VerdictNeedsOwner, Reason: "a dialog is open"})
 	f.tick(2 * time.Minute)
