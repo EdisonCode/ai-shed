@@ -17,7 +17,9 @@ import (
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
-var t0 = time.Date(2026, 10, 4, 22, 0, 0, 0, time.UTC)
+// t0 is on a clock that is not UTC, as a machine's is. A time from GitHub is
+// in UTC: a test that mixes the two shows the wrong hour.
+var t0 = time.Date(2026, 10, 4, 15, 0, 0, 0, time.FixedZone("PDT", -7*60*60))
 
 type fakeTerminal struct {
 	obs    Observation
@@ -271,6 +273,7 @@ func TestIdleWorkerIsReviewedOncePerSilence(t *testing.T) {
 func TestRestingWorkerWakesWhenItsQueueChanges(t *testing.T) {
 	f := started(t, config.Supervisor{CacheTTL: "1h"},
 		Verdict{Verdict: runlog.VerdictDone, Reason: "queue is empty"}, nudge("Take #13 next."))
+	f.lister.issues = nil
 	f.tick(2 * time.Minute)
 	f.tick(10 * time.Minute) // same queue: GitHub is asked, the reviewer is not
 	if len(f.reviewer.prompts) != 1 {
@@ -742,6 +745,7 @@ func (f *fixture) reviews() int {
 
 func TestRestartCostsARestingWorkerNothing(t *testing.T) {
 	f := started(t, config.Supervisor{}, Verdict{Verdict: runlog.VerdictDone, Reason: "queue is empty"})
+	f.lister.issues = nil
 	f.tick(2 * time.Minute)
 	f.restartAgent()
 	f.tick(time.Minute)
@@ -2280,7 +2284,7 @@ func TestPendingRetryAndItsCountSurviveAnAgentRestart(t *testing.T) {
 // at the time given.
 func asksADecision(number int, at time.Time, more ...string) backlog.Issue {
 	i := labeled(number)
-	i.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** none\n**Decisions needed:**\n1. Drop the legacy column?", CreatedAt: at}}
+	i.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** none\n**Decisions needed:**\n1. Drop the legacy column?", CreatedAt: at.UTC()}}
 	for _, body := range more {
 		i.Comments = append(i.Comments, backlog.Comment{Body: body})
 	}
@@ -2295,7 +2299,7 @@ func TestDecisionKeepsItsWorkerUntilTheGracePeriodIsOverThenParks(t *testing.T) 
 	f.lister.issues = []backlog.Issue{asksADecision(12, f.now.Add(time.Minute)), labeled(13)}
 	f.term.running(f.now.Add(time.Minute))
 	f.tick(3 * time.Minute) // silent after its question: reviewed, 2 minutes into the 15
-	if prompt := f.reviewer.prompts[1]; !strings.Contains(prompt, "#12 Issue [waits on the owner: decision; not parked yet: the owner has until 22:18 UTC to answer]") {
+	if prompt := f.reviewer.prompts[1]; !strings.Contains(prompt, "#12 Issue [waits on the owner: decision; not parked yet: the owner has until 15:18 PDT to answer]") {
 		t.Fatalf("the reviewer was not told that the clock runs:\n%s", prompt)
 	}
 
@@ -2305,7 +2309,7 @@ func TestDecisionKeepsItsWorkerUntilTheGracePeriodIsOverThenParks(t *testing.T) 
 	}
 
 	f.tick(6 * time.Minute) // the owner did not answer in time
-	if len(f.reviewer.prompts) != 3 || !strings.Contains(f.reviewer.prompts[2], "[waits on the owner: decision; parked since 22:18 UTC]") {
+	if len(f.reviewer.prompts) != 3 || !strings.Contains(f.reviewer.prompts[2], "[waits on the owner: decision; parked since 15:18 PDT]") {
 		t.Fatalf("after the grace period: %d review(s); want one that shows #12 parked", len(f.reviewer.prompts))
 	}
 	if c := f.lastCheckin(t); c.Issue != 13 || !c.Sent {
@@ -2335,14 +2339,35 @@ func TestCheckinTimesAreShownOnTheReviewersClock(t *testing.T) {
 	west := time.FixedZone("PDT", -7*60*60)
 	at := time.Date(2026, 10, 4, 23, 6, 0, 0, time.UTC)
 
-	prompt := Prompt(ReviewInput{Now: at.Add(time.Hour).In(west), Recent: []runlog.Checkin{{Time: at, Verdict: runlog.VerdictOnTrack, Reason: "it waits"}}})
-	if !strings.Contains(prompt, "16:06 on_track: it waits") {
+	prompt := Prompt(ReviewInput{Now: at.Add(time.Hour).In(west), Recent: []runlog.Checkin{{Time: at, Verdict: runlog.VerdictNeedsOwner, Reason: "a dialog is open"}}})
+	if !strings.Contains(prompt, "16:06 needs_owner: a dialog is open") {
 		t.Fatalf("the check-in is not on the reviewer's clock:\n%s", prompt)
 	}
 }
 
-func TestReviewerThatLeavesAWorkerOnAParkedIssueIsAskedAgain(t *testing.T) {
-	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack, onTrack, assign(13))
+// A reason is the reviewer's reading of an earlier queue and clock. Shown
+// again, it can outweigh what the prompt says now.
+func TestPromptLeavesOutTheReasonOfACheckinThatSentNothing(t *testing.T) {
+	prompt := Prompt(ReviewInput{Now: t0, Recent: []runlog.Checkin{
+		{Time: t0.Add(-30 * time.Minute), Verdict: runlog.VerdictOnTrack, Reason: "the owner has until 23:18"},
+		{Time: t0.Add(-20 * time.Minute), Verdict: runlog.VerdictDone, Reason: "nothing it can act on"},
+		{Time: t0.Add(-10 * time.Minute), Verdict: runlog.VerdictNeedsOwner, Reason: "a dialog is open"},
+		{Time: t0.Add(-5 * time.Minute), Verdict: runlog.VerdictNudge, Reason: "it finished", Message: "Start #13.", Sent: true},
+	}})
+	for _, gone := range []string{"the owner has until 23:18", "nothing it can act on"} {
+		if strings.Contains(prompt, gone) {
+			t.Errorf("the prompt repeats an earlier reading %q:\n%s", gone, prompt)
+		}
+	}
+	for _, want := range []string{"14:30 on_track\n", "14:40 done\n", "14:50 needs_owner: a dialog is open\n", "14:55 nudge: it finished | you sent: Start #13.\n"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestWorkerLeftOnAParkedIssueIsHandedTheNextItemWithoutTheReviewer(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack, onTrack)
 	f.lister.issues = []backlog.Issue{labeled(12), labeled(13)}
 	f.tick(2 * time.Minute) // it takes #12
 
@@ -2354,14 +2379,82 @@ func TestReviewerThatLeavesAWorkerOnAParkedIssueIsAskedAgain(t *testing.T) {
 		t.Fatalf("at the end of the grace period: %d review(s), sent %q; want a review that hands over nothing", len(f.reviewer.prompts), f.term.sent)
 	}
 
-	f.tick(10 * time.Minute)
+	f.tick(5 * time.Minute)
 	if len(f.reviewer.prompts) != 3 {
-		t.Fatalf("%d review(s) 10 minutes later; want the reviewer asked no more often than for a busy worker", len(f.reviewer.prompts))
+		t.Fatalf("%d reviews; want #13 handed over with no further answer of the reviewer", len(f.reviewer.prompts))
+	}
+	if c := f.lastCheckin(t); c.Issue != 13 || !c.Sent || !strings.Contains(c.Message, "Start #13 now.") {
+		t.Fatalf("check-in = %+v, want #13 handed over", c)
+	}
+}
+
+func TestWorkerWithNothingInHandIsHandedAnItemAfterAReviewerFoundItDone(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	f.tick(2 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent %q after a done", f.term.sent)
 	}
 
-	f.tick(20 * time.Minute)
-	if c := f.lastCheckin(t); c.Issue != 13 || !c.Sent {
-		t.Fatalf("check-in = %+v, want the reviewer asked again and #13 handed over", c)
+	f.tick(5 * time.Minute)
+	if len(f.term.sent) != 0 {
+		t.Fatalf("sent %q after 7 minutes of silence; want the worker left a while longer", f.term.sent)
+	}
+	f.tick(5 * time.Minute)
+	if c := f.lastCheckin(t); c.Issue != 12 || !c.Sent || f.reviews() != 1 {
+		t.Fatalf("check-in = %+v after %d review(s), want #12 handed over without the reviewer", c, f.reviews())
+	}
+}
+
+func TestReworkHandedOverWithoutTheReviewerSaysWhatIsWrong(t *testing.T) {
+	item := QueueItem{Number: 13, Rework: "its pull request has conflicts"}
+	if got, want := unaskedOrder(0, false, item), "Start #13 now. Its pull request cannot merge as it stands: its pull request has conflicts. Fix that and nothing else."; got != want {
+		t.Fatalf("order = %q, want %q", got, want)
+	}
+}
+
+func TestRestingWorkerFoundOnTrackBesideItsWorkIsAskedAgainAtTheScopeInterval(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack)
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(13)}
+	f.tick(2 * time.Minute) // it takes #12
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute) // silent with #12 in hand; the reviewer finds it on track
+
+	f.tick(25 * time.Minute)
+	if f.reviews() != 2 || len(f.term.sent) != 1 {
+		t.Fatalf("%d review(s), sent %q; its issue in hand is workable: want it left alone", f.reviews(), f.term.sent)
+	}
+	f.tick(10 * time.Minute)
+	if f.reviews() != 3 {
+		t.Fatalf("%d review(s) after the scope interval, want the reviewer asked again", f.reviews())
+	}
+}
+
+func TestOwnerIsToldOnceOfAWorkerThatRestsBesideItsOwnIssue(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h", NoWorkAfter: "20m"}, assign(12), onTrack)
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+	f.tick(2 * time.Minute) // it takes #12
+	f.term.running(f.now)
+	f.tick(2 * time.Minute) // silent with #12 in hand; the reviewer finds it on track
+
+	f.tick(15 * time.Minute)
+	if len(notes) != 0 {
+		t.Fatalf("told after 17 minutes of rest: %q", notes)
+	}
+	f.tick(5 * time.Minute)
+	f.tick(30 * time.Minute)
+	want := "box: worker app has rested 22m beside work it can act on, #12 first; the reviewer finds it on track"
+	if !slices.Equal(notes, []string{want}) {
+		t.Fatalf("notes = %q, want one: %q", notes, want)
+	}
+}
+
+func TestWorkerThatNeedsTheOwnerIsNotHandedWorkWithoutTheReviewer(t *testing.T) {
+	f := started(t, config.Supervisor{}, Verdict{Verdict: runlog.VerdictNeedsOwner, Reason: "a dialog is open"})
+	f.tick(2 * time.Minute)
+	f.tick(40 * time.Minute)
+	if f.reviews() != 1 || len(f.term.sent) != 0 {
+		t.Fatalf("%d review(s), sent %q; want nothing typed into a worker that needs the owner", f.reviews(), f.term.sent)
 	}
 }
 
@@ -2536,5 +2629,77 @@ func TestOwnerIsToldOnceWhenAQueueRunsShort(t *testing.T) {
 	}
 	if want := []string{"box: the queue of worker app has 1 issue(s) a worker can act on, fewer than 2; 1 wait on you"}; !slices.Equal(notes, want) {
 		t.Fatalf("notifications = %q, want %q", notes, want)
+	}
+}
+
+// askFixture is a machine whose only worker answers the owner's questions.
+func askFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := newFixture(t, config.Supervisor{}, assign(12))
+	f.Machine.Workers[0].Ask = true
+	f.Machine.Workers[0].Command = "claude --remote-control box-ask"
+	f.Machine.Workers[0].Brief = "Answer questions about the app."
+	return f
+}
+
+func TestAskWorkerIsStartedToWaitForAQuestion(t *testing.T) {
+	f := askFixture(t)
+	f.tick(0)
+
+	want := "claude --remote-control box-ask 'You answer the owner'\\''s questions. Read .shed/BRIEF.md in full, say that you are ready, and wait for a question.'"
+	if !slices.Equal(f.term.sent, []string{want}) {
+		t.Fatalf("sent = %q", f.term.sent)
+	}
+	brief, err := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"Answer questions about the app.", "## You answer questions", "Change nothing.", "a draft for the owner to send"} {
+		if !strings.Contains(string(brief), part) {
+			t.Errorf("brief lacks %q:\n%s", part, brief)
+		}
+	}
+	for _, part := range []string{"## Queue", "## One-off tasks", "## Choices", "## You work unattended"} {
+		if strings.Contains(string(brief), part) {
+			t.Errorf("brief has %q, which is for a worker that is handed work:\n%s", part, brief)
+		}
+	}
+}
+
+func TestAskWorkerIsNeverReviewedOrHandedWork(t *testing.T) {
+	f := askFixture(t)
+	f.tick(0)
+	f.term.sent = nil
+	f.term.running(f.now)
+	f.pushTask(t, runlog.TaskAny, "t1", "Compare the two exports.")
+
+	for range 12 {
+		f.tick(10 * time.Minute)
+	}
+	if f.reviews() != 0 || len(f.term.sent) != 0 {
+		t.Fatalf("%d review(s), sent %q; want an ask worker left to its conversation", f.reviews(), f.term.sent)
+	}
+}
+
+func TestAskWorkerIsRestartedWhenItsSessionEnds(t *testing.T) {
+	f := askFixture(t)
+	f.tick(0)
+	f.term.sent = nil
+	f.term.exitedToShell(f.now)
+	f.tick(time.Minute)
+
+	if len(f.term.sent) != 1 || !strings.HasPrefix(f.term.sent[0], "claude --remote-control box-ask ") {
+		t.Fatalf("sent = %q, want its session started again", f.term.sent)
+	}
+}
+
+func TestIssueBumpedToAnAskWorkerStaysInItsQueue(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	f.Machine.Workers = append(f.Machine.Workers, config.Worker{Name: "ask", Dir: t.TempDir(), Brief: "Answer.", Ask: true})
+	f.bump(t, 12, "ask")
+	f.tick(2 * time.Minute)
+
+	if c := f.lastCheckin(t); c.Issue != 12 || !c.Sent {
+		t.Fatalf("check-in = %+v, want #12 still handed to the worker that builds", c)
 	}
 }

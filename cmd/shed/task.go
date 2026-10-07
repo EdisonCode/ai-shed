@@ -75,16 +75,12 @@ func cmdTask(args []string) int {
 	if fs.NArg() != 2 {
 		return fail(fmt.Errorf("%s", usage))
 	}
-	if len(m.Workers) == 0 {
+	if len(m.Builders()) == 0 {
 		return fail(fmt.Errorf("machine %s has no workers to take a task", m.Name))
 	}
 	if *worker != "" {
-		known := false
-		for _, w := range m.Workers {
-			known = known || w.Name == *worker
-		}
-		if !known {
-			return fail(fmt.Errorf("machine %s has no worker %q", m.Name, *worker))
+		if err := m.TakesWork(*worker); err != nil {
+			return fail(err)
 		}
 	}
 	var brief []byte

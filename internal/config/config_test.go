@@ -323,3 +323,38 @@ func TestBackfillSourceNeedsALabelToMarkWhatItTakes(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestAskWorkerTakesNoWork(t *testing.T) {
+	base := "machines:\n  - name: box\n    host: local\n    issues:\n      - {repo: org/app, label: x}\n    workers:\n"
+	for field, want := range map[string]string{
+		"issues: [{repo: org/app, label: y}]": "answers questions and has no queue: remove issues",
+		"eye_checks: true":                    "answers questions and does no eye checks",
+		"fresh_per_issue: true":               "answers questions and is handed no issue: remove fresh_per_issue",
+	} {
+		_, err := Parse([]byte(base + "      - {name: ask, dir: /tmp, brief: b, ask: true, " + field + "}\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", field, err, want)
+		}
+	}
+
+	c, err := Parse([]byte(base + "      - {name: app, dir: /tmp, brief: b}\n      - {name: ask, dir: /tmp, brief: b, ask: true}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c.Machines[0]
+	if got := m.SourcesFor(m.Workers[1]); len(got) != 0 {
+		t.Errorf("an ask worker's queue = %v, want none: it must not take the machine's", got)
+	}
+	if got := m.Builders(); len(got) != 1 || got[0].Name != "app" {
+		t.Errorf("builders = %v, want only app", got)
+	}
+	if err := m.TakesWork("app"); err != nil {
+		t.Errorf("app: %v", err)
+	}
+	if err := m.TakesWork("ask"); err == nil || !strings.Contains(err.Error(), "answers questions and is handed no work") {
+		t.Errorf("ask: err = %v", err)
+	}
+	if err := m.TakesWork("nobody"); err == nil || !strings.Contains(err.Error(), `has no worker "nobody"`) {
+		t.Errorf("nobody: err = %v", err)
+	}
+}

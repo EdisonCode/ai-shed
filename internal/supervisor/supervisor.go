@@ -31,6 +31,10 @@ const (
 	// queueRecheck is how often a resting worker's queue is looked at for
 	// something new. This asks GitHub, not the reviewer.
 	queueRecheck = 5 * time.Minute
+	// restBesideWork is how long a worker may rest beside an item it can act
+	// on, with nothing in hand that it can act on, after the reviewer handed
+	// it nothing. Then the supervisor hands the item over itself.
+	restBesideWork = 10 * time.Minute
 	// A worker that takes maxNudges nudges about the same work, or maxStarts
 	// starts, inside loopWindow is not being helped by more of them. Nudges
 	// are counted per session and per issue in hand.
@@ -64,6 +68,7 @@ const (
 	BriefFile = ".shed/BRIEF.md"
 
 	startPrompt      = "You are an unattended worker. Read " + BriefFile + " in full and carry it out."
+	askPrompt        = "You answer the owner's questions. Read " + BriefFile + " in full, say that you are ready, and wait for a question."
 	briefChanged     = "Your brief changed. Read " + BriefFile + " again and follow it."
 	briefChangedThen = "Your brief changed. Read " + BriefFile + " again. Then: "
 	reorient         = "Your context was cleared. Read " + BriefFile + " first, then check git status, git log and the issue comments to see where the work stands. Then: "
@@ -72,6 +77,12 @@ const (
 	// words: a worker that took it for work to build would start a branch.
 	lookOrder     = "Do the eye check of #%d on staging: %s. Follow the Eye checks section of " + BriefFile + " and change no code."
 	clearSettling = 2 * time.Second
+	// unaskedStart hands over an item that the reviewer did not: the code
+	// knows that the worker has nothing else it can act on.
+	unaskedStart  = "Start #%d now."
+	unaskedWaits  = "Nothing is left for you on #%d until the owner acts. "
+	unaskedRework = " Its pull request cannot merge as it stands: %s. Fix that and nothing else."
+	unaskedRuled  = " The owner answered its question: read the answer in the issue and go on from there."
 
 	// TaskDir is where a one-off task's brief is put in the worker's
 	// directory, and where the worker writes its report.
@@ -220,7 +231,44 @@ type workerState struct {
 	// on; zero while it has work. noWorkTold is set once the owner was told.
 	doneSince  time.Time
 	noWorkTold bool
-	recent     []runlog.Checkin
+	// restTold is the worker's last output when the owner was told that it
+	// rests beside work it can act on: they are told once per silence.
+	restTold time.Time
+	recent   []runlog.Checkin
+}
+
+// nextUnasked returns the item to hand a worker that has nothing in hand it
+// can act on: the first workable item of its queue. It has something in hand
+// while it works a one-off task, while its issue is workable, and while the
+// owner may still answer the question of its issue.
+func (st *workerState) nextUnasked(queue []QueueItem, now time.Time) (QueueItem, bool) {
+	if st.task != "" {
+		return QueueItem{}, false
+	}
+	if item, inHand := find(queue, st.issue); inHand && (item.Workable() || now.Before(item.ParksAt)) {
+		return QueueItem{}, false
+	}
+	i := slices.IndexFunc(queue, QueueItem.Workable)
+	if i < 0 {
+		return QueueItem{}, false
+	}
+	return queue[i], true
+}
+
+// unaskedOrder is the message that hands over an item the reviewer did not.
+// waits says that the issue in hand is still open and waits on the owner.
+func unaskedOrder(inHand int, waits bool, next QueueItem) string {
+	order := fmt.Sprintf(unaskedStart, next.Number)
+	if waits {
+		order = fmt.Sprintf(unaskedWaits, inHand) + order
+	}
+	switch {
+	case next.Rework != "":
+		order += fmt.Sprintf(unaskedRework, next.Rework)
+	case next.Ruled:
+		order += unaskedRuled
+	}
+	return order
 }
 
 // handsOver reports whether a nudge that names this queue item gives the
@@ -365,6 +413,13 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		return s.recycle(w, st, now)
 	}
 
+	// A worker that answers the owner's questions is in a conversation with
+	// the owner. Its session is kept running and its brief kept current;
+	// nothing else is typed into it, and no reviewer reads it.
+	if w.Ask {
+		return nil
+	}
+
 	// The worker's tool may say what state it is in. What it says needs no
 	// reviewer to read the screen.
 	mark, _ := runlog.ReadMark(s.StateDir, w.Name)
@@ -456,30 +511,38 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		st.lastQueueCheck = now
 		s.tellStarved(w, st, queue, now)
 		seen := fingerprint(queue)
-		// The owner did not answer in time: the issue in hand is parked, and
-		// the worker takes the next one.
-		if item, inHand := find(queue, st.issue); inHand && slices.ContainsFunc(queue, QueueItem.Workable) {
-			if item.parkedSince(st.lastReview, now) {
-				return s.review(ctx, w, st, obs, now, KindQueue, queue)
-			}
-			// A reviewer that leaves a resting worker on a parked issue,
-			// beside work it can act on, has misread the queue. Nothing else
-			// would make it look again, so it is asked as often as it is
-			// about a busy worker.
-			if item.parked(now) && st.lastVerdict() == runlog.VerdictOnTrack && now.Sub(st.lastReview) >= s.Settings.ScopeEveryOrDefault() {
-				return s.review(ctx, w, st, obs, now, KindQueue, queue)
-			}
-		}
-		if seen == st.queueSeen {
-			return nil
-		}
-		// What changed may have left nothing to hand over: the last workable
-		// item was closed, or went to another worker. That needs no review.
+		// Nothing to hand over: the last workable item was closed, or went
+		// to another worker. That needs no review.
 		if !slices.ContainsFunc(queue, QueueItem.Workable) {
 			st.queueSeen = seen
 			return nil
 		}
-		return s.review(ctx, w, st, obs, now, KindQueue, queue)
+		// The queue changed, or the owner did not answer in time: the issue
+		// in hand is parked, and the worker takes the next one.
+		if item, inHand := find(queue, st.issue); seen != st.queueSeen || (inHand && item.parkedSince(st.lastReview, now)) {
+			return s.review(ctx, w, st, obs, now, KindQueue, queue)
+		}
+		// The reviewer was asked and handed over nothing. One wrong answer
+		// must not hold a worker until its queue changes.
+		last := st.lastVerdict()
+		if next, ok := st.nextUnasked(queue, now); ok && idle >= restBesideWork && (last == runlog.VerdictOnTrack || last == runlog.VerdictDone) {
+			reason := fmt.Sprintf("it rested %s beside #%d with nothing in hand that it can act on, after a check-in that found it %s: handed over without the reviewer", spell(idle.Truncate(time.Minute)), next.Number, last)
+			_, waits := find(queue, st.issue)
+			order := Verdict{Verdict: runlog.VerdictNudge, Issue: next.Number, Message: unaskedOrder(st.issue, waits, next), Reason: reason}
+			return s.act(ctx, w, st, obs, now, KindQueue, queue, order)
+		}
+		// The code cannot hand over an issue the worker already has. A rest
+		// beside it that lasts is told to the owner, once per silence.
+		if after := s.Settings.NoWorkAfterOrZero(); last == runlog.VerdictOnTrack && after > 0 && idle >= after && s.Notify != nil && !obs.LastActivity.Equal(st.restTold) {
+			st.restTold = obs.LastActivity
+			first := queue[slices.IndexFunc(queue, QueueItem.Workable)]
+			s.Notify(w.Name, fmt.Sprintf("%s: worker %s has rested %s beside work it can act on, #%d first; the reviewer finds it on track", s.Machine.Name, w.Name, spell(idle.Truncate(time.Minute)), first.Number))
+		}
+		// It may wait on something of its own beside work it can act on. It
+		// is looked at again as often as a busy worker.
+		if last == runlog.VerdictOnTrack && now.Sub(st.lastReview) >= s.Settings.ScopeEveryOrDefault() {
+			return s.review(ctx, w, st, obs, now, KindQueue, queue)
+		}
 	}
 	return nil
 }
@@ -507,7 +570,11 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 			return err
 		}
 	}
-	command := w.CommandOrDefault() + " " + shellQuote(startPrompt)
+	prompt := startPrompt
+	if w.Ask {
+		prompt = askPrompt
+	}
+	command := w.CommandOrDefault() + " " + shellQuote(prompt)
 	if err := s.Terminal.Send(w.Name, command); err != nil {
 		return err
 	}
@@ -567,6 +634,13 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 			}
 		}
 	}
+	return s.act(ctx, w, st, obs, now, kind, queue, verdict)
+}
+
+// act carries out a verdict on a worker: the reviewer's, or a hand-over the
+// supervisor chose itself.
+func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, obs Observation, now time.Time, kind string, queue []QueueItem, verdict Verdict) error {
+	idle := now.Sub(obs.LastActivity)
 	// The worker has reached a point where nothing is in progress: it is done,
 	// or it is about to be given another issue. A fresh session that was
 	// asked for starts here; the hand-over happens in the new session.
@@ -1159,7 +1233,7 @@ func (s *Supervisor) bumps() (map[int]string, error) {
 		return nil, err
 	}
 	for issue, to := range bumps {
-		if !slices.ContainsFunc(s.Machine.Workers, func(w config.Worker) bool { return w.Name == to }) {
+		if s.Machine.TakesWork(to) != nil {
 			bumps[issue] = ""
 		}
 	}
@@ -1390,6 +1464,9 @@ func (s *Supervisor) writeBrief(w config.Worker) (changed bool, err error) {
 }
 
 func (s *Supervisor) briefText(w config.Worker) string {
+	if w.Ask {
+		return s.askBrief(w)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Brief for worker %s on %s\n\n%s\n", w.Name, s.Machine.Name, s.scope(w))
 	if sources := s.Machine.SourcesFor(w); len(sources) > 0 {
@@ -1432,6 +1509,31 @@ new brief.
 - Do not wait for an answer that nobody is there to give. The Choices section says which choices are yours and what to do with one that is not.
 - Before you stop for any reason, write your plan and your progress in the issue. Your context may be cleared between items. What is not in the issue, the branch or a pull request is lost.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
+`)
+	return b.String()
+}
+
+// askBrief is the brief of a worker that answers the owner's questions. It
+// has the owner's scope and standing orders, and none of the rules for a
+// queue: no issue, no choice and no task is ever put before it.
+func (s *Supervisor) askBrief(w config.Worker) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Brief for worker %s on %s\n\n%s\n", w.Name, s.Machine.Name, strings.TrimSpace(w.Brief))
+	if orders := strings.TrimSpace(s.StandingOrders); orders != "" {
+		fmt.Fprintf(&b, "\n## Standing orders\n\n%s\n", orders)
+	}
+	b.WriteString(`
+## You answer questions
+
+The owner reaches this session from another device and asks about the code
+and the work of this machine. Nobody hands you an issue or a task. When you
+have answered, wait for the next question.
+
+- Answer from what you read: the code, the git history, the issues and the pull requests. Name the file and line, the commit or the issue that an answer rests on. Say what you did not check.
+- Before you answer about recent work, run ` + "`git fetch`" + ` and read from the remote's default branch. The checkout you sit in may be old.
+- Change nothing. Do not edit a file, commit, push, merge or deploy, and do not write to an issue or a pull request. When an answer calls for a change, describe it: the owner queues it for a worker.
+- A reply that is meant for someone else, such as a customer, is a draft for the owner to send. Send nothing yourself.
+- Other sessions on this machine are workers in the middle of their work. You may read their directories. Do not type into their sessions or change their files.
 `)
 	return b.String()
 }

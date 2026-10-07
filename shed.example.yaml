@@ -79,6 +79,15 @@ machines:
         brief: |
           Work the issues in your queue. Stay inside the audit log and export
           features. Do not change the billing module.
+      # Optional. A session that answers your questions and builds nothing.
+      # The agent keeps it running and types nothing into it. Its command
+      # decides how you reach it; see "A worker to ask" in the README.
+      # - name: ask
+      #   dir: ~/Projects/my-app-ask
+      #   command: claude --remote-control linux-box-ask --permission-mode default
+      #   ask: true
+      #   brief: |
+      #     Answer questions about my-app.
     tasks:
       - name: nightly-deps
         schedule: "0 3 * * *"

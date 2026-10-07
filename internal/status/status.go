@@ -129,6 +129,9 @@ type WorkerStatus struct {
 	Issue int `json:"issue,omitempty"`
 	// Task is the one-off task it has in hand; empty for none.
 	Task string `json:"task,omitempty"`
+	// Ask is set for a worker that answers the owner's questions and is
+	// handed no work.
+	Ask bool `json:"ask,omitempty"`
 	// State is what the worker's own tool reports through its hooks:
 	// working, idle or waiting for a person. Empty when the tool has no
 	// hooks. StateSince is when it began; zero when that is not known.
@@ -373,7 +376,7 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 			// A bump to a worker the machine does not have moves nothing.
 			to, bumped := res.Bumps[issue.Number]
 			st.Bumped = bumped
-			if slices.ContainsFunc(m.Workers, func(w config.Worker) bool { return w.Name == to }) {
+			if m.TakesWork(to) == nil {
 				st.BumpedTo = to
 			}
 		}
@@ -439,8 +442,12 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 // queued issue waits on you (oldest 27h)". "" when no worker is idle for
 // that reason: an empty queue is not the owner's backlog.
 func noWork(r MachineReport, now time.Time) string {
-	idle := 0
+	idle, builders := 0, 0
 	for _, w := range r.Workers {
+		if w.Ask {
+			continue
+		}
+		builders++
 		if w.Last != nil && w.Last.Verdict == runlog.VerdictDone && w.Task == "" {
 			idle++
 		}
@@ -466,7 +473,7 @@ func noWork(r MachineReport, now time.Time) string {
 	if oldest > 0 {
 		why += fmt.Sprintf(" (oldest %s)", Short(oldest))
 	}
-	return fmt.Sprintf("%d of %d workers have no work: %s", idle, len(r.Workers), why)
+	return fmt.Sprintf("%d of %d workers have no work: %s", idle, builders, why)
 }
 
 // askWords says what an issue asks of the owner and for how long, as in
@@ -538,7 +545,7 @@ func assessAgent(m config.Machine, res probe.Result, attend func(string, ...any)
 func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, attend func(string, ...any)) {
 	latest := runlog.LatestCheckins(res.Checkins)
 	for _, w := range m.Workers {
-		st := WorkerStatus{Name: w.Name, Issue: runlog.IssueInHand(res.Checkins, w.Name), Task: runlog.TaskInHand(res.Checkins, w.Name), RecyclePending: slices.Contains(res.Recycle, w.Name)}
+		st := WorkerStatus{Name: w.Name, Issue: runlog.IssueInHand(res.Checkins, w.Name), Task: runlog.TaskInHand(res.Checkins, w.Name), RecyclePending: slices.Contains(res.Recycle, w.Name), Ask: w.Ask}
 		if fields := strings.Fields(w.CommandOrDefault()); len(fields) > 0 {
 			st.Tool = fields[0]
 		}

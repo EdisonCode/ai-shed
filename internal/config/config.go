@@ -237,6 +237,10 @@ type Worker struct {
 	// EyeChecks says the worker has a browser and may do the eye checks of
 	// merged work on staging. Its queue's repositories need a `repos` entry.
 	EyeChecks bool `yaml:"eye_checks"`
+	// Ask makes the worker a session that answers the owner's questions. Its
+	// session is kept running and it is handed no issue and no task: nothing
+	// is typed into the owner's conversation with it.
+	Ask bool `yaml:"ask"`
 }
 
 // Check is a command that must exit 0 for the machine to be ready for work.
@@ -618,6 +622,17 @@ func (c *Config) validate() error {
 				fail("%s: worker %q has no brief", where, w.Name)
 			}
 			checkSources(fmt.Sprintf("%s: worker %q", where, w.Name), w.Issues)
+			if w.Ask {
+				if len(w.Issues) > 0 {
+					fail("%s: worker %q answers questions and has no queue: remove issues, or remove ask", where, w.Name)
+				}
+				if w.EyeChecks {
+					fail("%s: worker %q answers questions and does no eye checks: remove eye_checks, or remove ask", where, w.Name)
+				}
+				if w.FreshPerIssue {
+					fail("%s: worker %q answers questions and is handed no issue: remove fresh_per_issue, or remove ask", where, w.Name)
+				}
+			}
 		}
 	}
 	if c.Supervisor.LowQueue < 0 {
@@ -711,7 +726,38 @@ func (m Machine) BackfillFor(w Worker) []IssueSource {
 	return m.sources(w, true)
 }
 
+// Builders returns the workers that are handed work: all but the ones that
+// answer the owner's questions.
+func (m Machine) Builders() []Worker {
+	var builders []Worker
+	for _, w := range m.Workers {
+		if !w.Ask {
+			builders = append(builders, w)
+		}
+	}
+	return builders
+}
+
+// TakesWork returns nil when the machine has a worker of this name that is
+// handed work, and otherwise says why an issue or a task cannot go to it.
+func (m Machine) TakesWork(name string) error {
+	for _, w := range m.Workers {
+		switch {
+		case w.Name != name:
+		case w.Ask:
+			return fmt.Errorf("worker %q of machine %s answers questions and is handed no work", name, m.Name)
+		default:
+			return nil
+		}
+	}
+	return fmt.Errorf("machine %s has no worker %q", m.Name, name)
+}
+
 func (m Machine) sources(w Worker, backfill bool) []IssueSource {
+	// A worker that answers questions has no queue, not even the machine's.
+	if w.Ask {
+		return nil
+	}
 	all := m.Issues
 	if len(w.Issues) > 0 {
 		all = w.Issues

@@ -51,16 +51,12 @@ func cmdBump(args []string) int {
 		return exitOK
 	}
 
-	if len(m.Workers) == 0 {
+	if len(m.Builders()) == 0 {
 		return fail(fmt.Errorf("machine %s has no supervised workers: nothing there hands out a queue", m.Name))
 	}
 	if *worker != "" {
-		known := false
-		for _, w := range m.Workers {
-			known = known || w.Name == *worker
-		}
-		if !known {
-			return fail(fmt.Errorf("machine %s has no worker %q", m.Name, *worker))
+		if err := m.TakesWork(*worker); err != nil {
+			return fail(err)
 		}
 	}
 	// A bump of an issue no queue has would do nothing, and say nothing.
