@@ -2337,9 +2337,30 @@ func TestCheckinTimesAreShownOnTheReviewersClock(t *testing.T) {
 	west := time.FixedZone("PDT", -7*60*60)
 	at := time.Date(2026, 10, 4, 23, 6, 0, 0, time.UTC)
 
-	prompt := Prompt(ReviewInput{Now: at.Add(time.Hour).In(west), Recent: []runlog.Checkin{{Time: at, Verdict: runlog.VerdictOnTrack, Reason: "it waits"}}})
-	if !strings.Contains(prompt, "16:06 on_track: it waits") {
+	prompt := Prompt(ReviewInput{Now: at.Add(time.Hour).In(west), Recent: []runlog.Checkin{{Time: at, Verdict: runlog.VerdictNeedsOwner, Reason: "a dialog is open"}}})
+	if !strings.Contains(prompt, "16:06 needs_owner: a dialog is open") {
 		t.Fatalf("the check-in is not on the reviewer's clock:\n%s", prompt)
+	}
+}
+
+// A reason is the reviewer's reading of an earlier queue and clock. Shown
+// again, it can outweigh what the prompt says now.
+func TestPromptLeavesOutTheReasonOfACheckinThatSentNothing(t *testing.T) {
+	prompt := Prompt(ReviewInput{Now: t0, Recent: []runlog.Checkin{
+		{Time: t0.Add(-30 * time.Minute), Verdict: runlog.VerdictOnTrack, Reason: "the owner has until 23:18"},
+		{Time: t0.Add(-20 * time.Minute), Verdict: runlog.VerdictDone, Reason: "nothing it can act on"},
+		{Time: t0.Add(-10 * time.Minute), Verdict: runlog.VerdictNeedsOwner, Reason: "a dialog is open"},
+		{Time: t0.Add(-5 * time.Minute), Verdict: runlog.VerdictNudge, Reason: "it finished", Message: "Start #13.", Sent: true},
+	}})
+	for _, gone := range []string{"the owner has until 23:18", "nothing it can act on"} {
+		if strings.Contains(prompt, gone) {
+			t.Errorf("the prompt repeats an earlier reading %q:\n%s", gone, prompt)
+		}
+	}
+	for _, want := range []string{"14:30 on_track\n", "14:40 done\n", "14:50 needs_owner: a dialog is open\n", "14:55 nudge: it finished | you sent: Start #13.\n"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the prompt lacks %q:\n%s", want, prompt)
+		}
 	}
 }
 

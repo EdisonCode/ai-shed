@@ -225,7 +225,13 @@ func Prompt(in ReviewInput) string {
 		b.WriteString("(none)\n")
 	}
 	for _, c := range in.Recent {
-		fmt.Fprintf(&b, "%s %s: %s", c.Time.In(in.Now.Location()).Format("15:04"), c.Verdict, c.Reason)
+		fmt.Fprintf(&b, "%s %s", c.Time.In(in.Now.Location()).Format("15:04"), c.Verdict)
+		// The reason of a check-in that found nothing to do is a reading of
+		// the queue and the clock of that time. It is left out: shown again,
+		// it can outweigh what the queue says now.
+		if c.Sent || (c.Verdict != runlog.VerdictOnTrack && c.Verdict != runlog.VerdictDone) {
+			fmt.Fprintf(&b, ": %s", c.Reason)
+		}
 		if c.Sent {
 			fmt.Fprintf(&b, " | you sent: %s", c.Message)
 		}
