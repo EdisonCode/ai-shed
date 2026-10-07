@@ -17,7 +17,9 @@ import (
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
-var t0 = time.Date(2026, 10, 4, 22, 0, 0, 0, time.UTC)
+// t0 is on a clock that is not UTC, as a machine's is. A time from GitHub is
+// in UTC: a test that mixes the two shows the wrong hour.
+var t0 = time.Date(2026, 10, 4, 15, 0, 0, 0, time.FixedZone("PDT", -7*60*60))
 
 type fakeTerminal struct {
 	obs    Observation
@@ -2280,7 +2282,7 @@ func TestPendingRetryAndItsCountSurviveAnAgentRestart(t *testing.T) {
 // at the time given.
 func asksADecision(number int, at time.Time, more ...string) backlog.Issue {
 	i := labeled(number)
-	i.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** none\n**Decisions needed:**\n1. Drop the legacy column?", CreatedAt: at}}
+	i.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** none\n**Decisions needed:**\n1. Drop the legacy column?", CreatedAt: at.UTC()}}
 	for _, body := range more {
 		i.Comments = append(i.Comments, backlog.Comment{Body: body})
 	}
@@ -2295,7 +2297,7 @@ func TestDecisionKeepsItsWorkerUntilTheGracePeriodIsOverThenParks(t *testing.T) 
 	f.lister.issues = []backlog.Issue{asksADecision(12, f.now.Add(time.Minute)), labeled(13)}
 	f.term.running(f.now.Add(time.Minute))
 	f.tick(3 * time.Minute) // silent after its question: reviewed, 2 minutes into the 15
-	if prompt := f.reviewer.prompts[1]; !strings.Contains(prompt, "#12 Issue [waits on the owner: decision; not parked yet: the owner has until 22:18 UTC to answer]") {
+	if prompt := f.reviewer.prompts[1]; !strings.Contains(prompt, "#12 Issue [waits on the owner: decision; not parked yet: the owner has until 15:18 PDT to answer]") {
 		t.Fatalf("the reviewer was not told that the clock runs:\n%s", prompt)
 	}
 
@@ -2305,7 +2307,7 @@ func TestDecisionKeepsItsWorkerUntilTheGracePeriodIsOverThenParks(t *testing.T) 
 	}
 
 	f.tick(6 * time.Minute) // the owner did not answer in time
-	if len(f.reviewer.prompts) != 3 || !strings.Contains(f.reviewer.prompts[2], "[waits on the owner: decision; parked since 22:18 UTC]") {
+	if len(f.reviewer.prompts) != 3 || !strings.Contains(f.reviewer.prompts[2], "[waits on the owner: decision; parked since 15:18 PDT]") {
 		t.Fatalf("after the grace period: %d review(s); want one that shows #12 parked", len(f.reviewer.prompts))
 	}
 	if c := f.lastCheckin(t); c.Issue != 13 || !c.Sent {
