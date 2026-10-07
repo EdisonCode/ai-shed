@@ -31,6 +31,10 @@ const (
 	// queueRecheck is how often a resting worker's queue is looked at for
 	// something new. This asks GitHub, not the reviewer.
 	queueRecheck = 5 * time.Minute
+	// restBesideWork is how long a worker may rest beside an item it can act
+	// on, with nothing in hand that it can act on, after the reviewer handed
+	// it nothing. Then the supervisor hands the item over itself.
+	restBesideWork = 10 * time.Minute
 	// A worker that takes maxNudges nudges about the same work, or maxStarts
 	// starts, inside loopWindow is not being helped by more of them. Nudges
 	// are counted per session and per issue in hand.
@@ -72,6 +76,12 @@ const (
 	// words: a worker that took it for work to build would start a branch.
 	lookOrder     = "Do the eye check of #%d on staging: %s. Follow the Eye checks section of " + BriefFile + " and change no code."
 	clearSettling = 2 * time.Second
+	// unaskedStart hands over an item that the reviewer did not: the code
+	// knows that the worker has nothing else it can act on.
+	unaskedStart  = "Start #%d now."
+	unaskedWaits  = "Nothing is left for you on #%d until the owner acts. "
+	unaskedRework = " Its pull request cannot merge as it stands: %s. Fix that and nothing else."
+	unaskedRuled  = " The owner answered its question: read the answer in the issue and go on from there."
 
 	// TaskDir is where a one-off task's brief is put in the worker's
 	// directory, and where the worker writes its report.
@@ -221,6 +231,40 @@ type workerState struct {
 	doneSince  time.Time
 	noWorkTold bool
 	recent     []runlog.Checkin
+}
+
+// nextUnasked returns the item to hand a worker that has nothing in hand it
+// can act on: the first workable item of its queue. It has something in hand
+// while it works a one-off task, while its issue is workable, and while the
+// owner may still answer the question of its issue.
+func (st *workerState) nextUnasked(queue []QueueItem, now time.Time) (QueueItem, bool) {
+	if st.task != "" {
+		return QueueItem{}, false
+	}
+	if item, inHand := find(queue, st.issue); inHand && (item.Workable() || now.Before(item.ParksAt)) {
+		return QueueItem{}, false
+	}
+	i := slices.IndexFunc(queue, QueueItem.Workable)
+	if i < 0 {
+		return QueueItem{}, false
+	}
+	return queue[i], true
+}
+
+// unaskedOrder is the message that hands over an item the reviewer did not.
+// waits says that the issue in hand is still open and waits on the owner.
+func unaskedOrder(inHand int, waits bool, next QueueItem) string {
+	order := fmt.Sprintf(unaskedStart, next.Number)
+	if waits {
+		order = fmt.Sprintf(unaskedWaits, inHand) + order
+	}
+	switch {
+	case next.Rework != "":
+		order += fmt.Sprintf(unaskedRework, next.Rework)
+	case next.Ruled:
+		order += unaskedRuled
+	}
+	return order
 }
 
 // handsOver reports whether a nudge that names this queue item gives the
@@ -456,30 +500,31 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		st.lastQueueCheck = now
 		s.tellStarved(w, st, queue, now)
 		seen := fingerprint(queue)
-		// The owner did not answer in time: the issue in hand is parked, and
-		// the worker takes the next one.
-		if item, inHand := find(queue, st.issue); inHand && slices.ContainsFunc(queue, QueueItem.Workable) {
-			if item.parkedSince(st.lastReview, now) {
-				return s.review(ctx, w, st, obs, now, KindQueue, queue)
-			}
-			// A reviewer that leaves a resting worker on a parked issue,
-			// beside work it can act on, has misread the queue. Nothing else
-			// would make it look again, so it is asked as often as it is
-			// about a busy worker.
-			if item.parked(now) && st.lastVerdict() == runlog.VerdictOnTrack && now.Sub(st.lastReview) >= s.Settings.ScopeEveryOrDefault() {
-				return s.review(ctx, w, st, obs, now, KindQueue, queue)
-			}
-		}
-		if seen == st.queueSeen {
-			return nil
-		}
-		// What changed may have left nothing to hand over: the last workable
-		// item was closed, or went to another worker. That needs no review.
+		// Nothing to hand over: the last workable item was closed, or went
+		// to another worker. That needs no review.
 		if !slices.ContainsFunc(queue, QueueItem.Workable) {
 			st.queueSeen = seen
 			return nil
 		}
-		return s.review(ctx, w, st, obs, now, KindQueue, queue)
+		// The queue changed, or the owner did not answer in time: the issue
+		// in hand is parked, and the worker takes the next one.
+		if item, inHand := find(queue, st.issue); seen != st.queueSeen || (inHand && item.parkedSince(st.lastReview, now)) {
+			return s.review(ctx, w, st, obs, now, KindQueue, queue)
+		}
+		// The reviewer was asked and handed over nothing. One wrong answer
+		// must not hold a worker until its queue changes.
+		last := st.lastVerdict()
+		if next, ok := st.nextUnasked(queue, now); ok && idle >= restBesideWork && (last == runlog.VerdictOnTrack || last == runlog.VerdictDone) {
+			reason := fmt.Sprintf("it rested %s beside #%d with nothing in hand that it can act on, after a check-in that found it %s: handed over without the reviewer", spell(idle.Truncate(time.Minute)), next.Number, last)
+			_, waits := find(queue, st.issue)
+			order := Verdict{Verdict: runlog.VerdictNudge, Issue: next.Number, Message: unaskedOrder(st.issue, waits, next), Reason: reason}
+			return s.act(ctx, w, st, obs, now, KindQueue, queue, order)
+		}
+		// It may wait on something of its own beside work it can act on. It
+		// is looked at again as often as a busy worker.
+		if last == runlog.VerdictOnTrack && now.Sub(st.lastReview) >= s.Settings.ScopeEveryOrDefault() {
+			return s.review(ctx, w, st, obs, now, KindQueue, queue)
+		}
 	}
 	return nil
 }
@@ -567,6 +612,13 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 			}
 		}
 	}
+	return s.act(ctx, w, st, obs, now, kind, queue, verdict)
+}
+
+// act carries out a verdict on a worker: the reviewer's, or a hand-over the
+// supervisor chose itself.
+func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, obs Observation, now time.Time, kind string, queue []QueueItem, verdict Verdict) error {
+	idle := now.Sub(obs.LastActivity)
 	// The worker has reached a point where nothing is in progress: it is done,
 	// or it is about to be given another issue. A fresh session that was
 	// asked for starts here; the hand-over happens in the new session.
