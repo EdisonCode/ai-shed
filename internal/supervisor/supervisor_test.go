@@ -2295,7 +2295,7 @@ func TestDecisionKeepsItsWorkerUntilTheGracePeriodIsOverThenParks(t *testing.T) 
 	f.lister.issues = []backlog.Issue{asksADecision(12, f.now.Add(time.Minute)), labeled(13)}
 	f.term.running(f.now.Add(time.Minute))
 	f.tick(3 * time.Minute) // silent after its question: reviewed, 2 minutes into the 15
-	if prompt := f.reviewer.prompts[1]; !strings.Contains(prompt, "#12 Issue [waits on the owner: decision; not parked yet: the owner has until 22:18 to answer]") {
+	if prompt := f.reviewer.prompts[1]; !strings.Contains(prompt, "#12 Issue [waits on the owner: decision; not parked yet: the owner has until 22:18 UTC to answer]") {
 		t.Fatalf("the reviewer was not told that the clock runs:\n%s", prompt)
 	}
 
@@ -2305,11 +2305,63 @@ func TestDecisionKeepsItsWorkerUntilTheGracePeriodIsOverThenParks(t *testing.T) 
 	}
 
 	f.tick(6 * time.Minute) // the owner did not answer in time
-	if len(f.reviewer.prompts) != 3 || !strings.Contains(f.reviewer.prompts[2], "[waits on the owner: decision; parked]") {
+	if len(f.reviewer.prompts) != 3 || !strings.Contains(f.reviewer.prompts[2], "[waits on the owner: decision; parked since 22:18 UTC]") {
 		t.Fatalf("after the grace period: %d review(s); want one that shows #12 parked", len(f.reviewer.prompts))
 	}
 	if c := f.lastCheckin(t); c.Issue != 13 || !c.Sent {
 		t.Fatalf("check-in = %+v, want #13 handed over", c)
+	}
+}
+
+// A hand-back's time comes from GitHub in UTC. The reviewer reads the
+// machine's clock, so the deadline is written on that clock.
+func TestParkDeadlineIsShownOnTheReviewersClock(t *testing.T) {
+	west := time.FixedZone("PDT", -7*60*60)
+	parksAt := time.Date(2026, 10, 4, 23, 18, 0, 0, time.UTC)
+	queue := []QueueItem{{Repo: "org/app", Number: 12, Title: "Issue", Waiting: []string{"decision"}, ParksAt: parksAt}}
+
+	before := Prompt(ReviewInput{Queue: queue, Now: parksAt.Add(-12 * time.Minute).In(west)})
+	if !strings.Contains(before, "; not parked yet: the owner has until 16:18 PDT to answer]") {
+		t.Fatalf("the deadline is not on the reviewer's clock:\n%s", before)
+	}
+
+	after := Prompt(ReviewInput{Queue: queue, Now: parksAt.Add(4 * time.Hour).In(west)})
+	if !strings.Contains(after, "[waits on the owner: decision; parked since 16:18 PDT]") {
+		t.Fatalf("the reviewer was not told since when #12 is parked:\n%s", after)
+	}
+}
+
+func TestCheckinTimesAreShownOnTheReviewersClock(t *testing.T) {
+	west := time.FixedZone("PDT", -7*60*60)
+	at := time.Date(2026, 10, 4, 23, 6, 0, 0, time.UTC)
+
+	prompt := Prompt(ReviewInput{Now: at.Add(time.Hour).In(west), Recent: []runlog.Checkin{{Time: at, Verdict: runlog.VerdictOnTrack, Reason: "it waits"}}})
+	if !strings.Contains(prompt, "16:06 on_track: it waits") {
+		t.Fatalf("the check-in is not on the reviewer's clock:\n%s", prompt)
+	}
+}
+
+func TestReviewerThatLeavesAWorkerOnAParkedIssueIsAskedAgain(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack, onTrack, assign(13))
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(13)}
+	f.tick(2 * time.Minute) // it takes #12
+
+	f.lister.issues = []backlog.Issue{asksADecision(12, f.now.Add(time.Minute)), labeled(13)}
+	f.term.running(f.now.Add(time.Minute))
+	f.tick(3 * time.Minute)
+	f.tick(16 * time.Minute) // #12 is parked, and the reviewer hands over nothing
+	if len(f.reviewer.prompts) != 3 || len(f.term.sent) != 1 {
+		t.Fatalf("at the end of the grace period: %d review(s), sent %q; want a review that hands over nothing", len(f.reviewer.prompts), f.term.sent)
+	}
+
+	f.tick(10 * time.Minute)
+	if len(f.reviewer.prompts) != 3 {
+		t.Fatalf("%d review(s) 10 minutes later; want the reviewer asked no more often than for a busy worker", len(f.reviewer.prompts))
+	}
+
+	f.tick(20 * time.Minute)
+	if c := f.lastCheckin(t); c.Issue != 13 || !c.Sent {
+		t.Fatalf("check-in = %+v, want the reviewer asked again and #13 handed over", c)
 	}
 }
 
