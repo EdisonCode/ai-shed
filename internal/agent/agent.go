@@ -201,6 +201,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		Reviewer:       supervisor.CommandReviewer{Command: m.Command(cfg.Supervisor.CommandOrDefault()), Dir: a.StateDir},
 		Lister:         backlog.GH{},
 		Claimer:        backlog.GH{},
+		Cost:           backlog.GH{},
 		QueueLabels:    cfg.QueueLabels(),
 		StateDir:       a.StateDir,
 		Now:            time.Now,

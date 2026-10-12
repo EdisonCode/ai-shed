@@ -1,0 +1,115 @@
+package supervisor
+
+import (
+	"context"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/edisoncode/ai-shed/internal/backlog"
+	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/runlog"
+)
+
+func TestCostCommentNamesTheTokensAndSplitsAReworkPass(t *testing.T) {
+	first := t0
+	again := t0.Add(time.Hour)
+	checkins := []runlog.Checkin{
+		{Time: first, Worker: "app", Sent: true, Issue: 12, Verdict: runlog.VerdictNudge},
+		{Time: first.Add(30 * time.Minute), Worker: "app", Verdict: runlog.VerdictDone},
+		{Time: again, Worker: "app", Sent: true, Issue: 12, Verdict: runlog.VerdictNudge},
+		{Time: first.Add(time.Minute), Worker: "docs", Sent: true, Issue: 12, Verdict: runlog.VerdictNudge},
+	}
+	usage := []runlog.Usage{
+		{ID: "a", Time: first.Add(time.Minute), Model: "claude-sonnet-4-5-20250929", Input: 180000, Output: 85000, CacheWrite: 40000, CacheRead: 980000},
+		{ID: "b", Time: again.Add(time.Minute), Model: "claude-sonnet-4-5-20250929", Input: 2000, Output: 500, CacheWrite: 1000, CacheRead: 3000},
+		// Before #12 was handed over, and after it was handed on: neither is this issue.
+		{ID: "before", Time: first.Add(-time.Hour), Model: "claude-opus-4-5", Input: 99999, Output: 99999},
+	}
+	checkins = append(checkins, runlog.Checkin{Time: again.Add(30 * time.Minute), Worker: "app", Sent: true, Issue: 13, Verdict: runlog.VerdictNudge})
+	usage = append(usage, runlog.Usage{ID: "c", Time: again.Add(31 * time.Minute), Model: "claude-sonnet-4-5", Input: 50, Output: 50})
+
+	body, ok := formatCost(12, checkins, "app", usage)
+	if !ok {
+		t.Fatal("no comment")
+	}
+	for _, want := range []string{
+		"<!-- shed-cost -->",
+		"## Cost",
+		"This pass — sonnet-4-5 — uncached input 2k, cache write 1k, cache read 3k, output 500",
+		"Total — sonnet-4-5 — uncached input 182k, cache write 41k, cache read 983k, output 85.5k",
+		"From the session transcript.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "opus") || strings.Contains(body, "uncached input 50") {
+		t.Fatalf("another issue's tokens were included:\n%s", body)
+	}
+
+	one, ok := formatCost(12, checkins[:1], "app", usage[:1])
+	if !ok || strings.Contains(one, "This pass") || strings.Contains(one, "Total") {
+		t.Fatalf("a single pass should be one line:\n%s", one)
+	}
+	if !strings.Contains(one, "sonnet-4-5 — uncached input 180k, cache write 40k, cache read 980k, output 85k") {
+		t.Fatalf("body:\n%s", one)
+	}
+	if _, ok := formatCost(12, nil, "app", usage); ok {
+		t.Fatal("an issue that was never handed over has a cost")
+	}
+}
+
+type fakeCost struct {
+	repos  []string
+	prs    []int
+	bodies []string
+}
+
+func (f *fakeCost) PostCost(_ context.Context, repo string, pr int, body string) error {
+	f.repos = append(f.repos, repo)
+	f.prs = append(f.prs, pr)
+	f.bodies = append(f.bodies, body)
+	return nil
+}
+
+func TestHandBackPostsTheTokenCostOnce(t *testing.T) {
+	cost := &fakeCost{}
+	f := started(t, config.Supervisor{}, assign(12), onTrack, onTrack)
+	f.Cost = cost
+	f.lister.issues[0].Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** #41 (ready)\n**Decisions needed:** none"}}
+
+	f.tick(2 * time.Minute) // #12 is handed over; no calls recorded yet
+	if len(cost.bodies) != 0 {
+		t.Fatalf("posted before any usage: %q", cost.bodies)
+	}
+
+	if err := runlog.RecordTranscript(f.StateDir, "app", writeUsageTranscript(t, f.now), "sess"); err != nil {
+		t.Fatal(err)
+	}
+	f.term.running(f.now)
+	f.tick(2 * time.Minute) // on track, the hand-back names #41
+	if len(cost.bodies) != 1 || cost.repos[0] != "org/app" || cost.prs[0] != 41 {
+		t.Fatalf("posted %v %v\n%s", cost.repos, cost.prs, cost.bodies)
+	}
+	if !strings.Contains(cost.bodies[0], "sonnet-4-5 — uncached input 180k, cache write 40k, cache read 980k, output 85k") {
+		t.Fatalf("body:\n%s", cost.bodies[0])
+	}
+
+	f.term.running(f.now)
+	f.tick(2 * time.Minute) // the same calls: the comment is left as it is
+	if len(cost.bodies) != 1 {
+		t.Fatalf("posted %d times with nothing new", len(cost.bodies))
+	}
+}
+
+func writeUsageTranscript(t *testing.T, at time.Time) string {
+	t.Helper()
+	path := t.TempDir() + "/session.jsonl"
+	line := `{"type":"assistant","uuid":"a1","timestamp":"` + at.Add(time.Second).UTC().Format(time.RFC3339) + `","message":{"id":"m1","model":"claude-sonnet-4-5-20250929","usage":{"input_tokens":180000,"output_tokens":85000,"cache_creation_input_tokens":40000,"cache_read_input_tokens":980000}}}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}

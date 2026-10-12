@@ -22,9 +22,9 @@ Your brief is `.shed/BRIEF.md`. It is the whole of your scope.
 
 - Work one issue at a time. The supervisor names it. When you finish, or
   cannot go further, report in the issue, say so in the terminal, and stop.
-- Before you stop, write your plan and progress in the issue. Your context may
-  be cleared before your next item; the issue, the branch and the pull request
-  are all that survive.
+- Write the plan in the issue when you choose the approach, and the progress
+  when a step lands. A usage limit or a cleared context can end a turn before
+  you stop. The issue, the branch and the pull request are all that survive.
 - Report in the issue with one hand-back comment, headed with the hand-back
   phrase the brief gives. shed reads your questions to the owner only from
   such a comment.

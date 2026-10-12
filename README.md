@@ -117,7 +117,7 @@ Guards against wasted tokens:
   - The worker's screen moves. A worker at its limit prints nothing, so one that prints is reviewed like any other.
   - The reviewer answers again after its own limit. It runs on the workers' account, so every held worker is looked at and told to continue.
 - `shed status` shows on a `limited` line how long the hold lasts at the most, when the worker last printed anything, and the `shed resume` command that ends it.
-- An API error is not yours to fix until it has outlasted three retries. Such an error often clears by itself, and a worker that sits at one for hours has lost them for nothing. When the reviewer saw another worker of the machine on track after the error, the account works, and the retry is sent at once. A sub-agent that died with the error is named in the retry, so the worker dispatches it again. A retry keeps the worker's context and is not counted as a nudge.
+- An API error is not yours to fix until it has outlasted three retries. Such an error often clears by itself, and a worker that sits at one for hours has lost them for nothing. When the reviewer saw another worker of the machine on track after the error, the account works, and the retry is sent at once. A sub-agent that died with the error is named in the retry, so the worker dispatches it again. A retry is not counted as a nudge. It keeps the worker's context while the cache is warm, and clears it once the cache has expired.
 - An idle worker is reviewed once per silence, not once per tick.
 - A resting worker is reviewed again only when its queue has something new it can act on. A label, a comment or a hand-back that leaves an issue waiting on you costs no review.
 
@@ -564,10 +564,14 @@ again at full price.
 - When work arrives for a worker whose cache has expired, the agent clears the
   worker's context first and tells it to re-read its brief and the state of the
   work. Set `when_cold: resume` to keep the context and pay for the re-read.
-
-- A worker that was stopped by a usage limit keeps its context when it
-  resumes, however cold: it was cut off mid-task and its context is the only
-  record of that work.
+- A usage limit follows the same rule. The session stays up and nothing is
+  typed while it waits. A resume that is still inside `cache_ttl` continues
+  in the same conversation. A resume after the cache has expired clears the
+  context first: the transcript would be read again at full price, and the
+  branch and the issue hold the work. An API error retried after the cache
+  has expired is cleared the same way. The brief tells the worker to write
+  its plan when it chooses an approach and its progress when a step lands,
+  so a limit can cut a turn off without taking the work with it.
 
 shed cannot see the cache. `supervisor.cache_ttl` (default `5m`) is what you
 tell it your plan gives.
@@ -691,6 +695,33 @@ would block the prompt or keep the session from stopping.
 All of this is optional. A worker whose tool reports nothing is judged from
 its screen, as before. Set all four hooks or none: a tool that says when a
 turn starts but not when it ends looks busy until its next scope check.
+
+### Cost on the pull request
+
+When a hand-back names a pull request, shed comments on that pull request
+with the tokens the worker's session spent on the issue: uncached input,
+cache write, cache read and output, by model. A later pass, such as rework,
+updates the same comment with this pass and the total.
+
+The numbers are read from the session transcript the tool's hooks point at.
+They are not the worker's own estimate. A few calls the tool keeps only in
+memory are missing, and the comment says so. The reviewer's own calls are
+not included.
+
+`shed mark` records the transcript whenever the hook passes one, and shed
+reads it again when it posts, so a turn that was still being written is
+counted. Stop and StopFailure already do this, because they run
+`shed mark idle`. A sub-agent has its own transcript. Without a hook for it,
+those tokens are left out:
+
+```json
+"SubagentStop": [
+  { "hooks": [{ "type": "command", "command": "$HOME/.local/bin/shed mark usage" }] }
+]
+```
+
+`shed mark usage` records tokens and does not change the worker's state, so
+it can run while the parent turn is still going.
 
 ### Settings
 
