@@ -133,7 +133,10 @@ type Supervisor struct {
 	// Claimer puts a worker's queue label on a backfill issue it takes, and
 	// QueueLabels are the labels that put an issue in a queue anywhere in
 	// the fleet. Claimer may be nil: then no backfill issue is taken.
-	Claimer     Claimer
+	Claimer Claimer
+	// Cost posts the tokens an issue cost onto the pull request its hand-back
+	// named. Nil posts nothing.
+	Cost        CostPoster
 	QueueLabels []string
 	// Repos is what the fleet file says about each repository's deploys, and
 	// Looks reads the eye checks that merged work still owes. Looks may be
@@ -169,6 +172,12 @@ type Supervisor struct {
 // Claimer marks an issue as taken by putting a label on it.
 type Claimer interface {
 	Claim(ctx context.Context, repo string, number int, label string) error
+}
+
+// CostPoster writes the token-cost comment on a pull request, creating it
+// or replacing the one shed posted before.
+type CostPoster interface {
+	PostCost(ctx context.Context, repo string, pr int, body string) error
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.
@@ -640,6 +649,9 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 // act carries out a verdict on a worker: the reviewer's, or a hand-over the
 // supervisor chose itself.
 func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, obs Observation, now time.Time, kind string, queue []QueueItem, verdict Verdict) error {
+	// Before this check-in changes what is in hand. A hand-back already on
+	// the issue is posted now; the next issue has not been given yet.
+	s.postCost(ctx, w, st, queue)
 	idle := now.Sub(obs.LastActivity)
 	// The worker has reached a point where nothing is in progress: it is done,
 	// or it is about to be given another issue. A fresh session that was
@@ -730,8 +742,9 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	// the work in hand. Past the cache lifetime it is read again at
 	// full price; a change of model empties the cache too; and a
 	// worker set to start each issue fresh should not carry the last
-	// issue into the next. In each case a cleared context that
-	// re-reads the brief costs less.
+	// issue into the next. A usage limit is the same: the wait is what
+	// makes the cache cold, and the branch and the issue hold the work.
+	// In each case a cleared context that re-reads the brief costs less.
 	c.Cold = idle > s.Settings.CacheTTLOrDefault()
 	if newIssue && item.Backfill {
 		// The label comes first: an issue that was handed over and not
@@ -752,10 +765,7 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	// The first issue of a session lands on a context that is
 	// already empty.
 	fresh := newIssue && w.FreshPerIssue && st.worked
-	// A worker stopped by a usage limit was cut off in the middle of
-	// its work and wrote nothing down. Its context is all there is of
-	// that work, so it is kept, at the price of reading it again.
-	coldClear := c.Cold && s.Settings.ClearWhenCold() && kind != KindLimit
+	coldClear := c.Cold && s.Settings.ClearWhenCold()
 	cleared := switchModel || fresh || coldClear
 	switch {
 	case cleared:
@@ -816,14 +826,24 @@ func (s *Supervisor) retryNow(w config.Worker, st *workerState, obs Observation,
 	return ""
 }
 
-// retry tells a worker whose tool stopped on an error to continue. It was cut
-// off in the middle of its work, so its context is kept, as after a usage
-// limit. A retry is not a nudge: the retries have a count of their own.
+// retry tells a worker whose tool stopped on an error to continue. A retry is
+// not a nudge: the retries have a count of their own. Once the wait has
+// outlasted the prompt cache, the context is cleared, as for any other cold
+// message: re-reading it costs more than recovering the work from the branch
+// and the issue.
 func (s *Supervisor) retry(w config.Worker, st *workerState, obs Observation, now time.Time, why string) error {
-	if err := s.Terminal.Send(w.Name, st.retryMessage); err != nil {
+	message := st.retryMessage
+	cold := now.Sub(obs.LastActivity) > s.Settings.CacheTTLOrDefault()
+	if cold && s.Settings.ClearWhenCold() {
+		if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
+			return err
+		}
+		message = reorient + message
+	}
+	if err := s.Terminal.Send(w.Name, message); err != nil {
 		return err
 	}
-	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: KindRetry, Verdict: runlog.VerdictNudge, Message: st.retryMessage, Sent: true,
+	c := runlog.Checkin{Time: now, Worker: w.Name, Kind: KindRetry, Verdict: runlog.VerdictNudge, Message: message, Sent: true, Cold: cold,
 		Reason: fmt.Sprintf("retry %d of %d: %s", st.retries+1, len(retryBackoff), why), Activity: obs.LastActivity, Queue: st.queueSeen}
 	st.retries++
 	st.retryAt, st.lastReview = time.Time{}, now
@@ -1177,7 +1197,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 // item is the queue item of an open issue from this source.
 func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []runlog.Checkin) QueueItem {
 	item := QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title, Waiting: backlog.Waiting(i, s.Signals),
-		Model: s.Settings.Models.For(i.LabelNames()), rank: src.Rank(i.LabelNames())}
+		Model: s.Settings.Models.For(i.LabelNames()), PR: backlog.HandedPR(i, s.Signals), rank: src.Rank(i.LabelNames())}
 	item.Ruled = backlog.Ruled(i, s.Signals)
 	for _, ask := range backlog.Asks(i, s.Signals) {
 		if grace := s.signal(ask.Name).GraceOrDefault(); grace > 0 && !ask.Since.IsZero() {
@@ -1507,7 +1527,7 @@ new brief.
 
 - Stay inside this brief. Work that it does not cover is out of scope: note it in the issue and leave it.
 - Do not wait for an answer that nobody is there to give. The Choices section says which choices are yours and what to do with one that is not.
-- Before you stop for any reason, write your plan and your progress in the issue. Your context may be cleared between items. What is not in the issue, the branch or a pull request is lost.
+- Write the plan in the issue when you choose the approach, and write the progress when a step lands. A usage limit or a cleared context can end a turn before you stop. What is not in the issue, the branch or a pull request is lost.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
 `)
 	return b.String()

@@ -393,6 +393,13 @@ func lastHandBack(issue Issue, signals []config.Signal) (index, pr int) {
 	return index, pr
 }
 
+// HandedPR returns the pull request the issue's latest hand-back named, or
+// 0 when the hand-back names none.
+func HandedPR(issue Issue, signals []config.Signal) int {
+	_, pr := lastHandBack(issue, signals)
+	return pr
+}
+
 // handBack is lastHandBack that also returns the first pull request the
 // hand-back named, which may have merged while a later one is still open.
 func handBack(issue Issue, signals []config.Signal) (index, pr, first int) {

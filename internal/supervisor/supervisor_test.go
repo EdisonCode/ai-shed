@@ -180,7 +180,7 @@ func TestMissingWorkerIsStartedWithItsBrief(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []string{"Fix audit log bugs only.", "org/app with label `machine:box`", "after the words `Decisions needed:`, in a comment headed `Hand-back`", "write your plan and your progress in the issue"} {
+	for _, part := range []string{"Fix audit log bugs only.", "org/app with label `machine:box`", "after the words `Decisions needed:`, in a comment headed `Hand-back`", "when you choose the approach"} {
 		if !strings.Contains(string(brief), part) {
 			t.Fatalf("brief lacks %q:\n%s", part, brief)
 		}
@@ -883,15 +883,42 @@ func TestLimitedWorkerIsLeftAloneUntilItsLimitResets(t *testing.T) {
 	}
 
 	f.tick(12 * time.Minute) // past the reset, and the screen has not changed
-	// Its cache is long cold, but it was cut off mid-task: the context is kept.
-	if !slices.Equal(f.term.sent, []string{"Your limit has reset. Continue with #12."}) {
-		t.Fatalf("after the reset: sent = %q, want the message alone with no clear", f.term.sent)
+	// The cache expired during the wait, so the transcript is not re-read.
+	if !slices.Equal(f.term.sent, []string{"/clear", reorient + "Your limit has reset. Continue with #12."}) {
+		t.Fatalf("after the reset: sent = %q, want a clear and then the continue", f.term.sent)
 	}
 	if c := f.lastCheckin(t); !c.Cold || c.Kind != KindLimit {
 		t.Fatalf("check-in = %+v", c)
 	}
 	if !strings.Contains(f.reviewer.prompts[1], "expected to reset at") {
 		t.Fatal("the reviewer was not told that the limit was due to reset")
+	}
+}
+
+func TestLimitResumeInsideTheCacheKeepsTheContext(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "2h"}, limited(30), nudge("Your limit has reset. Continue with #12."))
+	f.tick(2 * time.Minute)
+	f.tick(32 * time.Minute) // past the 31 minute hold, inside the 2h cache
+
+	if !slices.Equal(f.term.sent, []string{"Your limit has reset. Continue with #12."}) {
+		t.Fatalf("sent = %q, want the continue alone with no clear", f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Cold || c.Kind != KindLimit {
+		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestColdLimitKeepsItsContextWhenConfiguredToResume(t *testing.T) {
+	f := started(t, config.Supervisor{WhenCold: config.ColdResume}, limited(90), nudge("Your limit has reset. Continue with #12."))
+	f.tick(2 * time.Minute)
+	for range 8 {
+		f.term.running(f.term.obs.LastActivity)
+		f.tick(10 * time.Minute)
+	}
+	f.tick(12 * time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{"Your limit has reset. Continue with #12."}) {
+		t.Fatalf("sent = %q, want the continue alone: when_cold is resume", f.term.sent)
 	}
 }
 
@@ -2105,9 +2132,9 @@ func TestResumeEndsALimitHoldAndTheReviewerIsToldTheLimitIsOver(t *testing.T) {
 
 	f.resume(t, "app")
 	f.tick(time.Minute)
-	// It was cut off mid-task: its context is kept, however cold.
-	if !slices.Equal(f.term.sent, []string{"The usage limit was reset. Continue."}) {
-		t.Fatalf("sent = %q, want the message alone with no clear", f.term.sent)
+	// Three hours is past the cache, so the continue starts from a clear context.
+	if !slices.Equal(f.term.sent, []string{"/clear", reorient + "The usage limit was reset. Continue."}) {
+		t.Fatalf("sent = %q, want a clear and then the continue", f.term.sent)
 	}
 	if last := f.reviewer.prompts[len(f.reviewer.prompts)-1]; !strings.Contains(last, "the owner said the usage limit is over") {
 		t.Fatalf("the reviewer was not told why the hold ended:\n%s", last)
@@ -2193,11 +2220,12 @@ func TestToolErrorIsRetriedAfterABackoffWithNoPerson(t *testing.T) {
 		t.Fatalf("sent = %q before the backoff was over", f.term.sent)
 	}
 	f.tick(2 * time.Minute)
-	if !slices.Equal(f.term.sent, []string{"Continue from where you stopped."}) {
-		t.Fatalf("sent = %q, want the retry alone with no clear", f.term.sent)
+	// The error was printed at the start and the retry lands past the cache.
+	if !slices.Equal(f.term.sent, []string{"/clear", reorient + "Continue from where you stopped."}) {
+		t.Fatalf("sent = %q, want a clear and then the retry", f.term.sent)
 	}
-	if c := f.lastCheckin(t); c.Kind != KindRetry || !c.Sent {
-		t.Fatalf("check-in = %+v, want a sent retry", c)
+	if c := f.lastCheckin(t); c.Kind != KindRetry || !c.Sent || !c.Cold {
+		t.Fatalf("check-in = %+v, want a sent retry of a cold context", c)
 	}
 	if len(f.reviewer.prompts) != 1 || len(notes) != 0 {
 		t.Fatalf("%d review(s), notifications %q; a retry needs neither a review nor the owner", len(f.reviewer.prompts), notes)
@@ -2205,7 +2233,7 @@ func TestToolErrorIsRetriedAfterABackoffWithNoPerson(t *testing.T) {
 }
 
 func TestToolErrorNeedsTheOwnerOnlyAfterTheLastRetryFails(t *testing.T) {
-	f := started(t, config.Supervisor{}, toolError("Continue."))
+	f := started(t, config.Supervisor{CacheTTL: "2h"}, toolError("Continue."))
 	var waits []time.Duration
 	for range len(retryBackoff) {
 		f.tick(2 * time.Minute) // silent again: reviewed, the error is still there
@@ -2260,7 +2288,7 @@ func TestToolErrorThatClearsByItselfIsNotRetried(t *testing.T) {
 }
 
 func TestPendingRetryAndItsCountSurviveAnAgentRestart(t *testing.T) {
-	f := started(t, config.Supervisor{}, toolError("Continue."))
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, toolError("Continue."))
 	f.tick(2 * time.Minute)
 	f.restartAgent()
 	f.tick(4 * time.Minute)

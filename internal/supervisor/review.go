@@ -68,7 +68,9 @@ type QueueItem struct {
 	// backfill source, and claim is the label that puts it in this worker's
 	// queue when it is handed over.
 	Backfill bool
-	claim    string
+	// PR is the pull request the issue's latest hand-back named; 0 for none.
+	PR    int
+	claim string
 	// rank is the issue's place in its source's priority order.
 	rank int
 }
@@ -151,7 +153,7 @@ Rules for the message of a nudge:
 - The item in hand waits on a decision and reads "not parked yet": the owner may still answer. The worker goes on with the parts of the item that the question does not touch. When it has none left, choose on_track and hand over nothing: it waits until the time named, which is on the clock of <current_time>. Once the item reads "parked", it is parked, whatever an earlier check-in of yours said: hand over the first workable item, or choose done.
 - An item whose question the owner answered is work that was started. The worker reads the answer in the issue and goes on from there.
 - Never tell the worker to skip or weaken a test, bypass a hook, merge, or deploy.
-- A worker's context may be cleared before it continues. If it stopped partway through an item and its terminal does not show that it wrote its plan and progress in the issue, tell it to do that first. Do not ask twice.
+- A worker's context may be cleared before it continues, including when it resumes after a usage limit or an API error once the prompt cache has expired. The plan belongs in the issue when the approach is chosen, and the progress when a step lands. If it stopped partway through an item and its terminal does not show that it wrote them, tell it to do that first. Do not ask twice.
 - A worker that refused an item because another branch or pull request already covers it did right. Do not hand it that item again; give it the next workable item.
 - If an earlier message of yours is in the terminal or in the recent check-ins and it did not help, do not send it again. Choose needs_owner.
 
