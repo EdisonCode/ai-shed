@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -63,7 +64,10 @@ type Audit struct {
 	Duplicates     []Duplicate     `json:"duplicates,omitempty"`
 	Stale          []Stale         `json:"stale,omitempty"`
 	Contradictions []Contradiction `json:"contradictions,omitempty"`
-	Problems       []string        `json:"problems,omitempty"`
+	// Hints are what the worker could load and does not, such as a memory
+	// index that a checkout of the same repository has.
+	Hints    []string `json:"hints,omitempty"`
+	Problems []string `json:"problems,omitempty"`
 }
 
 // instructionFiles are the files Claude Code reads in each directory from
@@ -155,6 +159,9 @@ func Run(ctx context.Context, dir, home string, issueOpen IssueOpen) Audit {
 	}
 	a.Duplicates = duplicates(a.Sources)
 	a.Stale = stale(ctx, dir, a.Sources, issueOpen, &a.Problems)
+	if hint := memoryHint(ctx, dir, home, a.Sources); hint != "" {
+		a.Hints = append(a.Hints, hint)
+	}
 	return a
 }
 
@@ -310,7 +317,7 @@ func stale(ctx context.Context, dir string, sources []Source, issueOpen IssueOpe
 		for n, line := range strings.Split(s.Text, "\n") {
 			at := Location{Path: s.Path, Line: n + 1}
 			for _, m := range pathRE.FindAllStringSubmatch(line, -1) {
-				if ref := m[1]; looksLikePath(ref) {
+				if ref := m[1]; looksLikePath(ref) && !isGitRef(ctx, dir, ref) {
 					if _, err := os.Stat(filepath.Join(dir, ref)); err != nil {
 						out = append(out, Stale{Location: at, Ref: ref, Why: "no such path in the checkout"})
 					}
@@ -348,7 +355,59 @@ func looksLikePath(ref string) bool {
 	if strings.ContainsAny(ref[:1], "/~$.-") || strings.ContainsAny(ref, "<>{}*?|=:@") {
 		return false
 	}
+	// A prefix written to be completed, as in feat/…, is a pattern.
+	if strings.HasSuffix(ref, "…") || strings.HasSuffix(ref, "...") {
+		return false
+	}
 	return true
+}
+
+// isGitRef reports whether a reference names a branch or a remote's branch
+// rather than a path: origin/main, or a ref the checkout resolves.
+func isGitRef(ctx context.Context, dir, ref string) bool {
+	if strings.HasPrefix(ref, "origin/") || strings.HasPrefix(ref, "upstream/") {
+		return true
+	}
+	return exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", "--quiet", ref).Run() == nil
+}
+
+// memoryHint says where a memory index of the same repository is when the
+// worker loads none. The tool keys memory by the working directory, and a
+// fleet syncs one folder, usually under a main checkout's path: a worker in
+// a checkout of its own then loads nothing, and nothing says so.
+func memoryHint(ctx context.Context, dir, home string, found []Source) string {
+	for _, s := range found {
+		if s.Kind == "memory" {
+			return ""
+		}
+	}
+	name := repoName(ctx, dir)
+	if name == "" {
+		return ""
+	}
+	indexes, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", "memory", "MEMORY.md"))
+	for _, index := range indexes {
+		slug := filepath.Base(filepath.Dir(filepath.Dir(index)))
+		if strings.HasSuffix(strings.ToLower(slug), "-"+strings.ToLower(MemorySlug(name))) {
+			own := filepath.Join(home, ".claude", "projects", MemorySlug(dir), "memory")
+			return fmt.Sprintf("memory: none for this directory; %s exists. Link it (ln -s %s %s) or sync to this path.", index, filepath.Dir(index), own)
+		}
+	}
+	return ""
+}
+
+// repoName is the repository's name from the checkout's origin remote, as
+// in my-app for git@github.com:org/my-app.git; "" when there is none.
+func repoName(ctx context.Context, dir string) string {
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return ""
+	}
+	url := strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
+	if i := strings.LastIndexAny(url, "/:"); i >= 0 {
+		url = url[i+1:]
+	}
+	return url
 }
 
 // ContradictionPrompt asks a model for the statements of the sources that

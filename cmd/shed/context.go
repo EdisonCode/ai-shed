@@ -56,7 +56,7 @@ func cmdContext(args []string) int {
 	if *here {
 		audit, err = localAudit(ctx, cfg, m, w, *contradictions)
 	} else {
-		audit, err = remoteAudit(ctx, m, w, *contradictions)
+		audit, err = remoteAudit(ctx, probe.ShellRunner{}, m, w, *contradictions)
 	}
 	if err != nil {
 		return fail(err)
@@ -68,7 +68,12 @@ func cmdContext(args []string) int {
 	} else {
 		renderAudit(m, w, audit)
 	}
-	if len(audit.Duplicates)+len(audit.Stale)+len(audit.Contradictions) > 0 {
+	if *here {
+		// The report carries the findings; an exit code would read as a
+		// failure on the owner's side.
+		return exitOK
+	}
+	if len(audit.Duplicates)+len(audit.Stale)+len(audit.Contradictions)+len(audit.Hints) > 0 {
 		return exitAttention
 	}
 	return exitOK
@@ -117,7 +122,7 @@ func localAudit(ctx context.Context, cfg *config.Config, m config.Machine, w con
 }
 
 // remoteAudit asks the worker's machine for its audit over SSH.
-func remoteAudit(ctx context.Context, m config.Machine, w config.Worker, withContradictions bool) (sources.Audit, error) {
+func remoteAudit(ctx context.Context, runner probe.Runner, m config.Machine, w config.Worker, withContradictions bool) (sources.Audit, error) {
 	command := `"$HOME/` + deploy.RemoteBinary + `" context -here `
 	if withContradictions {
 		command += "-contradictions "
@@ -125,12 +130,14 @@ func remoteAudit(ctx context.Context, m config.Machine, w config.Worker, withCon
 	command += shellWord(m.Name) + " " + shellWord(w.Name)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	out, err := probe.ShellRunner{}.Run(ctx, m, m.Command(command), nil)
-	if err != nil {
-		return sources.Audit{}, err
-	}
+	out, runErr := runner.Run(ctx, m, m.Command(command), nil)
+	// A report is a report whatever the exit code: an older shed exits 1
+	// when it finds something.
 	var report contextReport
 	if err := json.Unmarshal(out, &report); err != nil {
+		if runErr != nil {
+			return sources.Audit{}, runErr
+		}
 		return sources.Audit{}, fmt.Errorf("read the machine's audit: %w", err)
 	}
 	if report.Version != version {
@@ -183,6 +190,9 @@ func renderAudit(m config.Machine, w config.Worker, a sources.Audit) {
 		for _, c := range a.Contradictions {
 			fmt.Printf("  %q\n    against %q\n    %s\n", c.A, c.B, c.Why)
 		}
+	}
+	for _, h := range a.Hints {
+		fmt.Printf("\n%s\n", h)
 	}
 	for _, p := range a.Problems {
 		fmt.Printf("\n! %s\n", p)
