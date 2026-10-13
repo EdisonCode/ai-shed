@@ -29,6 +29,7 @@ const linuxOutput = `Welcome banner from the init line
 @@run {"task":"nightly","start":"2026-09-21T03:00:00Z","end":"2026-09-21T03:00:02Z","exit_code":0}
 @@run {"task":"nigh
 @@checkin {"time":"2026-09-21T03:10:00Z","worker":"app","kind":"idle","verdict":"nudge","reason":"it stopped","message":"Take #12.","sent":true}
+@@gate {"repo":"org/app","pr":41,"commit":"aaa1111","worker":"app","start":"2026-09-21T03:20:00Z","end":"2026-09-21T03:22:00Z","exit_code":1}
 @@recycle app
 @@end
 `
@@ -209,5 +210,15 @@ func TestParseReadsThePace(t *testing.T) {
 	res, err := Parse(out, nil)
 	if err != nil || res.Pace == nil || res.Pace.Account != "max" || res.Pace.State != "ahead" {
 		t.Fatalf("pace = %+v, %v", res.Pace, err)
+	}
+}
+
+func TestParseReadsTheGateRuns(t *testing.T) {
+	res, err := Parse(linuxOutput, twoChecks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Gates) != 1 || res.Gates[0].PR != 41 || res.Gates[0].Passed() {
+		t.Fatalf("gates = %+v", res.Gates)
 	}
 }

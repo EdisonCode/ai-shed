@@ -1541,7 +1541,7 @@ func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []Que
 	}
 	failure := ""
 	for _, repo := range s.Repos {
-		if !slices.ContainsFunc(sources, inQueue(repo.Name)) {
+		if !repo.Deployed() || !slices.ContainsFunc(sources, inQueue(repo.Name)) {
 			continue
 		}
 		report, err := s.Looks.Read(ctx, repo, sources, open, s.Signals)
@@ -1849,7 +1849,7 @@ production, and that is you. It is not work to build.
 `)
 	for _, src := range s.Machine.SourcesFor(w) {
 		for _, repo := range s.Repos {
-			if repo.Name != src.Repo {
+			if repo.Name != src.Repo || !repo.Deployed() {
 				continue
 			}
 			fmt.Fprintf(b, "- %s: staging", repo.Name)

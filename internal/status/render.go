@@ -309,6 +309,7 @@ func renderMachine(w io.Writer, r MachineReport) {
 			}
 		}
 	}
+	renderGates(w, tw, r)
 	if len(r.Tasks) > 0 {
 		fmt.Fprintln(w, "  tasks")
 		for _, t := range r.Tasks {
@@ -437,4 +438,33 @@ func windowCommand(r MachineReport, win probe.Window) string {
 		}
 	}
 	return win.Command
+}
+
+// gatesShown is how many pull requests the gates section lists.
+const gatesShown = 5
+
+// renderGates lists the last gate run of each pull request, the latest
+// first.
+func renderGates(w io.Writer, tw *tabwriter.Writer, r MachineReport) {
+	if r.Probe == nil || len(r.Probe.Gates) == 0 {
+		return
+	}
+	var latest []runlog.Gate
+	seen := map[string]bool{}
+	for i := len(r.Probe.Gates) - 1; i >= 0 && len(latest) < gatesShown; i-- {
+		g := r.Probe.Gates[i]
+		if key := issueKey(g.Repo, g.PR); !seen[key] {
+			seen[key] = true
+			latest = append(latest, g)
+		}
+	}
+	fmt.Fprintln(w, "  gates")
+	for _, g := range latest {
+		result := "passed"
+		if !g.Passed() {
+			result = fmt.Sprintf("FAILED (exit %d)", g.ExitCode)
+		}
+		fmt.Fprintf(tw, "    %s#%d\t%s\t%s\t%s ago, took %s\n", g.Repo, g.PR, g.Commit[:min(len(g.Commit), 7)], result, Short(r.Probe.Now.Sub(g.End)), Short(g.End.Sub(g.Start)))
+	}
+	tw.Flush()
 }

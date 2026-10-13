@@ -1073,3 +1073,22 @@ func TestStatusShowsEachMachinesPaceAndEachAccountsTotal(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusShowsTheLastGateRunOfEachPullRequest(t *testing.T) {
+	res := healthy()
+	gate := func(pr int, commit string, exit int, endedAgo time.Duration) runlog.Gate {
+		end := now.Add(-endedAgo)
+		return runlog.Gate{Repo: "org/app", PR: pr, Commit: commit, Worker: "app", Start: end.Add(-2 * time.Minute), End: end, ExitCode: exit}
+	}
+	res.Gates = []runlog.Gate{gate(41, "aaa1111aaa", 1, time.Hour), gate(42, "bbb2222bbb", 0, 30*time.Minute), gate(41, "ccc3333ccc", 0, 5*time.Minute)}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{Assess(config.Machine{Name: "box"}, signals, now, res, nil)}, nil)
+	for _, want := range []string{"  gates\n", "org/app#41  ccc3333  passed  5m ago, took 2m", "org/app#42  bbb2222  passed  30m ago, took 2m"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "aaa1111") {
+		t.Fatalf("an older run of #41 is shown:\n%s", out.String())
+	}
+}

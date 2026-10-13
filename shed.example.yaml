@@ -129,6 +129,12 @@ machines:
 #     # Optional. How far back to look when production is older than this
 #     # or has no command. The default is 14 days.
 #     look_back: 336h
+#     # Optional. Fast checks the agent runs on the head commit of each pull
+#     # request built on its machine, posted as the shed/gates status. A
+#     # repo may be listed for its gates alone, with no staging.
+#     gates:
+#       command: make lint test
+#       timeout: 30m          # the default
 
 # Optional. How the agent supervises workers. These are the defaults, except
 # `models`, which is off unless you set it.

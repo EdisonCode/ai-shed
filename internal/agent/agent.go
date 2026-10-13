@@ -20,6 +20,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/gates"
 	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 	"github.com/edisoncode/ai-shed/internal/supervisor"
@@ -28,7 +29,10 @@ import (
 const (
 	heartbeatEvery = 30 * time.Second
 	superviseEvery = 30 * time.Second
-	notifyTimeout  = 30 * time.Second
+	// gatesEvery is how often open pull requests are looked at for a commit
+	// to gate. A run in progress delays the next look.
+	gatesEvery    = time.Minute
+	notifyTimeout = 30 * time.Second
 	// outputTail is how much of a task's output a run record keeps.
 	outputTail = 2000
 	// exitNotRun is the exit code of a run that timed out or could not start.
@@ -153,8 +157,18 @@ func (a Agent) start(ctx context.Context, cfg *config.Config, m config.Machine) 
 		}
 		stopSupervisor = every(ctx, superviseEvery, sup.Tick)
 	}
+	stopGates := func() {}
+	if gates.Gated(m, cfg.Repos) {
+		runner := &gates.Runner{Machine: m, Repos: cfg.Repos, GitHub: gates.GH{}, Tree: gates.Git{},
+			StateDir: a.StateDir, Run: gates.Shell, Now: time.Now, Logf: a.Logf}
+		if m.Capacity.Set() {
+			runner.Busy = supervisor.SystemBusy(m, runtime.NumCPU())
+		}
+		stopGates = every(ctx, gatesEvery, runner.Tick)
+	}
+	stopAll := func() { stopSupervisor(); stopGates() }
 	a.Logf("machine %s: %d task(s) scheduled, %d worker(s) supervised", m.Name, len(m.Tasks), len(m.Workers))
-	return loaded{scheduler: scheduler, stopSupervisor: stopSupervisor}
+	return loaded{scheduler: scheduler, stopSupervisor: stopAll}
 }
 
 // every calls tick now and then at each interval, on its own goroutine, so a

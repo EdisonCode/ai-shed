@@ -296,6 +296,52 @@ shed bump -undo linux-box 41          # back to its usual place
 
 `shed status` marks the issue `(bumped)` or `(bumped to docs)`.
 
+### Gates on the worker machine
+
+A worker writes a change in minutes; a hosted runner then queues and runs
+the whole suite on every push, while the worker waits or moves on and comes
+back cold. The worker machines are mostly idle while their agents think.
+Give a repository `gates`, its fast checks, and the agent of the machine
+that built a pull request runs them on the commit it pushed:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    gates:
+      command: make lint test   # runs after the machine's init line; exit 0 passes
+      timeout: 30m              # the default
+```
+
+- **What is gated.** Each open pull request that is not a draft, at its
+  head commit, when that commit is in the checkout of one of the machine's
+  workers: the work this machine built. Each commit is gated once; a new
+  push is a new commit. One run at a time per machine.
+- **Where.** In a gate tree of the worker's checkout, a detached worktree
+  under `~/.local/state/shed/gates/<worker>`. The worker's own checkout is
+  never touched. Files git ignores, such as installed dependencies and build
+  caches, stay between runs, so a run is fast. `shed tidy` keeps the tree.
+- **The machine's room.** A run waits while the machine's `capacity` says
+  it is busy, up to `max_wait`, as a hand-over does.
+- **The result** is the `shed/gates` commit status: pending while it runs,
+  then success or failure with how long it took. A failure also leaves one
+  comment on the pull request with the last 60 lines of output, and where the
+  whole log is on the machine. A later pass replaces that comment.
+- **The worker hears of a failure as rework.** A failed status is a failed
+  check, so a handed-back pull request whose gates failed goes back to a
+  worker, which is told to fix that and nothing else.
+- **A checkout that fails** (a locked worktree, a commit not yet fetched)
+  posts nothing and is tried again after 10 minutes. A worker cannot fix it.
+- `shed status` lists the last run of each pull request under `gates`.
+
+The status is fast feedback, not proof: a worker shares the machine and its
+GitHub login, and could post one too. Keep the full suite where a worker
+cannot reach it, in a merge queue; see
+[`docs/REPO-RECIPE.md`](docs/REPO-RECIPE.md#a-merge-queue). With both, a
+pull request's own CI can shrink to what the gates do not cover.
+
+A `repos` entry may have gates alone. The release state and eye checks need
+`staging.commit`, and leave out a repository that has none.
+
 ### Eye checks on staging
 
 A worker tests what it builds, and some work still needs someone to look at
@@ -1366,7 +1412,7 @@ author's direction.
 - An issue is matched to a window by number only. Two repos with the same
   issue number on one machine share a match, and share a bump.
 - A missed task run is known only after the task has run once.
-- The log files are not rotated.
+- The log files are not rotated, and neither are the gate logs under `~/.local/state/shed/gates`, one per commit gated.
 - An `ask` worker is only as reachable as its tool makes it. shed restarts a
   session that exited; it does not see a session that still runs and has
   lost its connection. Remote Control on a session that nobody attends for
