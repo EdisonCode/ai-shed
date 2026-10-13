@@ -119,6 +119,7 @@ const (
 	KindHook     = "hook"     // its tool said it waits for a person, or no longer does
 	KindTask     = "task"     // it was handed a one-off task from the owner
 	KindRetry    = "retry"    // its tool had stopped on an error and it was told to continue
+	KindWait     = "wait"     // it waited on its own work for too long
 	KindError    = "error"
 )
 
@@ -160,6 +161,9 @@ type Supervisor struct {
 	// Notify tells the owner that a worker has started to need them. It may
 	// be nil.
 	Notify func(worker, message string)
+	// Shells lists the shells a worker's tool started that still run, so a
+	// wait on a hung one shows. Nil lists none.
+	Shells ShellLister
 	// Sleep waits for the worker's terminal to take a command.
 	Sleep func(time.Duration)
 	Logf  func(format string, args ...any)
@@ -258,6 +262,12 @@ type workerState struct {
 	// restTold is the worker's last output when the owner was told that it
 	// rests beside work it can act on: they are told once per silence.
 	restTold time.Time
+	// waits counts the times in the issue in hand that the worker was told
+	// it had waited on its own work too long; the next time it is stuck.
+	waits int
+	// shellCPU is the CPU time of each shell at the last listing, by pid, so
+	// a shell that has stopped making progress shows.
+	shellCPU map[int]shellSeen
 	recent   []runlog.Checkin
 }
 
@@ -529,6 +539,8 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		return s.review(ctx, w, st, obs, now, KindScope, nil)
 	case !obs.LastActivity.Equal(st.reviewedActivity):
 		return s.review(ctx, w, st, obs, now, KindIdle, nil)
+	case s.waitedTooLong(st, idle):
+		return s.ownWaitOver(w, st, obs, now, idle)
 	case now.Sub(st.lastQueueCheck) >= queueRecheck:
 		// The worker is resting after a review. Only new work wakes it.
 		queue, err := s.queue(ctx, w)
@@ -613,7 +625,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 	}
 	st.waiting = false
 	// What did not help the last session says nothing about this one.
-	st.nudges = nil
+	st.nudges, st.waits = nil, 0
 	st.contextSince = now
 	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: runlog.VerdictStarted, Message: command, Sent: true})
 	return nil
@@ -645,6 +657,7 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 		in.Idle = idle
 		mark, _ := runlog.ReadMark(s.StateDir, w.Name)
 		in.InTurn = mark.StateAt(obs.LastActivity) == runlog.MarkWorking
+		in.Shells = s.listShells(w, st, now)
 	}
 	verdict, err := s.Reviewer.Review(ctx, Prompt(in))
 	if err != nil {
@@ -756,7 +769,7 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	// the other, show a worker that is not helped by more of them.
 	newIssue := st.handsOver(verdict.Issue, item)
 	if newIssue {
-		st.nudges = nil
+		st.nudges, st.waits = nil, 0
 	}
 	st.nudges = within(st.nudges, now)
 	if len(st.nudges) >= maxNudges {
@@ -946,7 +959,7 @@ func (s *Supervisor) deliverTask(w config.Worker, st *workerState, obs Observati
 	}
 	c.Sent = true
 	st.task, st.issue, st.look, st.worked = task.ID, 0, false, true
-	st.nudges = []time.Time{now}
+	st.nudges, st.waits = []time.Time{now}, 0
 	st.lastReview, st.reviewedActivity = now, obs.LastActivity
 	s.record(st, c)
 	return nil
@@ -1218,7 +1231,7 @@ func (s *Supervisor) recover(worker string) *workerState {
 			// A new session: nothing in hand, the model its command gave it.
 			st.issue, st.look, st.model, st.briefStale = 0, false, "", false
 			st.task, st.worked = "", false
-			st.nudges = nil
+			st.nudges, st.waits = nil, 0
 			st.starts = append(st.starts, c.Time)
 			st.lastReview = c.Time
 		case c.Verdict == runlog.VerdictRecycled:
@@ -1228,6 +1241,10 @@ func (s *Supervisor) recover(worker string) *workerState {
 			st.briefStale = !c.Sent
 		case c.Kind == KindHook:
 			st.markSeen, st.waiting = c.Time, c.Verdict == runlog.VerdictNeedsOwner
+		case c.Kind == KindWait:
+			if c.Sent {
+				st.waits++
+			}
 		case c.Kind == KindRetry:
 			// A retry that was sent, or the word that the last one failed.
 			if c.Sent {
@@ -1264,12 +1281,12 @@ func (s *Supervisor) recover(worker string) *workerState {
 			}
 			if c.Issue != 0 && (c.Issue != st.issue || c.Look != st.look) {
 				// A hand-over: the count starts again, as in deliver.
-				st.nudges = nil
+				st.nudges, st.waits = nil, 0
 				st.issue, st.look = c.Issue, c.Look
 				st.task, st.worked = "", true
 			}
 			if c.Task != "" {
-				st.nudges = nil
+				st.nudges, st.waits = nil, 0
 				st.task, st.issue, st.look, st.worked = c.Task, 0, false, true
 			}
 			st.nudges = append(st.nudges, c.Time)
@@ -1737,6 +1754,7 @@ new brief.
 - Stay inside this brief. Work that it does not cover is out of scope: note it in the issue and leave it.
 - Do not wait for an answer that nobody is there to give. The Choices section says which choices are yours and what to do with one that is not.
 - Write the plan in the issue when you choose the approach, and write the progress when a step lands. A usage limit or a cleared context can end a turn before you stop. What is not in the issue, the branch or a pull request is lost.
+- Run a long command in the foreground and wait for it. A command that must outlive your turn writes an exit marker when it ends, and you check for that marker with a timeout. A watcher built on ` + "`pgrep -f`" + ` matches its own command line and never ends. End every command you started before you hand back.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
 `)
 	return b.String()
