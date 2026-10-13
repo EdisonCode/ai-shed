@@ -1351,6 +1351,16 @@ Usage at API rates: $41.80 (a subscription does not pay this price; it weighs th
   mac-mini  docs  haiku-5-5   in 2M    write 0     read 8M     out 300k $10.85
   by model: sonnet-5-5 $18.70, opus-5-5 $12.25, haiku-5-5 $10.85
 
+Spend by kind of work:
+  pull request            $24.10  58%  6 item(s), median $3.10
+  issue, no pull request  $2.20   5%   2 item(s), median $1.10
+  eye check               $6.40   15%  5 item(s), median $1.20
+  no item                 $2.10   5%   nothing in hand: before the first item, at rest, after a hand-back
+  reviewer                $9.90   24%  the supervisor's check-ins
+
+Cache reads per output token: app 310 (high), docs 120
+  Above 300, each turn re-reads a context larger than its work needs: fresh_per_issue or recycle_context would cut it.
+
 Merged pull requests with a cost: 6 of 7, median $3.10
   my-org/my-app#140  $9.20  Show the total on the order page
   ...
@@ -1358,6 +1368,18 @@ Merged pull requests with a cost: 6 of 7, median $3.10
 
 Idle at a usage limit: mac-mini 40.1h
 ```
+
+`Spend by kind of work` puts each call under what the worker had in hand
+when it made it, read from the check-in log: an issue built into a pull
+request (all its passes), an issue with no pull request (a plan, work not
+finished), an eye check, a one-off task, or nothing at all. The cost
+comments on pull requests show only the first kind; this shows the rest,
+and `no item` is the share that no work carries. The median is per item.
+
+`Cache reads per output token` is each worker's prompt-cache reads divided
+by what it wrote. A long session re-reads its whole context on every turn,
+so a high ratio is the clearest sign that a context has grown past what its
+work needs.
 
 The reviewer's calls have a line of their own, `(reviewer)`, when its
 command prints Claude Code's JSON result (`--output-format json`, the

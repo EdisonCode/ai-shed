@@ -84,19 +84,14 @@ func mergedSpend(d Digest) (spend []PRSpend, merged int) {
 }
 
 func median(spend []PRSpend) float64 {
+	if len(spend) == 0 {
+		return 0
+	}
 	values := make([]float64, len(spend))
 	for i, s := range spend {
 		values[i] = s.Dollars
 	}
-	slices.Sort(values)
-	n := len(values)
-	if n == 0 {
-		return 0
-	}
-	if n%2 == 1 {
-		return values[n/2]
-	}
-	return (values[n/2-1] + values[n/2]) / 2
+	return medianOf(values)
 }
 
 // renderUsage writes what the fleet spent in the window, at API rates, and
@@ -154,6 +149,9 @@ func renderUsage(w io.Writer, d Digest) {
 			sort.Strings(unpriced)
 			fmt.Fprintf(w, "  no published rate, left out of the totals: %s\n", strings.Join(unpriced, ", "))
 		}
+
+		renderKinds(w, d, total)
+		renderCacheRatio(w, d)
 
 		spend, merged := mergedSpend(d)
 		if merged > 0 {
@@ -214,4 +212,92 @@ func count(n int) string {
 	default:
 		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000_000), ".0") + "M"
 	}
+}
+
+// highCacheRatio is the cache reads per output token above which a worker's
+// context is flagged: each turn re-reads more than it is worth.
+const highCacheRatio = 300
+
+// renderKinds splits the spend by the kind of work, so the share that no
+// pull request carries is in sight.
+func renderKinds(w io.Writer, d Digest, total float64) {
+	byKind := map[string][]float64{}
+	for _, mu := range d.Usage {
+		for _, k := range mu.Summary.Kinds {
+			byKind[k.Kind] = append(byKind[k.Kind], k.Items...)
+		}
+	}
+	if len(byKind) == 0 || total <= 0 {
+		return
+	}
+	fmt.Fprintln(w, "\nSpend by kind of work:")
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for _, kind := range runlog.KindOrder {
+		items := byKind[kind]
+		if len(items) == 0 {
+			continue
+		}
+		sum := 0.0
+		for _, v := range items {
+			sum += v
+		}
+		detail := fmt.Sprintf("%d item(s), median %s", len(items), dollars(medianOf(items)))
+		switch kind {
+		case runlog.KindNoItem:
+			detail = "nothing in hand: before the first item, at rest, after a hand-back"
+		case runlog.KindReview:
+			detail = "the supervisor's check-ins"
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%.0f%%\t%s\n", kind, dollars(sum), 100*sum/total, detail)
+	}
+	tw.Flush()
+}
+
+// renderCacheRatio gives each worker's cache reads per output token, the
+// clearest sign of a context that has grown too large.
+func renderCacheRatio(w io.Writer, d Digest) {
+	var words []string
+	high := false
+	for _, mu := range d.Usage {
+		for _, wu := range mu.Summary.Workers {
+			if wu.Worker == runlog.ReviewerLedger {
+				continue
+			}
+			var read, out int
+			for _, t := range wu.Models {
+				read, out = read+t.CacheRead, out+t.Output
+			}
+			if out == 0 {
+				continue
+			}
+			name := wu.Worker
+			if len(d.Usage) > 1 {
+				name = mu.Machine + "/" + wu.Worker
+			}
+			ratio := read / out
+			word := fmt.Sprintf("%s %d", name, ratio)
+			if ratio > highCacheRatio {
+				word += " (high)"
+				high = true
+			}
+			words = append(words, word)
+		}
+	}
+	if len(words) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\nCache reads per output token: %s\n", strings.Join(words, ", "))
+	if high {
+		fmt.Fprintf(w, "  Above %d, each turn re-reads a context larger than its work needs: fresh_per_issue or recycle_context would cut it.\n", highCacheRatio)
+	}
+}
+
+func medianOf(values []float64) float64 {
+	sorted := slices.Clone(values)
+	slices.Sort(sorted)
+	n := len(sorted)
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return (sorted[n/2-1] + sorted[n/2]) / 2
 }
