@@ -2,6 +2,8 @@ package probe
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -181,5 +183,23 @@ func TestParseReadsAPauseThatStillHolds(t *testing.T) {
 	res, err = Parse("@@pause 1789999000\n@@now 1790000000\n@@end\n", nil)
 	if err != nil || !res.PausedUntil.IsZero() {
 		t.Fatalf("paused until %v, %v; that pause has run out", res.PausedUntil, err)
+	}
+}
+
+func TestProbeReadsTheAccountTheToolIsLoggedInAs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	body := "{\n  \"numStartups\": 3,\n  \"oauthAccount\": {\n    \"accountUuid\": \"x\",\n    \"emailAddress\": \"owner@example.com\"\n  }\n}\n"
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, err := Run(ctx, ShellRunner{}, config.Machine{Name: "here", Host: config.LocalHost}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Account != "owner@example.com" {
+		t.Fatalf("account = %q", res.Account)
 	}
 }

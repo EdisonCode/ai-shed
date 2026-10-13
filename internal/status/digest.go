@@ -31,6 +31,12 @@ type Digest struct {
 	// IdleHours is how long the workers were idle in the window, in worker-
 	// hours by cause, as far back as each machine's check-in log reaches.
 	IdleHours map[string]float64 `json:"idle_hours,omitempty"`
+	// LimitHours is, by machine, how many worker-hours were idle at a usage
+	// limit in the window.
+	LimitHours map[string]float64 `json:"limit_hours,omitempty"`
+	// Usage is what each machine's workers spent in the window, when the
+	// collector reads usage.
+	Usage []MachineUsage `json:"usage,omitempty"`
 	// Problems lists what could not be read.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -56,7 +62,14 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 			}
 			d.IdleHours[cause] += idle.Hours()
 		}
+		if idle := runlog.IdleByCause(m.Probe.Checkins, since, m.Probe.Now)[runlog.IdleLimit]; idle > 0 {
+			if d.LimitHours == nil {
+				d.LimitHours = map[string]float64{}
+			}
+			d.LimitHours[m.Name] += idle.Hours()
+		}
 	}
+	c.collectUsage(ctx, cfg, &d)
 	var repos []string
 	for _, m := range cfg.Machines {
 		for _, src := range m.AllSources() {
@@ -116,6 +129,8 @@ func RenderDigest(w io.Writer, d Digest) {
 		fmt.Fprintf(w, "\nIdle worker-hours: %s\n", strings.Join(idle, ", "))
 	}
 
+	renderUsage(w, d)
+
 	for _, r := range d.Report.Repos {
 		fmt.Fprintf(w, "\nEye checks: %s\n", r.Repo)
 		if r.Error != "" {
@@ -129,6 +144,9 @@ func RenderDigest(w io.Writer, d Digest) {
 			}
 		}
 		fmt.Fprintf(w, "  %d passed in this window; now %s, %d failed\n", passed, r.notDone(), r.count(looks.Failed))
+		if r.Unchecked != "" {
+			fmt.Fprintf(w, "  ! cannot tell which merged work staging serves: %s\n", r.Unchecked)
+		}
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		for _, l := range r.Passed {
 			if l.Since.After(d.Since) {

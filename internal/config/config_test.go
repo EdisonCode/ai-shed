@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/edisoncode/ai-shed/internal/pricing"
 )
 
 const minimal = `
@@ -356,5 +358,15 @@ func TestAskWorkerTakesNoWork(t *testing.T) {
 	}
 	if err := m.TakesWork("nobody"); err == nil || !strings.Contains(err.Error(), `has no worker "nobody"`) {
 		t.Errorf("nobody: err = %v", err)
+	}
+}
+
+func TestFleetFileRatesReplaceThePublishedOnes(t *testing.T) {
+	cfg, err := Parse([]byte("pricing:\n  claude-opus-5-5: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 2}\nmachines:\n  - name: box\n    host: local\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := cfg.Prices().Cost("claude-opus-5-5", pricing.Tokens{Output: 1_000_000}); !ok || got != 2 {
+		t.Fatalf("opus-5-5 output = %v (%v), want the fleet file's 2", got, ok)
 	}
 }

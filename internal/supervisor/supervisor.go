@@ -20,6 +20,7 @@ import (
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/looks"
+	"github.com/edisoncode/ai-shed/internal/pricing"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
@@ -83,6 +84,7 @@ const (
 	unaskedWaits  = "Nothing is left for you on #%d until the owner acts. "
 	unaskedRework = " Its pull request cannot merge as it stands: %s. Fix that and nothing else."
 	unaskedRuled  = " The owner answered its question: read the answer in the issue and go on from there."
+	unaskedStack  = " %s: build what is still to do (%s) on a new branch from its branch, and open the next pull request against that branch."
 
 	// TaskDir is where a one-off task's brief is put in the worker's
 	// directory, and where the worker writes its report.
@@ -136,7 +138,9 @@ type Supervisor struct {
 	Claimer Claimer
 	// Cost posts the tokens an issue cost onto the pull request its hand-back
 	// named. Nil posts nothing.
-	Cost        CostPoster
+	Cost CostPoster
+	// Prices weighs the tokens in the cost comment. Nil names tokens only.
+	Prices      pricing.Table
 	QueueLabels []string
 	// Repos is what the fleet file says about each repository's deploys, and
 	// Looks reads the eye checks that merged work still owes. Looks may be
@@ -274,6 +278,8 @@ func unaskedOrder(inHand int, waits bool, next QueueItem) string {
 	switch {
 	case next.Rework != "":
 		order += fmt.Sprintf(unaskedRework, next.Rework)
+	case next.Stack != "":
+		order += fmt.Sprintf(unaskedStack, capitalize(next.Stack), strings.Join(next.Remaining, "; "))
 	case next.Ruled:
 		order += unaskedRuled
 	}
@@ -358,6 +364,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 			st.notBefore, st.reviewerLimited = now.Add(limitRecheck), true
 			c.Kind, c.Verdict, c.Until = KindLimit, runlog.VerdictLimited, st.notBefore
 			c.Reason = "the reviewer is at its usage limit: " + err.Error()
+			c.Limit = limitKind(err.Error())
 		}
 		// The same failure is recorded once, not every retry.
 		if err.Error() != st.lastError {
@@ -631,6 +638,9 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	if err != nil {
 		return err
 	}
+	if verdict.Verdict == runlog.VerdictLimited {
+		verdict.Limit = limitKind(terminal)
+	}
 	st.limitOver = ""
 	if st.reviewerLimited {
 		// The workers run on the reviewer's account. Its limit is over, so
@@ -693,6 +703,10 @@ func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, 
 		}
 		st.limitedUntil = now.Add(wait)
 		c.Until = st.limitedUntil
+		c.Limit = verdict.Limit
+		if verdict.ResumeInMinutes > 0 {
+			c.Resets = now.Add(time.Duration(verdict.ResumeInMinutes) * time.Minute)
+		}
 	}
 	switch {
 	case verdict.Verdict != runlog.VerdictToolError:
@@ -1026,6 +1040,22 @@ func (s *Supervisor) dropHold(worker string, st *workerState, now time.Time, why
 	s.record(st, runlog.Checkin{Time: now, Worker: worker, Kind: KindLimit, Verdict: runlog.VerdictOnTrack, Reason: "its usage limit hold was dropped: " + why})
 }
 
+// limitKind says which usage limit a screen names: the one it names last,
+// as that is the newest. "" when it names neither.
+func limitKind(screen string) string {
+	screen = strings.ToLower(screen)
+	weekly := strings.LastIndex(screen, "weekly limit")
+	fiveHour := max(strings.LastIndex(screen, "5-hour limit"), strings.LastIndex(screen, "session limit"))
+	switch {
+	case weekly < 0 && fiveHour < 0:
+		return ""
+	case weekly > fiveHour:
+		return runlog.LimitWeekly
+	default:
+		return runlog.LimitFiveHour
+	}
+}
+
 // isLimit reports whether a reviewer failed because it reached a usage limit.
 func isLimit(err error) bool {
 	text := strings.ToLower(err.Error())
@@ -1158,6 +1188,9 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 			if taken[i.Number] || (to != "" && to != w.Name) {
 				continue
 			}
+			if backlog.Finished(i, s.Signals) != 0 {
+				continue
+			}
 			item := s.item(i, src, checkins)
 			item.Bumped = bumped
 			items = append(items, item)
@@ -1211,7 +1244,41 @@ func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []ru
 			item.Rework = reason
 		}
 	}
+	s.stack(&item, i)
 	return item
+}
+
+// stack lets a worker go on with an issue whose pull request waits for the
+// owner's review, when the fleet stacks and the hand-back lists what is
+// still to do. Only a ready pull request is stacked on: a draft, or one that
+// cannot merge, is not a base to build on.
+func (s *Supervisor) stack(item *QueueItem, i backlog.Issue) {
+	if !s.Settings.Stack || item.Rework != "" || item.PR == 0 {
+		return
+	}
+	review := ""
+	for _, sig := range s.Signals {
+		if sig.FollowsPR {
+			review = sig.Name
+		}
+	}
+	pr, open := i.OpenPRs[item.PR]
+	if !open || pr.Draft || pr.Problem != "" || !slices.Equal(item.Waiting, []string{review}) {
+		return
+	}
+	remaining := backlog.Remaining(i, s.Signals)
+	if len(remaining) == 0 {
+		return
+	}
+	item.Waiting, item.ParksAt = nil, time.Time{}
+	item.Stack, item.Remaining = fmt.Sprintf("pull request #%d waits for review", item.PR), remaining
+}
+
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // withBackfill adds the issues of the worker's backfill sources when its
@@ -1230,7 +1297,7 @@ func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []
 		}
 		for _, i := range issues {
 			_, queued := find(items, i.Number)
-			if queued || taken[i.Number] || slices.ContainsFunc(i.LabelNames(), func(l string) bool { return slices.Contains(s.QueueLabels, l) }) {
+			if queued || taken[i.Number] || backlog.Finished(i, s.Signals) != 0 || slices.ContainsFunc(i.LabelNames(), func(l string) bool { return slices.Contains(s.QueueLabels, l) }) {
 				continue
 			}
 			item := s.item(i, src, checkins)
@@ -1431,7 +1498,7 @@ func fingerprint(queue []QueueItem) string {
 	h := sha256.New()
 	for _, q := range queue {
 		if q.Workable() {
-			fmt.Fprintf(h, "%s#%d:%s:%s:%t;", q.Repo, q.Number, q.Rework, q.Look, q.Ruled)
+			fmt.Fprintf(h, "%s#%d:%s:%s:%t:%s;", q.Repo, q.Number, q.Rework, q.Look, q.Ruled, q.Stack)
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
@@ -1506,6 +1573,7 @@ func (s *Supervisor) briefText(w config.Worker) string {
 		}
 		s.backfillBrief(&b, w)
 		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nThe owner may put an issue first in your queue, or move one to you from another worker's queue. The supervisor says so when it hands it over. Such an issue is yours even where this brief does not cover it; the standing orders still hold.\nBefore you start an issue, check whether an open pull request or an unmerged branch already covers it (`gh pr list --search <number>`, `git fetch` and `git branch -r`). If one does and the supervisor did not send you back to that pull request, do not start it: another worker has it. Report what you found in the issue as a decision for the owner, say so here, and stop.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\nWhen you are sent back to an issue you already handed back, do what the message says and hand back again, even when nothing needed to change: post a new hand-back comment that names the pull request, as your first one did, and say what you changed or that nothing changed. The new hand-back is what tells the supervisor you are done with it.\n")
+		s.remainingBrief(&b)
 	}
 	s.eyeCheckBrief(&b, w)
 	fmt.Fprintf(&b, `
@@ -1556,6 +1624,25 @@ have answered, wait for the next question.
 - Other sessions on this machine are workers in the middle of their work. You may read their directories. Do not type into their sessions or change their files.
 `)
 	return b.String()
+}
+
+// remainingBrief tells a worker how to say that an issue takes more than
+// one pull request, and, when the fleet stacks, how to go on while one of
+// them waits for review.
+func (s *Supervisor) remainingBrief(b *strings.Builder) {
+	var review config.Signal
+	for _, sig := range s.Signals {
+		if sig.FollowsPR {
+			review = sig
+		}
+	}
+	if review.Remaining == "" {
+		return
+	}
+	fmt.Fprintf(b, "When an issue takes more than one pull request, list what is still to do after `%s` in each hand-back but the last. A hand-back whose pull request merges and that lists nothing still to do is the issue's last: the issue is not handed out again.\n", review.Remaining)
+	if s.Settings.Stack {
+		b.WriteString("While a pull request of yours waits for review and its hand-back lists what is still to do, the supervisor may send you on with the issue. Build the rest on a new branch from that pull request's branch, open the next pull request against that branch, and hand back as before.\n")
+	}
 }
 
 // backfillBrief tells a worker that it may be handed an issue nobody

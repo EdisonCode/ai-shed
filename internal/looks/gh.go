@@ -65,8 +65,11 @@ func (GH) CommitTime(ctx context.Context, repo, commit string) (time.Time, error
 }
 
 func (GH) Contains(ctx context.Context, repo, head, commit string) (bool, error) {
-	// The comparison says where head stands relative to commit.
-	out, err := gh(ctx, "api", "repos/"+repo+"/compare/"+commit+"..."+head, "--jq", ".status")
+	// The comparison says where head stands relative to commit. The first
+	// page carries every changed file with its patch, which runs to
+	// megabytes on a range far behind; the second page of one commit has no
+	// files and the same status.
+	out, err := gh(ctx, "api", "repos/"+repo+"/compare/"+commit+"..."+head+"?per_page=1&page=2", "--jq", ".status")
 	if err != nil {
 		return false, err
 	}
@@ -78,9 +81,20 @@ func gh(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	start := time.Now()
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh %s: %w: %s", strings.Join(args[:min(len(args), 4)], " "), err, strings.TrimSpace(stderr.String()))
+		return nil, ghError(ctx, args, err, stderr.String(), time.Since(start))
 	}
 	return out, nil
+}
+
+// ghError says why a gh call failed. A call shed killed at its own deadline
+// says so, so it is not read as a fault of gh or of its login.
+func ghError(ctx context.Context, args []string, err error, stderr string, took time.Duration) error {
+	call := "gh " + strings.Join(args[:min(len(args), 4)], " ")
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s: timed out at shed's deadline after %s", call, took.Round(100*time.Millisecond))
+	}
+	return fmt.Errorf("%s: %w: %s", call, err, strings.TrimSpace(stderr))
 }

@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/pricing"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
@@ -46,7 +46,7 @@ func (s *Supervisor) postCost(ctx context.Context, w config.Worker, st *workerSt
 		s.Logf("worker %s: usage: %v", w.Name, err)
 		return
 	}
-	body, ok := formatCost(st.issue, checkins, w.Name, usage)
+	body, ok := formatCost(st.issue, checkins, w.Name, usage, s.Prices)
 	if !ok {
 		return
 	}
@@ -61,50 +61,90 @@ func (s *Supervisor) postCost(ctx context.Context, w config.Worker, st *workerSt
 	if err := s.rememberCost(w.Name, key, body); err != nil {
 		s.Logf("worker %s: cost of %s: %v", w.Name, key, err)
 	}
+	totals, _ := issueCost(st.issue, checkins, w.Name, usage, s.Prices)
+	record := runlog.PRCost{Repo: item.Repo, PR: item.PR, Issue: st.issue, Worker: w.Name, Updated: s.Now(), Models: totals}
+	record.Dollars, record.Unpriced = priced(totals)
+	if err := runlog.RecordPRCost(s.StateDir, record); err != nil {
+		s.Logf("worker %s: cost of %s: %v", w.Name, key, err)
+	}
 }
 
-// formatCost is the comment for the tokens spent on issue. The last span is
-// this pass; earlier spans are earlier passes, such as rework. ok is false
-// when nothing was recorded.
-func formatCost(issue int, checkins []runlog.Checkin, worker string, usage []runlog.Usage) (string, bool) {
-	var spans []span
+// issueCost totals the tokens the worker spent on issue, by model, and by
+// pass: the last pass is this one, earlier ones are earlier passes such as
+// rework. With prices, each call is priced on its own, as the API bills it.
+func issueCost(issue int, checkins []runlog.Checkin, worker string, usage []runlog.Usage, prices pricing.Table) (totals map[string]runlog.ModelTokens, passes []map[string]runlog.ModelTokens) {
+	totals = map[string]runlog.ModelTokens{}
 	for _, sp := range issueSpans(checkins, worker) {
-		if sp.issue == issue {
-			spans = append(spans, sp)
+		if sp.issue != issue {
+			continue
 		}
-	}
-	if len(spans) == 0 {
-		return "", false
-	}
-	totals := map[string]tokens{}
-	var passes []map[string]tokens
-	for _, sp := range spans {
-		one := map[string]tokens{}
+		one := map[string]runlog.ModelTokens{}
 		for _, u := range usage {
 			if !inSpan(u.Time, sp) {
 				continue
 			}
-			model := shortModel(u.Model)
-			t := one[model]
-			t.add(u)
-			one[model] = t
-			all := totals[model]
-			all.add(u)
-			totals[model] = all
+			model := runlog.ShortModel(u.Model)
+			dollars, isPriced := prices.Cost(u.Model, u.Tokens())
+			for _, byModel := range []map[string]runlog.ModelTokens{one, totals} {
+				t := byModel[model]
+				t.Add(u)
+				t.Dollars += dollars
+				t.Priced = isPriced
+				byModel[model] = t
+			}
 		}
 		passes = append(passes, one)
 	}
-	if len(totals) == 0 {
+	return totals, passes
+}
+
+// priced sums the dollars of the models that have a price, and names the
+// ones that have none.
+func priced(byModel map[string]runlog.ModelTokens) (dollars float64, unpriced []string) {
+	for model, t := range byModel {
+		if t.Priced {
+			dollars += t.Dollars
+		} else if t.Billed() > 0 {
+			unpriced = append(unpriced, model)
+		}
+	}
+	sort.Strings(unpriced)
+	return dollars, unpriced
+}
+
+// formatCost is the comment for the tokens spent on issue. ok is false when
+// nothing was recorded. Without prices, it names tokens only.
+func formatCost(issue int, checkins []runlog.Checkin, worker string, usage []runlog.Usage, prices pricing.Table) (string, bool) {
+	totals, passes := issueCost(issue, checkins, worker, usage, prices)
+	if len(passes) == 0 || len(tokenLines("", totals, false)) == 0 {
 		return "", false
 	}
+	withPrices := prices != nil
 	last := passes[len(passes)-1]
-	lines := tokenLines("", totals)
-	if len(spans) > 1 && len(tokenLines("", last)) > 0 {
-		lines = append(tokenLines("This pass", last), tokenLines("Total", totals)...)
+	lines := tokenLines("", totals, withPrices)
+	if len(passes) > 1 && len(tokenLines("", last, false)) > 0 {
+		lines = append(tokenLines("This pass", last, withPrices), tokenLines("Total", totals, withPrices)...)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n## Cost\n%s\n\n%s\n", backlog.CostMarker, strings.Join(lines, "\n"), costNote)
+	fmt.Fprintf(&b, "%s\n## Cost\n%s\n", backlog.CostMarker, strings.Join(lines, "\n"))
+	if withPrices {
+		dollars, unpriced := priced(totals)
+		fmt.Fprintf(&b, "\nAt API rates: %s", spellDollars(dollars))
+		if len(unpriced) > 0 {
+			fmt.Fprintf(&b, ", leaving out %s", strings.Join(unpriced, ", "))
+		}
+		b.WriteString(". A subscription does not pay this price; it weighs the kinds of token as the published rates do.\n")
+	}
+	fmt.Fprintf(&b, "\n%s\n", costNote)
 	return b.String(), true
+}
+
+// spellDollars rounds to the cent, or to a tenth of a cent below one.
+func spellDollars(d float64) string {
+	if d > 0 && d < 0.01 {
+		return fmt.Sprintf("$%.3f", d)
+	}
+	return fmt.Sprintf("$%.2f", d)
 }
 
 type span struct {
@@ -150,39 +190,32 @@ func inSpan(t time.Time, sp span) bool {
 	return sp.end.IsZero() || t.Before(sp.end)
 }
 
-type tokens struct {
-	input, output, cacheWrite, cacheRead int
-}
-
-func (t *tokens) add(u runlog.Usage) {
-	t.input += u.Input
-	t.output += u.Output
-	t.cacheWrite += u.CacheWrite
-	t.cacheRead += u.CacheRead
-}
-
-func (t tokens) empty() bool {
-	return t.input+t.output+t.cacheWrite+t.cacheRead == 0
-}
-
-func tokenLines(prefix string, byModel map[string]tokens) []string {
+func tokenLines(prefix string, byModel map[string]runlog.ModelTokens, withPrices bool) []string {
 	models := make([]string, 0, len(byModel))
 	for model, t := range byModel {
-		if !t.empty() {
+		if t.Billed() > 0 {
 			models = append(models, model)
 		}
 	}
 	sort.Strings(models)
 	var lines []string
 	for _, model := range models {
-		lines = append(lines, tokenLine(prefix, model, byModel[model]))
+		line := tokenLine(prefix, model, byModel[model])
+		switch {
+		case !withPrices:
+		case byModel[model].Priced:
+			line += " — " + spellDollars(byModel[model].Dollars)
+		default:
+			line += " — no published rate"
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }
 
-func tokenLine(prefix, model string, t tokens) string {
+func tokenLine(prefix, model string, t runlog.ModelTokens) string {
 	counts := fmt.Sprintf("uncached input %s, cache write %s, cache read %s, output %s",
-		spellCount(t.input), spellCount(t.cacheWrite), spellCount(t.cacheRead), spellCount(t.output))
+		spellCount(t.Input), spellCount(t.CacheWrite), spellCount(t.CacheRead), spellCount(t.Output))
 	switch {
 	case prefix != "" && model != "":
 		return prefix + " — " + model + " — " + counts
@@ -205,28 +238,6 @@ func spellCount(n int) string {
 		scale, suffix = 1_000_000, "M"
 	}
 	return strings.TrimSuffix(strconv.FormatFloat(float64(n)/scale, 'f', 1, 64), ".0") + suffix
-}
-
-// shortModel drops the vendor prefix and a trailing date, so
-// claude-sonnet-4-5-20250929 is sonnet-4-5.
-func shortModel(model string) string {
-	model = strings.TrimPrefix(model, "claude-")
-	if i := strings.LastIndex(model, "-"); i > 0 && len(model)-i == 9 && digits(model[i+1:]) {
-		model = model[:i]
-	}
-	return model
-}
-
-func digits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
 }
 
 func costState(dir, worker string) string {

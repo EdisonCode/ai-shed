@@ -112,6 +112,7 @@ Guards against wasted tokens:
 - A session that exits three times in 30 minutes is not started a fourth time.
 - A failed check-in (`gh` is logged out, the reviewer command is broken) is retried after 10 minutes, not every tick.
 - A usage limit costs no nudges. A limited worker is left alone until its reset. A reviewer that is itself at its limit is tried again after 15 minutes and is not reported as a failure.
+- A limited worker's line names the limit its screen shows and when it resets: `weekly limit, resets Wed 18:00 (in 46h), held for up to another 6h`. A 5-hour limit means wait. A weekly limit can idle a machine for days, so when every worker of a machine is at its weekly limit, `shed status` and the digest list the machine under what needs you: `switch the machine's account or wait until Wed 18:00`.
 - A limit may end before the time the screen names: you reset the usage, or bought more. The screen does not change when that happens, so the hold on a limited worker ends early in three ways:
   - `shed resume <machine>` ends it for every worker of the machine, and `shed resume <machine> <worker>` for one. The worker is looked at within a minute and told to continue. A worker that was at no limit is left as it is.
   - The worker's screen moves. A worker at its limit prints nothing, so one that prints is reviewed like any other.
@@ -703,6 +704,21 @@ with the tokens the worker's session spent on the issue: uncached input,
 cache write, cache read and output, by model. A later pass, such as rework,
 updates the same comment with this pass and the total.
 
+Each model's line ends with what its tokens would cost at Anthropic's
+published API rates, and the comment totals them: `At API rates: $2.26`.
+A subscription does not pay that price. The rates are the weights that make
+a cache read, a cache write and an output token of different models
+comparable, as a subscription's limits also count them differently. shed
+carries the rates of the pricing page; the fleet file can replace one or add
+a model it has no rate for, in US dollars per million tokens:
+
+```yaml
+pricing:
+  my-local-model: {input: 0, cache_write_5m: 0, cache_write_1h: 0, cache_read: 0, output: 0}
+```
+
+A model with no rate shows `no published rate` and is left out of the total.
+
 The numbers are read from the session transcript the tool's hooks point at.
 They are not the worker's own estimate. A few calls the tool keeps only in
 memory are missing, and the comment says so. The reviewer's own calls are
@@ -722,6 +738,11 @@ those tokens are left out:
 
 `shed mark usage` records tokens and does not change the worker's state, so
 it can run while the parent turn is still going.
+`shed preflight`, and so `shed deploy`, reads the Claude Code settings each
+worker's session loads (`~/.claude/settings.json` and the worker directory's
+`.claude/settings.json` and `settings.local.json`). When the state hooks are
+set and this one is not, the worker's line carries
+`note: cost comments leave out sub-agents`.
 
 ### Settings
 
@@ -735,6 +756,7 @@ supervisor:
   model_command: "/model {model}"     # typed into a worker to switch model
   no_work_after: 30m                  # optional: notify when a worker has had no work this long
   low_queue: 3                        # optional: notify when a queue has fewer workable issues
+  stack: true                         # optional: go on with an issue on a branch from its pull request while it waits for review
 ```
 
 For another agent tool, set the worker's `command`, the reviewer's `command`,
@@ -758,6 +780,8 @@ and the two typed commands to what that tool understands.
 | task missed its run | a scheduled time passed with no run |
 | issue waits on you | a comment asks for a decision, a look or a review, and nothing answers it |
 | cannot read the release state | a `repos` commit command failed or did not print a commit, or GitHub could not be asked |
+| cannot tell which merged work staging serves | GitHub could not say whether staging has a merge commit; the counts stand, but a look that is due shows as waiting for staging |
+| every worker is at its weekly limit | the whole machine waits days for a reset; log it in to an account with room, or wait |
 | eye checks are due on staging | merged work is on staging, owes a look, and no worker has `eye_checks` |
 | the eye check is blocked | a worker could not do it and said why; clear the cause and comment `Eyes unblocked`, or look yourself |
 | issues queued and no worker is running | there is a backlog and nobody is on it |
@@ -765,6 +789,13 @@ and the two typed commands to what that tool understands.
 
 An issue counts as *working* when a tmux window on its machine has the issue
 number in its name (`app-123`).
+
+On a machine with supervised workers, a window that runs an agent tool and
+is not a worker's own is marked `unsupervised` under `windows`, with one
+line that counts them: a manual session, or one left from another workflow.
+It is not something shed asks of you, but it spends the same account limit
+and CPU as the workers. An agent tool is any tool the machine's workers run,
+or a process titled with a version number, as Claude Code titles its own.
 
 ### Waiting on you: comment signals
 
@@ -787,8 +818,33 @@ While that pull request is open but cannot merge (a conflict, a failed check),
 the issue does not wait on you: it goes back to a worker. See *The queue*.
 
 The review signal follows its pull request (`follows_pr`). An issue that takes
-several pull requests comes back into the queue each time one is merged, and
-the worker picks up the rest from what the issue says.
+several pull requests lists what is still to do in each hand-back but the
+last, after `Still to do:` (the review signal's `remaining`):
+
+```markdown
+**PR:** #41 (ready)
+**Still to do:**
+- the frontend
+- the docs
+```
+
+It comes back into the queue each time one of its pull requests is merged,
+and the worker picks up the rest. A hand-back whose pull request merged and
+that lists nothing still to do is the issue's last. The issue is not handed
+out again, even while it stays open (a merge into a branch that does not
+close issues, or a pull request that only refers to it), and `shed status`
+shows it as `merged`. A comment after that hand-back that is not another
+hand-back brings it back, as does a pull request that was closed without
+merging. shed asks GitHub for the last 200 merged pull requests of the
+repository, so a hand-back that names an older one is handed out as before.
+
+With `supervisor.stack: true`, a pull request that waits for your review no
+longer leaves its issue idle when the hand-back lists what is still to do.
+The worker is sent on with the issue: it builds the rest on a new branch from
+that pull request's branch and opens the next pull request against it. The
+review still waits on you. A draft, or a pull request that cannot merge, is
+not stacked on. Without `stack`, the worker takes another issue while the
+review waits.
 
 A hand-back may name two pull requests on its `**PR:**` line, the part that
 merged and the part that is still open: `#41 (backend, merged) and #42
@@ -973,6 +1029,35 @@ starts a new one, which reads the brief and is handed the next issue.
 A scheduled task that is running when the agent restarts is stopped and
 recorded as stopped.
 
+### Switching a machine's account
+
+When a machine's Claude account reaches its weekly limit, it can move to an
+account with room without an ssh session:
+
+```sh
+shed login mac-mini                    # prints the sign-in URL
+shed login -code 'aBc123...#xyz' mac-mini
+```
+
+The first step starts the machine's tool in a throwaway `login-account`
+window, types `/login`, takes the subscription login, and prints the URL as
+one line. Open it, sign in with the account the machine should use, and give
+the code the page shows to the second step, which types it into that window.
+It then prints the account the machine is logged in as, ends the usage-limit
+holds of its workers (as `shed resume` does), and types `/remote-control`
+into each idle worker whose screen says its Remote Control connection
+dropped. A worker in the middle of a turn is named instead: a command typed
+into a turn would be read as a message. A code that the tool did not take
+leaves the window open for another.
+
+`shed status` names each machine's account, read from Claude Code's own
+`~/.claude.json`, and which machines share one usage limit:
+
+```
+mac-mini  me@mac-mini  load 1.20/8  disk 41%  agent ok
+  account  me@example.com  (one usage limit with linux-box)
+```
+
 ### Tidying up after merged work
 
 A worker starts each issue on a new branch, and its tool makes worktrees for
@@ -1056,6 +1141,31 @@ Also needs you: 1
 by cause: no work in the queue, an error of the tool, waiting on you, a usage
 limit. It is read from the last 500 check-ins of each machine, so on a busy
 fleet it may reach back less far than the window.
+
+For a week's usage, `shed digest -since 168h` adds what the workers spent,
+read from each machine with `shed usage -json`:
+
+```
+Usage at API rates: $41.80 (a subscription does not pay this price; it weighs the kinds of token as the published rates do)
+  mac-mini  app   opus-5-5    in 1.2M  write 300k  read 15.7M  out 52k  $12.25
+  mac-mini  app   sonnet-5-5  in 4.1M  write 900k  read 61M    out 410k $18.70
+  mac-mini  docs  haiku-5-5   in 2M    write 0     read 8M     out 300k $10.85
+  by model: sonnet-5-5 $18.70, opus-5-5 $12.25, haiku-5-5 $10.85
+
+Merged pull requests with a cost: 6 of 7, median $3.10
+  my-org/my-app#140  $9.20  Show the total on the order page
+  ...
+  The reviewer's own calls are not counted.
+
+Idle at a usage limit: mac-mini 40.1h
+```
+
+The dollars are the published API rates, as on the cost comments: the
+weights that make tokens of different kinds and models comparable. A merged
+pull request's cost adds every worker and pass that worked on it; the top
+five are named. One with no cost comment, such as one merged by hand, is
+counted in `of 7` only. `shed usage` on a machine prints the same totals
+for one machine.
 
 It changes nothing and exits 1 when something needs you. To get it every
 morning, run it from a scheduler on the watcher and send the output wherever

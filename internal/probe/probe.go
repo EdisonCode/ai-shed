@@ -39,6 +39,10 @@ type Result struct {
 	// Bumps are the issues the owner put first in line, by number, each with
 	// the worker it goes to; "" for the workers whose queue it is in.
 	Bumps map[int]string `json:"-"`
+	// Account is the email Claude Code on the machine is logged in as, from
+	// its own state file; "" when it names none. Machines with one account
+	// share one usage limit.
+	Account string `json:"account,omitempty"`
 }
 
 // Task is a one-off task's file on the machine. Where is the worker it waits
@@ -64,6 +68,7 @@ type Window struct {
 
 const header = `echo "@@now $(date +%s)"
 echo "@@cores $(getconf _NPROCESSORS_ONLN 2>/dev/null)"
+if [ -f "$HOME/.claude.json" ]; then echo "@@account $(grep -o '"emailAddress": *"[^"]*"' "$HOME/.claude.json" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"; fi
 echo "@@load $(uptime)"
 echo "@@disk $(df -Pk "$HOME" | tail -n 1)"
 `
@@ -121,6 +126,8 @@ func Parse(out string, checks []config.Check) (Result, error) {
 		switch tag {
 		case "@@now":
 			res.Now = epoch(rest)
+		case "@@account":
+			res.Account = strings.TrimSpace(rest)
 		case "@@cores":
 			res.Cores, _ = strconv.Atoi(strings.TrimSpace(rest))
 		case "@@load":

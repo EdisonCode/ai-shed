@@ -46,7 +46,9 @@ func cmdPreflight(args []string) int {
 
 	report := preflightReport{Version: version, Workers: []supervisor.PreflightResult{}}
 	for _, w := range m.Workers {
-		report.Workers = append(report.Workers, supervisor.Preflight(supervisor.Tmux{}, w, time.Now, time.Sleep))
+		res := supervisor.Preflight(supervisor.Tmux{}, w, time.Now, time.Sleep)
+		res.Warnings = supervisor.HookWarnings(home, w)
+		report.Workers = append(report.Workers, res)
 	}
 	if *asJSON {
 		if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {

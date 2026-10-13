@@ -28,6 +28,7 @@ type fakeGitHub struct {
 	onStaging    map[string]bool
 	closedSince  time.Time
 	containCalls int
+	containErr   error
 }
 
 func (f *fakeGitHub) ClosedSince(_ context.Context, _ config.IssueSource, since time.Time) ([]backlog.Issue, error) {
@@ -46,6 +47,9 @@ func (f *fakeGitHub) CommitTime(context.Context, string, string) (time.Time, err
 }
 func (f *fakeGitHub) Contains(_ context.Context, _, head, commit string) (bool, error) {
 	f.containCalls++
+	if f.containErr != nil {
+		return false, f.containErr
+	}
 	return head == stagingCommit && f.onStaging[commit], nil
 }
 
@@ -169,6 +173,35 @@ func TestWhatStagingContainsIsAskedOnce(t *testing.T) {
 	}
 	if gh.containCalls != 1 {
 		t.Fatalf("asked %d times whether staging has the commit, want 1", gh.containCalls)
+	}
+}
+
+func TestStagingThatCannotBeAskedLeavesTheRestOfTheReport(t *testing.T) {
+	gh := &fakeGitHub{deployed: now.Add(-48 * time.Hour), merged: map[int]string{41: "c41", 44: "c44"},
+		containErr: errors.New("gh api compare: timed out at shed's deadline after 20s"),
+		closed: []backlog.Issue{
+			handedBack(1, 41),
+			handedBack(4, 44, "## Hand-back\n**Eyes failed:** the total is blank"),
+		}}
+	report, err := reader(gh).Read(context.Background(), repo, sources, nil, config.DefaultSignals())
+	if err != nil {
+		t.Fatalf("err = %v, want the report without what staging serves", err)
+	}
+	if got := states(report); report.Merged != 2 || got[1] != Awaiting || got[4] != Failed {
+		t.Fatalf("merged %d, looks %v: want 2 merged, #1 awaiting and #4 failed", report.Merged, got)
+	}
+	if !strings.Contains(report.Unchecked, "timed out") {
+		t.Fatalf("unchecked = %q, want the reason staging could not be asked", report.Unchecked)
+	}
+}
+
+func TestACallKilledAtTheDeadlineSaysSo(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	err := ghError(ctx, []string{"api", "repos/org/app/compare/a...b"}, errors.New("signal: killed"), "", 3200*time.Millisecond)
+	if want := "timed out at shed's deadline after 3.2s"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to say %q", err, want)
 	}
 }
 

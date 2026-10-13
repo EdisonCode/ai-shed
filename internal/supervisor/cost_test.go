@@ -9,6 +9,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/pricing"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
@@ -30,7 +31,7 @@ func TestCostCommentNamesTheTokensAndSplitsAReworkPass(t *testing.T) {
 	checkins = append(checkins, runlog.Checkin{Time: again.Add(30 * time.Minute), Worker: "app", Sent: true, Issue: 13, Verdict: runlog.VerdictNudge})
 	usage = append(usage, runlog.Usage{ID: "c", Time: again.Add(31 * time.Minute), Model: "claude-sonnet-4-5", Input: 50, Output: 50})
 
-	body, ok := formatCost(12, checkins, "app", usage)
+	body, ok := formatCost(12, checkins, "app", usage, nil)
 	if !ok {
 		t.Fatal("no comment")
 	}
@@ -49,15 +50,36 @@ func TestCostCommentNamesTheTokensAndSplitsAReworkPass(t *testing.T) {
 		t.Fatalf("another issue's tokens were included:\n%s", body)
 	}
 
-	one, ok := formatCost(12, checkins[:1], "app", usage[:1])
+	one, ok := formatCost(12, checkins[:1], "app", usage[:1], nil)
 	if !ok || strings.Contains(one, "This pass") || strings.Contains(one, "Total") {
 		t.Fatalf("a single pass should be one line:\n%s", one)
 	}
 	if !strings.Contains(one, "sonnet-4-5 — uncached input 180k, cache write 40k, cache read 980k, output 85k") {
 		t.Fatalf("body:\n%s", one)
 	}
-	if _, ok := formatCost(12, nil, "app", usage); ok {
+	if _, ok := formatCost(12, nil, "app", usage, nil); ok {
 		t.Fatal("an issue that was never handed over has a cost")
+	}
+}
+
+func TestCostCommentPricesEachModelAtTheAPIRates(t *testing.T) {
+	checkins := []runlog.Checkin{{Time: t0, Worker: "app", Sent: true, Issue: 12, Verdict: runlog.VerdictNudge}}
+	usage := []runlog.Usage{
+		{ID: "a", Time: t0.Add(time.Minute), Model: "claude-sonnet-4-5-20250929", Input: 180000, Output: 85000, CacheWrite: 40000, CacheRead: 980000},
+		{ID: "b", Time: t0.Add(2 * time.Minute), Model: "some-local-model", Output: 10},
+	}
+	body, ok := formatCost(12, checkins, "app", usage, pricing.Default())
+	if !ok {
+		t.Fatal("no comment")
+	}
+	for _, want := range []string{
+		"sonnet-4-5 — uncached input 180k, cache write 40k, cache read 980k, output 85k — $2.26",
+		"some-local-model — uncached input 0, cache write 0, cache read 0, output 10 — no published rate",
+		"At API rates: $2.26, leaving out some-local-model. A subscription does not pay this price; it weighs the kinds of token as the published rates do.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
 	}
 }
 
@@ -95,6 +117,14 @@ func TestHandBackPostsTheTokenCostOnce(t *testing.T) {
 	}
 	if !strings.Contains(cost.bodies[0], "sonnet-4-5 — uncached input 180k, cache write 40k, cache read 980k, output 85k") {
 		t.Fatalf("body:\n%s", cost.bodies[0])
+	}
+
+	costs, err := runlog.ReadPRCosts(f.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(costs) != 1 || costs[0].Repo != "org/app" || costs[0].PR != 41 || costs[0].Issue != 12 || costs[0].Worker != "app" || costs[0].Models["sonnet-4-5"].Output != 85000 {
+		t.Fatalf("recorded = %+v, want the cost of #41 for the report", costs)
 	}
 
 	f.term.running(f.now)

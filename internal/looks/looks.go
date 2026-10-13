@@ -62,6 +62,9 @@ type Report struct {
 	// ones that were done and passed, of work merged in the same window.
 	Looks  []Look `json:"looks"`
 	Passed []Look `json:"passed"`
+	// Unchecked is set when GitHub could not say which merged work staging
+	// serves. Looks it would have made due are left awaiting.
+	Unchecked string `json:"unchecked,omitempty"`
 }
 
 // Pull is a merged pull request.
@@ -155,13 +158,15 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 			look.State, look.Note = Blocked, note
 		}
 		if state == backlog.EyesAsked {
-			onStaging, err := r.contains(ctx, repo.Name, report.Staging, pull.Commit)
-			if err != nil {
-				return report, err
-			}
 			look.State = Awaiting
-			if onStaging {
-				look.State = Due
+			if report.Unchecked == "" {
+				onStaging, err := r.contains(ctx, repo.Name, report.Staging, pull.Commit)
+				if err != nil {
+					report.Unchecked = err.Error()
+				}
+				if onStaging {
+					look.State = Due
+				}
 			}
 		}
 		report.Looks = append(report.Looks, look)

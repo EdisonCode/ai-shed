@@ -114,6 +114,23 @@ limit was reset, run `shed resume <machine>`, or `shed resume <machine>
 and tells it to continue. Do not type "continue" into the workers yourself,
 and do not recycle a worker to clear the hold: that costs it its session.
 
+## Move a machine to another account
+
+A weekly limit can idle a machine for days; `shed status` lists it under
+what needs the owner. When the owner wants the machine on an account with
+room:
+
+1. Run `shed login <machine>`. It prints a sign-in URL on one line. Give it
+   to the owner and ask them to sign in with the account the machine should
+   use and to send you the code the page shows.
+2. Run `shed login -code <code> <machine>`. It types the code into the
+   machine's tool, names the account it is now logged in as, ends the
+   usage-limit holds, and asks idle workers whose Remote Control dropped to
+   reconnect. It names any busy worker whose Remote Control needs the owner.
+
+Do not type `/login` into a worker yourself. `shed status` shows each
+machine's account, and which machines share one usage limit.
+
 ## Push a one-off task
 
 Use an issue for work that belongs in the backlog. Use a task when the brief
@@ -182,6 +199,9 @@ Run `shed status` and read the repository's release state at the end. It is a
 go only when `eye checks:` shows none not done and none failed. Tell the owner
 the three numbers (merged since production, not done, failed) and what each
 outstanding look waits for. The deploy itself is the owner's call.
+A `cannot tell which merged work staging serves` line leaves the not done and
+failed counts right; only the split between on staging and waiting for a
+deploy is unknown.
 
 ## Reading the supervised lines
 

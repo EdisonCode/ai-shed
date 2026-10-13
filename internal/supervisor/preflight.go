@@ -39,6 +39,9 @@ type PreflightResult struct {
 	// Exited is set when the command ended and left a shell.
 	Exited bool   `json:"exited,omitempty"`
 	Screen string `json:"screen,omitempty"`
+	// Warnings name what works but is set up short, such as a missing hook.
+	// They do not make a worker not ready.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Preflight starts the worker's command in a throwaway window, waits for the
@@ -79,19 +82,11 @@ func Preflight(term Terminal, w config.Worker, now func() time.Time, sleep func(
 		return fail("%v", err)
 	}
 	defer term.Close(window)
-	started := now()
 	if err := term.Send(window, w.CommandOrDefault()); err != nil {
 		return fail("%v", err)
 	}
-	for {
-		sleep(time.Second)
-		if obs, err = term.Observe(window); err != nil {
-			return fail("%v", err)
-		}
-		waited := now().Sub(started)
-		if waited >= settleTimeout || (waited >= startGrace && now().Sub(obs.LastActivity) >= settledFor) {
-			break
-		}
+	if obs, err = waitToSettle(term, window, now, sleep); err != nil {
+		return fail("%v", err)
 	}
 	screen, err := term.Capture(window, preflightRows)
 	if err != nil {
@@ -99,6 +94,24 @@ func Preflight(term Terminal, w config.Worker, now func() time.Time, sleep func(
 	}
 	res.State, res.Exited, res.Screen = PreflightCaptured, !obs.Exists || shells[obs.Command], screen
 	return res
+}
+
+// waitToSettle waits for what was just typed into the window to finish
+// printing: until the window has printed nothing for settledFor, after at
+// least startGrace, or until settleTimeout has passed.
+func waitToSettle(term Terminal, window string, now func() time.Time, sleep func(time.Duration)) (Observation, error) {
+	started := now()
+	for {
+		sleep(time.Second)
+		obs, err := term.Observe(window)
+		if err != nil {
+			return Observation{}, err
+		}
+		waited := now().Sub(started)
+		if waited >= settleTimeout || (waited >= startGrace && now().Sub(obs.LastActivity) >= settledFor) {
+			return obs, nil
+		}
+	}
 }
 
 // uncommitted counts the changed files in a git checkout; 0 when dir is not one.
@@ -142,6 +155,14 @@ type Asker interface {
 // the reviewer; when the reviewer cannot be asked, the worker is not ready
 // and the screen is shown so a person can read it.
 func Classify(ctx context.Context, reviewer Asker, r PreflightResult) (line string, ready bool) {
+	line, ready = classify(ctx, reviewer, r)
+	for _, w := range r.Warnings {
+		line += "\n    note: " + w
+	}
+	return line, ready
+}
+
+func classify(ctx context.Context, reviewer Asker, r PreflightResult) (line string, ready bool) {
 	switch {
 	case r.State == PreflightRunning:
 		return r.Worker + ": already running", true

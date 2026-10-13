@@ -612,6 +612,20 @@ func TestBriefTellsAWorkerSentBackToHandBackAgainEvenWithNothingToChange(t *test
 	}
 }
 
+func TestBriefSaysHowToListWhatIsStillToDo(t *testing.T) {
+	for _, stack := range []bool{false, true} {
+		f := newFixture(t, config.Supervisor{Stack: stack}, onTrack)
+		f.tick(0)
+		brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+		if !strings.Contains(string(brief), "list what is still to do after `Still to do:`") {
+			t.Fatalf("brief lacks the phrase for what is still to do:\n%s", brief)
+		}
+		if got := strings.Contains(string(brief), "on a new branch from that pull request's branch"); got != stack {
+			t.Fatalf("stack %v: brief tells how to stack = %v:\n%s", stack, got, brief)
+		}
+	}
+}
+
 func TestReviewerIsToldWhatToDoWhenASentBackWorkerFindsNothingToChange(t *testing.T) {
 	if !strings.Contains(instructions, "tell it once to post a new hand-back that says so") {
 		t.Fatal("the reviewer would nudge such a worker until it is marked stuck")
@@ -895,6 +909,34 @@ func TestLimitedWorkerIsLeftAloneUntilItsLimitResets(t *testing.T) {
 	}
 }
 
+func TestLimitedWorkerRecordsWhichLimitAndWhenItResets(t *testing.T) {
+	f := started(t, config.Supervisor{}, limited(46*60))
+	f.term.screen = "You've hit your weekly limit · resets Oct 14, 6pm"
+	f.tick(2 * time.Minute)
+	c := f.lastCheckin(t)
+	if c.Limit != runlog.LimitWeekly || !c.Resets.Equal(f.now.Add(46*time.Hour)) {
+		t.Fatalf("check-in = %+v, want the weekly limit resetting in 46h", c)
+	}
+	if !c.Until.Equal(f.now.Add(limitLongest)) {
+		t.Fatalf("held until %s, want the longest hold: the worker is still looked at again", c.Until)
+	}
+}
+
+func TestLimitKindIsReadFromTheScreen(t *testing.T) {
+	for screen, want := range map[string]string{
+		"You've hit your weekly limit · resets Oct 14, 6pm":            runlog.LimitWeekly,
+		"Opus weekly limit reached ∙ resets Wed 6pm":                   runlog.LimitWeekly,
+		"5-hour limit reached ∙ resets 3am":                            runlog.LimitFiveHour,
+		"You've hit your session limit · resets 3pm":                   runlog.LimitFiveHour,
+		"weekly limit is near\n...\n5-hour limit reached ∙ resets 3am": runlog.LimitFiveHour,
+		"Claude usage limit reached. Your limit will reset at 3pm.":    "",
+	} {
+		if got := limitKind(screen); got != want {
+			t.Errorf("limitKind(%q) = %q, want %q", screen, got, want)
+		}
+	}
+}
+
 func TestLimitResumeInsideTheCacheKeepsTheContext(t *testing.T) {
 	f := started(t, config.Supervisor{CacheTTL: "2h"}, limited(30), nudge("Your limit has reset. Continue with #12."))
 	f.tick(2 * time.Minute)
@@ -1022,6 +1064,67 @@ func TestStalePullRequestGoesBackToAWorkerFirst(t *testing.T) {
 	}
 	if c := f.lastCheckin(t); c.Issue != 12 || c.Rework != "pull request #41 conflicts with the base branch" || !c.Sent {
 		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestIssueWhosePullRequestMergedWithNothingLeftIsNotHandedOut(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	finished := labeled(12)
+	finished.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** #41 (ready)"}}
+	finished.OpenPRs, finished.MergedPRs = map[int]backlog.PR{}, map[int]bool{41: true}
+	more := labeled(13)
+	more.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** #42 (ready)\n**Still to do:** the frontend"}}
+	more.OpenPRs, more.MergedPRs = map[int]backlog.PR{}, map[int]bool{42: true}
+	f.lister.issues = []backlog.Issue{labeled(5), finished, more}
+	f.tick(2 * time.Minute)
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{5, 13}) {
+		t.Fatalf("queue = %v, want #12 left out: its pull request merged and nothing is still to do", got)
+	}
+}
+
+func stackable(number int) backlog.Issue {
+	i := handedBackWith(number, "")
+	i.Comments[0].Body += "\n**Still to do:**\n- the frontend"
+	return i
+}
+
+func TestWithStackingAReviewWithWorkLeftKeepsTheWorkerOnTheIssue(t *testing.T) {
+	f := started(t, config.Supervisor{Stack: true}, onTrack)
+	f.lister.issues = []backlog.Issue{labeled(5), stackable(12)}
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	if got := queueShown(t, prompt); !slices.Equal(got, []int{12, 5}) {
+		t.Fatalf("queue = %v, want the stacked issue first: it is started work", got)
+	}
+	if want := "org/app#12 Issue [stack: pull request #41 waits for review; build what is still to do on a branch from it: the frontend]"; !strings.Contains(prompt, want) {
+		t.Fatalf("prompt lacks %q:\n%s", want, prompt)
+	}
+}
+
+func TestWithoutStackingAReviewWithWorkLeftWaitsOnTheOwner(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.lister.issues = []backlog.Issue{stackable(12)}
+	f.tick(2 * time.Minute)
+	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#12 Issue [waits on the owner: review]") {
+		t.Fatalf("prompt:\n%s", prompt)
+	}
+}
+
+func TestADraftIsNotStackedOn(t *testing.T) {
+	f := started(t, config.Supervisor{Stack: true}, onTrack)
+	draft := stackable(12)
+	draft.OpenPRs[41] = backlog.PR{Draft: true}
+	f.lister.issues = []backlog.Issue{draft}
+	f.tick(2 * time.Minute)
+	if prompt := f.reviewer.prompts[0]; strings.Contains(prompt, "[stack:") {
+		t.Fatalf("a draft was stacked on:\n%s", prompt)
+	}
+}
+
+func TestUnaskedHandOverOfAStackedIssueSaysWhereToBranchFrom(t *testing.T) {
+	order := unaskedOrder(0, false, QueueItem{Number: 12, Stack: "pull request #41 waits for review", Remaining: []string{"the frontend"}})
+	if want := "Start #12 now. Pull request #41 waits for review: build what is still to do (the frontend) on a new branch from its branch, and open the next pull request against that branch."; order != want {
+		t.Fatalf("order = %q, want %q", order, want)
 	}
 }
 

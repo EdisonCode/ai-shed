@@ -14,6 +14,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
+
+	"github.com/edisoncode/ai-shed/internal/pricing"
 )
 
 // LocalHost is the host value for a machine that is reached without SSH.
@@ -35,6 +37,15 @@ type Config struct {
 	// Repos says, per repository, how to see what is deployed. With it a
 	// worker can do the eye checks of merged work on staging.
 	Repos []Repo `yaml:"repos"`
+	// Pricing sets the rate of a model, in US dollars per million tokens,
+	// in place of the published one, or adds a model shed has no price for.
+	// The rates weigh the tokens in cost comments and the digest.
+	Pricing map[string]pricing.Rate `yaml:"pricing"`
+}
+
+// Prices is the published price table with the fleet file's rates in it.
+func (c *Config) Prices() pricing.Table {
+	return pricing.Default().With(c.Pricing)
 }
 
 // Repo is what shed knows about a repository's deploys.
@@ -104,6 +115,11 @@ type Supervisor struct {
 	// LowQueue tells the owner when a queue has fewer issues than this that
 	// a worker can act on. 0 tells nobody.
 	LowQueue int `yaml:"low_queue"`
+	// Stack keeps a worker on an issue whose pull request waits for review
+	// when its hand-back lists what is still to do: the rest is built on a
+	// branch from that pull request's. Without it the worker takes another
+	// issue while the review waits.
+	Stack bool `yaml:"stack"`
 }
 
 // NoWorkAfterOrZero is how long a worker may have no work before the owner
@@ -349,6 +365,11 @@ type Signal struct {
 	// empty one gets its default.
 	Risky   string `yaml:"risky"`
 	Decided string `yaml:"decided"`
+	// Remaining is the phrase after which a hand-back lists what is still
+	// to do on the issue. It is for the follows_pr signal, where an empty
+	// one gets DefaultRemaining. A hand-back whose pull request merged and
+	// that lists nothing is the issue's last: it is not handed out again.
+	Remaining string `yaml:"remaining"`
 	// HandBack is the config's hand-back phrase, copied onto each signal
 	// when the config is read.
 	HandBack string `yaml:"-"`
@@ -381,9 +402,17 @@ func (s Signal) GraceOrDefault() time.Duration {
 	return durationOr(s.Grace, DefaultGrace)
 }
 
-// withDecisionDefaults fills in what a decision signal does not say.
+// DefaultRemaining is the phrase after which a hand-back lists what is
+// still to do.
+const DefaultRemaining = "Still to do:"
+
+// withDecisionDefaults fills in what a decision signal, and the signal that
+// follows a pull request, do not say.
 func withDecisionDefaults(signals []Signal) []Signal {
 	for i, s := range signals {
+		if s.FollowsPR && s.Remaining == "" {
+			signals[i].Remaining = DefaultRemaining
+		}
 		if s.Name != DecisionSignal {
 			continue
 		}

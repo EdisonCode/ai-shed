@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/edisoncode/ai-shed/internal/pricing"
 )
 
 // UsageDir holds one ledger per worker: the tokens its tool reported, and
@@ -30,6 +32,14 @@ type Usage struct {
 	Output     int `json:"output,omitempty"`
 	CacheWrite int `json:"cache_write,omitempty"`
 	CacheRead  int `json:"cache_read,omitempty"`
+	// CacheWrite1h is the part of CacheWrite written for an hour, which is
+	// billed higher than a five-minute write.
+	CacheWrite1h int `json:"cache_write_1h,omitempty"`
+}
+
+// Tokens are the call's tokens, as pricing reads them.
+func (u Usage) Tokens() pricing.Tokens {
+	return pricing.Tokens{Input: u.Input, CacheWrite: u.CacheWrite, CacheWrite1h: u.CacheWrite1h, CacheRead: u.CacheRead, Output: u.Output}
 }
 
 func (u Usage) billed() int { return u.Input + u.Output + u.CacheWrite + u.CacheRead }
@@ -318,6 +328,9 @@ func usageFromLine(line []byte, session string) (Usage, bool) {
 				OutputTokens             int `json:"output_tokens"`
 				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				CacheCreation            struct {
+					OneHour int `json:"ephemeral_1h_input_tokens"`
+				} `json:"cache_creation"`
 			} `json:"usage"`
 		} `json:"message"`
 	}
@@ -345,5 +358,6 @@ func usageFromLine(line []byte, session string) (Usage, bool) {
 		ID: id, Time: when, Session: session, Model: row.Message.Model,
 		Input: tokens.InputTokens, Output: tokens.OutputTokens,
 		CacheWrite: tokens.CacheCreationInputTokens, CacheRead: tokens.CacheReadInputTokens,
+		CacheWrite1h: min(tokens.CacheCreation.OneHour, tokens.CacheCreationInputTokens),
 	}, true
 }

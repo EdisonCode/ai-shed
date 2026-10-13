@@ -141,6 +141,15 @@ func (t Tmux) Capture(window string, lines int) (string, error) {
 	return strings.Join(kept, "\n"), nil
 }
 
+// CaptureJoined is Capture with the lines the window wrapped joined again.
+func (t Tmux) CaptureJoined(window string, lines int) (string, error) {
+	out, err := t.run("capture-pane", "-p", "-J", "-S", "-"+strconv.Itoa(lines), "-t", target(window))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(out, "\n "), nil
+}
+
 func (t Tmux) Open(window, dir string) error {
 	_, names, err := t.windows()
 	if err != nil {
@@ -161,12 +170,14 @@ func (t Tmux) Open(window, dir string) error {
 
 func (t Tmux) Send(window, text string) error {
 	// The text goes as literal keys and Enter as a second call, so no part of
-	// the text is read as a key name.
-	if _, err := t.run("send-keys", "-l", "-t", target(window), "--", text); err != nil {
-		return err
+	// the text is read as a key name. Empty text is Enter alone.
+	if text != "" {
+		if _, err := t.run("send-keys", "-l", "-t", target(window), "--", text); err != nil {
+			return err
+		}
+		// A terminal program needs a moment to take pasted text before Enter.
+		time.Sleep(300 * time.Millisecond)
 	}
-	// A terminal program needs a moment to take pasted text before Enter.
-	time.Sleep(300 * time.Millisecond)
 	_, err := t.run("send-keys", "-t", target(window), "Enter")
 	return err
 }

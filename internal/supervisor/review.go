@@ -35,6 +35,9 @@ type Verdict struct {
 	// ResumeInMinutes is, for a limited worker, how long until its limit
 	// resets; 0 when the screen does not say.
 	ResumeInMinutes int `json:"resume_in_minutes"`
+	// Limit is which usage limit the screen names. It is read from the
+	// screen, not from the reviewer.
+	Limit string `json:"-"`
 }
 
 // Reviewer judges a worker from the review prompt.
@@ -68,6 +71,11 @@ type QueueItem struct {
 	// backfill source, and claim is the label that puts it in this worker's
 	// queue when it is handed over.
 	Backfill bool
+	// Stack says why a worker may go on with an issue whose pull request
+	// waits for review: its hand-back lists what is still to do, which is
+	// Remaining. Empty when it may not.
+	Stack     string
+	Remaining []string
 	// PR is the pull request the issue's latest hand-back named; 0 for none.
 	PR    int
 	claim string
@@ -84,7 +92,7 @@ func (q QueueItem) Workable() bool {
 // resumes reports whether the item is started work that came back to a
 // worker: its pull request needs one, or the owner answered its question.
 func (q QueueItem) resumes() bool {
-	return q.Rework != "" || (q.Ruled && q.Workable())
+	return q.Rework != "" || q.Stack != "" || (q.Ruled && q.Workable())
 }
 
 // parked reports whether the item's clock ran out: it waits on a decision and
@@ -187,6 +195,9 @@ func Prompt(in ReviewInput) string {
 		}
 		if q.Look != "" {
 			fmt.Fprintf(&b, " [eye check: %s]", q.Look)
+		}
+		if q.Stack != "" {
+			fmt.Fprintf(&b, " [stack: %s; build what is still to do on a branch from it: %s]", q.Stack, strings.Join(q.Remaining, "; "))
 		}
 		if q.Backfill {
 			b.WriteString(" [backlog]")

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -345,6 +346,56 @@ func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
 	}
 }
 
+func TestAgentSessionsOutsideTheFleetAreMarkedUnsupervised(t *testing.T) {
+	res := healthy()
+	res.Windows = []probe.Window{
+		{Session: "shed", Name: "app", Command: "2.1.289", LastActivity: now},
+		{Session: "shed", Name: "preflight-app", Command: "2.1.289", LastActivity: now},
+		{Session: "work", Name: "notes", Command: "2.1.289", LastActivity: now.Add(-6 * 24 * time.Hour)},
+		{Session: "work", Name: "old", Command: "claude", LastActivity: now.Add(-3 * time.Hour)},
+		{Session: "work", Name: "edit", Command: "vim", LastActivity: now},
+	}
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}
+	r := Assess(m, signals, now, res, nil)
+	wantAttention(t, r)
+	if want := []string{"work:notes", "work:old"}; !slices.Equal(r.Unsupervised, want) {
+		t.Fatalf("unsupervised = %q, want %q", r.Unsupervised, want)
+	}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	for _, want := range []string{
+		"work:notes          2.1.289  active 6d ago  unsupervised",
+		"2 unsupervised agent session(s) share this machine's account and CPU with its workers",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if (strings.Contains(line, "shed:app ") || strings.Contains(line, "shed:preflight-app")) && strings.Contains(line, "unsupervised") {
+			t.Fatalf("a window of shed's own is marked: %q", line)
+		}
+	}
+}
+
+func TestMachineWithNoSupervisedWorkersHasNoUnsupervisedSessions(t *testing.T) {
+	res := healthy()
+	res.Windows = []probe.Window{window("notes", time.Hour)}
+	if r := Assess(config.Machine{Name: "box"}, signals, now, res, nil); len(r.Unsupervised) != 0 {
+		t.Fatalf("unsupervised = %q on a machine where every session is the owner's", r.Unsupervised)
+	}
+}
+
+func TestIssueWhosePullRequestMergedIsNotQueued(t *testing.T) {
+	done := issue(7, "## Hand-back\n**PR:** #41 (ready)")
+	done.OpenPRs, done.MergedPRs = map[int]backlog.PR{}, map[int]bool{41: true}
+	r := Assess(config.Machine{Name: "box"}, signals, now, healthy(), []backlog.Issue{done})
+	wantAttention(t, r) // not "1 issue(s) queued and no worker is running"
+	if r.Issues[0].State != Merged {
+		t.Fatalf("state = %q, want %q", r.Issues[0].State, Merged)
+	}
+}
+
 func stalePR(number int, problem string) backlog.Issue {
 	i := issue(number, "## Hand-back\n**PR:** #41 (ready)")
 	i.OpenPRs = map[int]backlog.PR{41: {Problem: problem}}
@@ -459,6 +510,25 @@ func TestReleaseStateThatCannotBeReadNeedsOwner(t *testing.T) {
 	Render(&out, nil, repos)
 	if !NeedsOwner(nil, repos) || !strings.Contains(out.String(), "! cannot read the release state: org/app: read staging's commit: exit status 7") {
 		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+func TestStagingThatCannotBeAskedStillGivesTheEyeChecks(t *testing.T) {
+	state := releaseState()
+	state.Unchecked = "gh api repos/org/app/compare/a...b: timed out at shed's deadline after 45s"
+	repos := []RepoReport{{Report: state, Lookers: 1, Now: now}}
+	var out bytes.Buffer
+	Render(&out, nil, repos)
+	for _, want := range []string{
+		"eye checks: 2 not done (1 on staging, 1 wait for a staging deploy), 1 failed",
+		"! cannot tell which merged work staging serves, so none is counted as on staging: gh api repos/org/app/compare/a...b: timed out",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if !NeedsOwner(nil, repos) {
+		t.Fatal("a release state read in part does not need the owner")
 	}
 }
 
@@ -645,6 +715,18 @@ func TestDigestSaysWhatItCouldNotRead(t *testing.T) {
 	}
 }
 
+func TestDigestSaysWhenStagingCouldNotBeAsked(t *testing.T) {
+	state := releaseState()
+	state.Unchecked = "gh api compare: timed out at shed's deadline after 45s"
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{report: state}}
+	d := c.Digest(context.Background(), withRepo(true), &fakeMerged{}, now.Add(-time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	if want := "! cannot tell which merged work staging serves: gh api compare: timed out"; !strings.Contains(out.String(), want) {
+		t.Fatalf("digest lacks %q:\n%s", want, out.String())
+	}
+}
+
 func TestStatusShowsWhereEachOneOffTaskStands(t *testing.T) {
 	res := healthy()
 	handed := func(worker, task string, ago time.Duration) runlog.Checkin {
@@ -750,6 +832,40 @@ func TestLimitedWorkerShowsHowLongItIsHeldAndHowToEndIt(t *testing.T) {
 	}
 }
 
+func weeklyLimited(worker string) runlog.Checkin {
+	c := checkin(runlog.VerdictLimited, "the screen says the weekly limit resets Wed at 6pm")
+	c.Worker, c.Until, c.Limit, c.Resets = worker, now.Add(6*time.Hour), runlog.LimitWeekly, now.Add(46*time.Hour)
+	return c
+}
+
+func TestLimitedWorkerSaysWhichLimitAndWhenItResets(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{weeklyLimited("app")}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{Assess(appWorker, signals, now, res, nil)}, nil)
+	if want := "weekly limit, resets " + now.Add(46*time.Hour).Format("Mon 15:04") + " (in 46h), held for up to another 6h"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}
+
+func TestMachineWithEveryWorkerAtItsWeeklyLimitNeedsTheOwner(t *testing.T) {
+	two := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}, {Name: "api", Dir: "/tmp", Brief: "b"}}}
+	res := healthy()
+	fiveHour := weeklyLimited("api")
+	fiveHour.Limit = runlog.LimitFiveHour
+	res.Checkins = []runlog.Checkin{weeklyLimited("app"), fiveHour}
+	wantAttention(t, Assess(two, signals, now, res, nil))
+
+	res.Checkins = []runlog.Checkin{weeklyLimited("app"), weeklyLimited("api")}
+	wantAttention(t, Assess(two, signals, now, res, nil),
+		"every worker is at its weekly limit: switch the machine's account or wait until "+now.Add(46*time.Hour).Format("Mon 15:04"))
+
+	// A worker that only answers questions does not keep the machine busy.
+	two.Workers[1].Ask = true
+	res.Checkins = []runlog.Checkin{weeklyLimited("app")}
+	wantAttention(t, Assess(two, signals, now, res, nil), "every worker is at its weekly limit")
+}
+
 func TestLimitedWorkerThatWorkedSinceDoesNotShowTheOldReason(t *testing.T) {
 	out := limitedReport(t, 2*time.Minute) // the limit was seen 5 minutes ago
 	if !strings.Contains(out, "but active 2m ago, after the limit was seen") || strings.Contains(out, "resets Oct 7") {
@@ -845,5 +961,84 @@ func TestAskWorkerIsShownAsOneAndIsNotCountedAsIdle(t *testing.T) {
 	Render(&out, []MachineReport{r}, nil)
 	if want := "ask  answers questions  started  3h ago"; !strings.Contains(out.String(), want) {
 		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}
+
+type fakeUsage struct {
+	byMachine map[string]runlog.UsageSummary
+	err       error
+}
+
+func (f fakeUsage) ReadUsage(_ context.Context, m config.Machine, _ time.Time) (runlog.UsageSummary, error) {
+	return f.byMachine[m.Name], f.err
+}
+
+func TestDigestTotalsUsageByWorkerAndModelAndPricesTheMergedWork(t *testing.T) {
+	summary := runlog.UsageSummary{
+		Workers: []runlog.WorkerUsage{{Worker: "app", Dollars: 14.5, Models: map[string]runlog.ModelTokens{
+			"opus-5-5":   {Input: 1_200_000, CacheWrite: 300_000, CacheRead: 15_700_000, Output: 52_000, Dollars: 12.25, Priced: true},
+			"sonnet-5-5": {Input: 100_000, Output: 10_000, Dollars: 2.25, Priced: true},
+		}}},
+		PRs: []runlog.PRCost{
+			{Repo: "org/app", PR: 51, Dollars: 9.2},
+			{Repo: "org/app", PR: 50, Dollars: 1.1},
+			{Repo: "org/app", PR: 50, Worker: "docs", Dollars: 0.9}, // a rework by another worker
+			{Repo: "org/app", PR: 7, Dollars: 99},                   // not merged in the window
+		},
+	}
+	merged := &fakeMerged{pulls: map[int]looks.Pull{
+		51: {Number: 51, Title: "Paginate the audit log", MergedAt: now.Add(-time.Hour)},
+		50: {Number: 50, Title: "Retry the export", MergedAt: now.Add(-5 * time.Hour)},
+		49: {Number: 49, Title: "Merged by hand", MergedAt: now.Add(-6 * time.Hour)},
+	}}
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}, Usage: fakeUsage{byMachine: map[string]runlog.UsageSummary{"box": summary}}}
+	d := c.Digest(context.Background(), withRepo(true), merged, now.Add(-24*time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	for _, want := range []string{
+		"Usage at API rates: $14.50",
+		"box  app  opus-5-5    in 1.2M  write 300k  read 15.7M  out 52k  $12.25",
+		"box  app  sonnet-5-5  in 100k  write 0     read 0      out 10k  $2.25",
+		"by model: opus-5-5 $12.25, sonnet-5-5 $2.25",
+		"Merged pull requests with a cost: 2 of 3, median $5.60",
+		"org/app#51  $9.20  Paginate the audit log",
+		"org/app#50  $2.00  Retry the export",
+		"The reviewer's own calls are not counted.",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("digest lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "$99") {
+		t.Fatalf("a pull request merged outside the window was counted:\n%s", out.String())
+	}
+}
+
+func TestDigestSaysWhichMachineItCouldNotReadUsageFrom(t *testing.T) {
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}, Usage: fakeUsage{err: errors.New("unknown command \"usage\"")}}
+	d := c.Digest(context.Background(), withRepo(true), &fakeMerged{}, now.Add(-time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	if want := "usage: unknown command \"usage\""; !strings.Contains(out.String(), want) {
+		t.Fatalf("digest lacks %q:\n%s", want, out.String())
+	}
+}
+
+func TestStatusNamesEachMachinesAccountAndWhichShareOne(t *testing.T) {
+	report := func(name, account string) MachineReport {
+		res := healthy()
+		res.Account = account
+		return Assess(config.Machine{Name: name}, signals, now, res, nil)
+	}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{report("box", "a@example.com"), report("mini", "a@example.com"), report("pc", "b@example.com")}, nil)
+	for _, want := range []string{
+		"account  a@example.com  (one usage limit with mini)",
+		"account  a@example.com  (one usage limit with box)",
+		"account  b@example.com\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
 	}
 }

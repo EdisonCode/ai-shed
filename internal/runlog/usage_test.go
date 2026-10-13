@@ -64,6 +64,17 @@ func TestTranscriptUsageIsRecordedOnceAndSidechainsAreSkipped(t *testing.T) {
 	}
 }
 
+func TestCacheWritesForAnHourAreKeptApart(t *testing.T) {
+	line := `{"type":"assistant","uuid":"a","timestamp":"2026-10-12T15:00:00Z","message":{"id":"m","model":"claude-opus-5-5","usage":{"input_tokens":5,"output_tokens":7,"cache_creation_input_tokens":300,"cache_read_input_tokens":900,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}}}}`
+	u, ok := usageFromLine([]byte(line), "")
+	if !ok || u.CacheWrite != 300 || u.CacheWrite1h != 200 {
+		t.Fatalf("usage = %+v, want 300 written, 200 of it for an hour", u)
+	}
+	if got := u.Tokens(); got.CacheWrite != 300 || got.CacheWrite1h != 200 || got.Input != 5 || got.Output != 7 || got.CacheRead != 900 {
+		t.Fatalf("tokens = %+v", got)
+	}
+}
+
 func TestOverlongTranscriptLinesAreSkipped(t *testing.T) {
 	var got []string
 	input := "short\n" + strings.Repeat("x", 100) + "\n" + strings.Repeat("y", 70*1024) + "\nafter\n"

@@ -5,6 +5,7 @@ package status
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -35,6 +36,7 @@ const (
 	Waiting = "waiting"   // it waits on the owner
 	Look    = "eye check" // its merged work waits for a worker to look at it on staging
 	Draft   = "draft"     // its pull request is a draft on purpose and says what it waits for
+	Merged  = "merged"    // its pull request merged and its hand-back lists nothing still to do; it is not handed out
 )
 
 // Task states.
@@ -68,6 +70,13 @@ type MachineReport struct {
 	OneOff []TaskState `json:"one_off,omitempty"`
 	// Attention lists what needs the owner. Empty means the machine is on track.
 	Attention []string `json:"attention"`
+	// Unsupervised names the agent sessions on a machine with supervised
+	// workers that are not one of them, as "session:window". They share
+	// the machine's account and CPU with the workers.
+	Unsupervised []string `json:"unsupervised,omitempty"`
+	// sharedWith names, for the terminal, the machines that share this
+	// one's account.
+	sharedWith string
 	// Now is when the report was made, by the watcher's clock. The age of
 	// what waits on the owner is counted from it.
 	Now time.Time `json:"now"`
@@ -150,6 +159,9 @@ type Collector struct {
 	// Looks reads the eye checks that merged work still owes. It is needed
 	// only for CollectRepos.
 	Looks LookReader
+	// Usage reads what each machine's workers spent. It is needed only for
+	// a digest, and nil leaves usage out.
+	Usage UsageReader
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.
@@ -174,14 +186,17 @@ type RepoReport struct {
 func (c Collector) CollectRepos(ctx context.Context, cfg *config.Config) []RepoReport {
 	reports := make([]RepoReport, len(cfg.Repos))
 	for i, repo := range cfg.Repos {
-		ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 		reports[i] = c.collectRepo(ctx, cfg, repo)
-		cancel()
 	}
 	return reports
 }
 
-func (c Collector) collectRepo(ctx context.Context, cfg *config.Config, repo config.Repo) RepoReport {
+// collectRepo lists the repository's issues and then reads its release
+// state, each on its own deadline: a long backlog to list does not leave
+// the release state without time.
+func (c Collector) collectRepo(parent context.Context, cfg *config.Config, repo config.Repo) RepoReport {
+	ctx, cancel := context.WithTimeout(parent, probeTimeout)
+	defer cancel()
 	report := RepoReport{Report: looks.Report{Repo: repo.Name}, Now: time.Now()}
 	var sources []config.IssueSource
 	var open []backlog.Issue
@@ -206,7 +221,9 @@ func (c Collector) collectRepo(ctx context.Context, cfg *config.Config, repo con
 			open = append(open, issues...)
 		}
 	}
-	read, err := c.Looks.Read(ctx, repo, sources, open, cfg.Signals)
+	lookCtx, cancelLooks := context.WithTimeout(parent, probeTimeout)
+	defer cancelLooks()
+	read, err := c.Looks.Read(lookCtx, repo, sources, open, cfg.Signals)
 	if err != nil {
 		report.Error = err.Error()
 		return report
@@ -221,6 +238,9 @@ func (r RepoReport) Attention() []string {
 		return []string{"cannot read the release state: " + r.Error}
 	}
 	var attention []string
+	if r.Unchecked != "" {
+		attention = append(attention, "cannot tell which merged work staging serves, so none is counted as on staging: "+r.Unchecked)
+	}
 	if due := r.count(looks.Due); due > 0 && r.Lookers == 0 {
 		attention = append(attention, fmt.Sprintf("%d eye check(s) are due on staging and no worker does eye checks: they are yours", due))
 	}
@@ -351,6 +371,7 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		assessTasks(m, *res, agentUp, &report, attend)
 		assessWorkers(m, *res, &report, attend)
 		assessOneOff(*res, &report)
+		report.Unsupervised = unsupervised(m, res.Windows)
 	}
 
 	queued, working := 0, 0
@@ -415,6 +436,9 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 			// Nobody builds it and nobody is asked: it waits for what its
 			// hand-back names.
 			st.State = Draft
+		case backlog.Finished(issue, signals) != 0 && !hasWindow:
+			// Open, but done: the merge did not close it. Nobody builds it.
+			st.State = Merged
 		case hasWindow:
 			working++
 			if quiet := res.Now.Sub(window.LastActivity); quiet > workerQuiet {
@@ -575,6 +599,69 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 		}
 		report.Workers = append(report.Workers, st)
 	}
+	if until, ok := allWeekly(report.Workers, res.Now); ok {
+		attend("every worker is at its weekly limit: switch the machine's account or wait until %s", until)
+	}
+}
+
+// versionRE matches a process title that is a version number, as Claude
+// Code sets its own.
+var versionRE = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
+// unsupervised lists the windows on a machine with supervised workers that
+// run an agent tool and are not a worker's own: a manual session, or one
+// left from another workflow. An agent tool is one the fleet's workers run,
+// or a process titled with a version number.
+func unsupervised(m config.Machine, windows []probe.Window) []string {
+	if len(m.Workers) == 0 {
+		return nil
+	}
+	tools, workers := map[string]bool{"claude": true}, map[string]bool{}
+	for _, w := range m.Workers {
+		workers[w.Name] = true
+		if fields := strings.Fields(w.CommandOrDefault()); len(fields) > 0 {
+			tools[filepath.Base(fields[0])] = true
+		}
+	}
+	var names []string
+	for _, win := range windows {
+		if !tools[win.Command] && !versionRE.MatchString(win.Command) {
+			continue
+		}
+		if win.Session == workerSession && (workers[win.Name] || strings.HasPrefix(win.Name, "preflight-") || strings.HasPrefix(win.Name, "login-")) {
+			continue
+		}
+		names = append(names, win.Session+":"+win.Name)
+	}
+	return names
+}
+
+// allWeekly reports whether every worker is held at its weekly limit, and
+// when the first of them resets. Waiting can idle the machine for days.
+func allWeekly(workers []WorkerStatus, now time.Time) (string, bool) {
+	var first time.Time
+	builders := 0
+	for _, w := range workers {
+		// A worker that only answers questions spends little and is not
+		// what the machine is for.
+		if w.Ask {
+			continue
+		}
+		builders++
+		if w.Last == nil || w.Last.Verdict != runlog.VerdictLimited || w.Last.Limit != runlog.LimitWeekly {
+			return "", false
+		}
+		if r := w.Last.Resets; r.After(now) && (first.IsZero() || r.Before(first)) {
+			first = r
+		}
+	}
+	if builders == 0 {
+		return "", false
+	}
+	if first.IsZero() {
+		return "it resets", true
+	}
+	return first.In(now.Location()).Format("Mon 15:04"), true
 }
 
 func assessTasks(m config.Machine, res probe.Result, agentUp bool, report *MachineReport, attend func(string, ...any)) {

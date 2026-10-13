@@ -31,12 +31,15 @@ Usage:
   shed resume <machine> [worker]    end a pause early, and a hold at a usage limit that is over
   shed recycle [-now] <machine> <worker>
                                     give a worker a fresh session after its current issue
+  shed login <machine>              print the URL to sign the machine's tool in to another account
+  shed login -code <code> <machine> give it the code the sign-in page showed; ends usage-limit holds
   shed tidy [-apply] <machine>      list the worktrees and branches whose pull request is merged;
                                     with -apply, remove them
   shed template issue               print an issue template for issues a worker can take
   shed update                       replace this shed with the latest release
   shed preflight [-machine name]    on a machine: check that each worker's command comes up ready
   shed agent [-machine name]        on a machine: supervise its workers and run its tasks
+  shed usage [-since 168h] [-json]  on a machine: what its workers spent, at API rates
   shed mark working|idle|waiting|usage
                                     in a worker's tool hook: tell shed the worker's state;
                                     usage records tokens and changes no state
@@ -86,6 +89,10 @@ func main() {
 		code = cmdResume(args)
 	case "bump":
 		code = cmdBump(args)
+	case "login":
+		code = cmdLogin(args)
+	case "usage":
+		code = cmdUsage(args)
 	case "digest":
 		code = cmdDigest(args)
 	case "template":

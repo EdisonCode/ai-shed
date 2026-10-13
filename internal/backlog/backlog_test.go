@@ -430,3 +430,42 @@ func TestDraftThatSaysWhatItWaitsForIsNotAReviewYet(t *testing.T) {
 		})
 	}
 }
+
+func mergedIssue(comments ...string) Issue {
+	i := Issue{Repo: "org/app", Number: 7, OpenPRs: map[int]PR{}, MergedPRs: map[int]bool{41: true}}
+	for _, body := range comments {
+		i.Comments = append(i.Comments, Comment{Body: body})
+	}
+	return i
+}
+
+func TestIssueWhosePullRequestMergedWithNothingLeftIsFinished(t *testing.T) {
+	signals := config.DefaultSignals()
+	cases := []struct {
+		name  string
+		issue Issue
+		want  int
+	}{
+		{"merged, nothing still to do", mergedIssue(handBackClean), 41},
+		{"merged, a second hand-back found nothing", mergedIssue(handBackClean, "## Hand-back\n**PR:** none: #41 already merged\nNothing left to do."), 41},
+		{"merged, still to do says none", mergedIssue(handBackClean + "\n**Still to do:** none"), 41},
+		{"merged, more to do", mergedIssue(handBackClean + "\n**Still to do:**\n- the frontend\n- the docs"), 0},
+		{"merged, the owner wrote after it", mergedIssue(handBackClean, "Also handle the empty cart."), 0},
+		{"still open", Issue{OpenPRs: map[int]PR{41: {}}, MergedPRs: map[int]bool{}, Comments: []Comment{{Body: handBackClean}}}, 0},
+		{"closed without merging", Issue{OpenPRs: map[int]PR{}, MergedPRs: map[int]bool{}, Comments: []Comment{{Body: handBackClean}}}, 0},
+		{"pull requests not looked up", Issue{Comments: []Comment{{Body: handBackClean}}}, 0},
+		{"no hand-back", mergedIssue("I looked at this."), 0},
+	}
+	for _, tc := range cases {
+		if got := Finished(tc.issue, signals); got != tc.want {
+			t.Errorf("%s: Finished = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestRemainingReadsTheListAfterTheHandBacksPhrase(t *testing.T) {
+	issue := mergedIssue(handBackClean + "\n**Still to do:**\n- the frontend\n- the docs\n\n**Needs eyes:** nothing")
+	if got := Remaining(issue, config.DefaultSignals()); !slices.Equal(got, []string{"the frontend", "the docs"}) {
+		t.Fatalf("Remaining = %q", got)
+	}
+}
