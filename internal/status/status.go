@@ -36,6 +36,7 @@ const (
 	Waiting = "waiting"   // it waits on the owner
 	Look    = "eye check" // its merged work waits for a worker to look at it on staging
 	Draft   = "draft"     // its pull request is a draft on purpose and says what it waits for
+	Merged  = "merged"    // its pull request merged and its hand-back lists nothing still to do; it is not handed out
 )
 
 // Task states.
@@ -429,6 +430,9 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 			// Nobody builds it and nobody is asked: it waits for what its
 			// hand-back names.
 			st.State = Draft
+		case backlog.Finished(issue, signals) != 0 && !hasWindow:
+			// Open, but done: the merge did not close it. Nobody builds it.
+			st.State = Merged
 		case hasWindow:
 			working++
 			if quiet := res.Now.Sub(window.LastActivity); quiet > workerQuiet {

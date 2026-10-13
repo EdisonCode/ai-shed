@@ -386,6 +386,16 @@ func TestMachineWithNoSupervisedWorkersHasNoUnsupervisedSessions(t *testing.T) {
 	}
 }
 
+func TestIssueWhosePullRequestMergedIsNotQueued(t *testing.T) {
+	done := issue(7, "## Hand-back\n**PR:** #41 (ready)")
+	done.OpenPRs, done.MergedPRs = map[int]backlog.PR{}, map[int]bool{41: true}
+	r := Assess(config.Machine{Name: "box"}, signals, now, healthy(), []backlog.Issue{done})
+	wantAttention(t, r) // not "1 issue(s) queued and no worker is running"
+	if r.Issues[0].State != Merged {
+		t.Fatalf("state = %q, want %q", r.Issues[0].State, Merged)
+	}
+}
+
 func stalePR(number int, problem string) backlog.Issue {
 	i := issue(number, "## Hand-back\n**PR:** #41 (ready)")
 	i.OpenPRs = map[int]backlog.PR{41: {Problem: problem}}

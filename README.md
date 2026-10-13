@@ -741,6 +741,7 @@ supervisor:
   model_command: "/model {model}"     # typed into a worker to switch model
   no_work_after: 30m                  # optional: notify when a worker has had no work this long
   low_queue: 3                        # optional: notify when a queue has fewer workable issues
+  stack: true                         # optional: go on with an issue on a branch from its pull request while it waits for review
 ```
 
 For another agent tool, set the worker's `command`, the reviewer's `command`,
@@ -802,8 +803,33 @@ While that pull request is open but cannot merge (a conflict, a failed check),
 the issue does not wait on you: it goes back to a worker. See *The queue*.
 
 The review signal follows its pull request (`follows_pr`). An issue that takes
-several pull requests comes back into the queue each time one is merged, and
-the worker picks up the rest from what the issue says.
+several pull requests lists what is still to do in each hand-back but the
+last, after `Still to do:` (the review signal's `remaining`):
+
+```markdown
+**PR:** #41 (ready)
+**Still to do:**
+- the frontend
+- the docs
+```
+
+It comes back into the queue each time one of its pull requests is merged,
+and the worker picks up the rest. A hand-back whose pull request merged and
+that lists nothing still to do is the issue's last. The issue is not handed
+out again, even while it stays open (a merge into a branch that does not
+close issues, or a pull request that only refers to it), and `shed status`
+shows it as `merged`. A comment after that hand-back that is not another
+hand-back brings it back, as does a pull request that was closed without
+merging. shed asks GitHub for the last 200 merged pull requests of the
+repository, so a hand-back that names an older one is handed out as before.
+
+With `supervisor.stack: true`, a pull request that waits for your review no
+longer leaves its issue idle when the hand-back lists what is still to do.
+The worker is sent on with the issue: it builds the rest on a new branch from
+that pull request's branch and opens the next pull request against it. The
+review still waits on you. A draft, or a pull request that cannot merge, is
+not stacked on. Without `stack`, the worker takes another issue while the
+review waits.
 
 A hand-back may name two pull requests on its `**PR:**` line, the part that
 merged and the part that is still open: `#41 (backend, merged) and #42

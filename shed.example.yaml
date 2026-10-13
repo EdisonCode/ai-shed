@@ -138,6 +138,10 @@ supervisor:
   # for a worker to act on.
   # no_work_after: 30m
   # low_queue: 3
+  # Optional. While a pull request waits for your review and its hand-back
+  # lists what is still to do, keep the worker on the issue: it builds the
+  # rest on a branch from that pull request's branch.
+  # stack: true
   # The reviewer: any command that reads a prompt on stdin and prints an answer.
   command: claude -p --model sonnet
   # How long a worker's prompt cache stays warm on your plan. shed cannot see

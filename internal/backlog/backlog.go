@@ -28,6 +28,9 @@ type Issue struct {
 	// OpenPRs holds the repo's open pull requests by number. It is nil when
 	// the lister did not look them up.
 	OpenPRs map[int]PR `json:"-"`
+	// MergedPRs holds the numbers of the repo's recently merged pull
+	// requests. It is nil when the lister did not look them up.
+	MergedPRs map[int]bool `json:"-"`
 }
 
 // PR is the state of an open pull request.
@@ -91,10 +94,40 @@ func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 	if err != nil {
 		return nil, err
 	}
+	merged, err := mergedPRs(ctx, src.Repo)
+	if err != nil {
+		return nil, err
+	}
 	for i := range issues {
-		issues[i].OpenPRs = openPRs
+		issues[i].OpenPRs, issues[i].MergedPRs = openPRs, merged
 	}
 	return issues, nil
+}
+
+// mergedLimit is how many of the latest merged pull requests are asked for.
+// A hand-back that names an older one is not taken as finished, and its
+// issue is handed out as before.
+const mergedLimit = 200
+
+func mergedPRs(ctx context.Context, repo string) (map[int]bool, error) {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "merged", "--limit", strconv.Itoa(mergedLimit), "--json", "number")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh pr list %s --state merged: %w: %s", repo, err, strings.TrimSpace(stderr.String()))
+	}
+	var prs []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return nil, fmt.Errorf("gh pr list %s --state merged: parse output: %w", repo, err)
+	}
+	merged := make(map[int]bool, len(prs))
+	for _, pr := range prs {
+		merged[pr.Number] = true
+	}
+	return merged, nil
 }
 
 // Closed returns the source's issues that were closed after since. Their
@@ -352,19 +385,26 @@ func Decided(issue Issue, signals []config.Signal) []string {
 // its line, then the lines of the list that follows, up to an empty line or
 // the next of the hand-back's own headings ("**PR:**").
 func decidedIn(body string, s config.Signal) []string {
-	at := strings.Index(strings.ToLower(body), strings.ToLower(s.Decided))
-	if at < 0 {
+	return entriesAfter(body, s.Decided, s.Clear)
+}
+
+// entriesAfter reads the entries after a phrase: the rest of its line, then
+// the lines of the list that follows, up to an empty line or the next of the
+// hand-back's own headings. A first entry that is a clear word is none.
+func entriesAfter(body, phrase string, clear []string) []string {
+	at := strings.Index(strings.ToLower(body), strings.ToLower(phrase))
+	if phrase == "" || at < 0 {
 		return nil
 	}
 	var entries []string
-	for n, line := range strings.Split(body[at+len(s.Decided):], "\n") {
+	for n, line := range strings.Split(body[at+len(phrase):], "\n") {
 		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "*_"))
 		switch {
 		case line == "" && n == 0:
 			continue
 		case line == "" || strings.HasPrefix(line, "#") || headingRE.MatchString(line):
 			return entries
-		case n == 0 && isClear(strings.ToLower(line), s.Clear):
+		case n == 0 && isClear(strings.ToLower(line), clear):
 			return nil
 		}
 		entries = append(entries, strings.TrimSpace(entryRE.ReplaceAllString(line, "")))
@@ -391,6 +431,60 @@ func accepts(body string, s config.Signal) bool {
 func lastHandBack(issue Issue, signals []config.Signal) (index, pr int) {
 	index, pr, _ = handBack(issue, signals)
 	return index, pr
+}
+
+// Remaining returns what the issue's last hand-back says is still to do,
+// one per entry; nil when it says nothing, or none.
+func Remaining(issue Issue, signals []config.Signal) []string {
+	for _, s := range signals {
+		if !s.FollowsPR || s.Remaining == "" {
+			continue
+		}
+		for i := len(issue.Comments) - 1; i >= 0; i-- {
+			body := issue.Comments[i].Body
+			if s.HandBack != "" && !strings.Contains(strings.ToLower(body), strings.ToLower(s.HandBack)) {
+				continue
+			}
+			return entriesAfter(body, s.Remaining, []string{"none", "nothing"})
+		}
+	}
+	return nil
+}
+
+// Finished returns the pull request that finished the issue, or 0. An
+// issue is finished when the pull request its last hand-back follows has
+// merged, the hand-back lists nothing still to do, and nobody has written
+// on the issue since but in another hand-back. Such an issue may stay open,
+// as when the merge was to a branch that does not close issues; handed out
+// again, a worker finds nothing to do.
+func Finished(issue Issue, signals []config.Signal) int {
+	if issue.OpenPRs == nil || issue.MergedPRs == nil {
+		return 0
+	}
+	index, pr := lastHandBack(issue, signals)
+	if index < 0 || pr == 0 || !issue.MergedPRs[pr] || len(Remaining(issue, signals)) > 0 {
+		return 0
+	}
+	if _, open := issue.OpenPRs[pr]; open {
+		return 0
+	}
+	for _, c := range issue.Comments[index+1:] {
+		if !isHandBack(c.Body, signals) {
+			return 0
+		}
+	}
+	return pr
+}
+
+// isHandBack reports whether a comment is a worker's hand-back. With no
+// hand-back phrase, no comment can be told apart as one.
+func isHandBack(body string, signals []config.Signal) bool {
+	for _, s := range signals {
+		if s.HandBack != "" && strings.Contains(strings.ToLower(body), strings.ToLower(s.HandBack)) {
+			return true
+		}
+	}
+	return false
 }
 
 // HandedPR returns the pull request the issue's latest hand-back named, or
