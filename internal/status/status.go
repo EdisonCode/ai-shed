@@ -156,6 +156,9 @@ type Collector struct {
 	// Looks reads the eye checks that merged work still owes. It is needed
 	// only for CollectRepos.
 	Looks LookReader
+	// Usage reads what each machine's workers spent. It is needed only for
+	// a digest, and nil leaves usage out.
+	Usage UsageReader
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.

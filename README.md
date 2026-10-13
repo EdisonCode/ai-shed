@@ -1113,6 +1113,31 @@ by cause: no work in the queue, an error of the tool, waiting on you, a usage
 limit. It is read from the last 500 check-ins of each machine, so on a busy
 fleet it may reach back less far than the window.
 
+For a week's usage, `shed digest -since 168h` adds what the workers spent,
+read from each machine with `shed usage -json`:
+
+```
+Usage at API rates: $41.80 (a subscription does not pay this price; it weighs the kinds of token as the published rates do)
+  mac-mini  app   opus-5-5    in 1.2M  write 300k  read 15.7M  out 52k  $12.25
+  mac-mini  app   sonnet-5-5  in 4.1M  write 900k  read 61M    out 410k $18.70
+  mac-mini  docs  haiku-5-5   in 2M    write 0     read 8M     out 300k $10.85
+  by model: sonnet-5-5 $18.70, opus-5-5 $12.25, haiku-5-5 $10.85
+
+Merged pull requests with a cost: 6 of 7, median $3.10
+  my-org/my-app#140  $9.20  Show the total on the order page
+  ...
+  The reviewer's own calls are not counted.
+
+Idle at a usage limit: mac-mini 40.1h
+```
+
+The dollars are the published API rates, as on the cost comments: the
+weights that make tokens of different kinds and models comparable. A merged
+pull request's cost adds every worker and pass that worked on it; the top
+five are named. One with no cost comment, such as one merged by hand, is
+counted in `of 7` only. `shed usage` on a machine prints the same totals
+for one machine.
+
 It changes nothing and exits 1 when something needs you. To get it every
 morning, run it from a scheduler on the watcher and send the output wherever
 you read. `-json` prints the same as data.

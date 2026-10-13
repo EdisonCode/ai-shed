@@ -37,6 +37,7 @@ Usage:
   shed update                       replace this shed with the latest release
   shed preflight [-machine name]    on a machine: check that each worker's command comes up ready
   shed agent [-machine name]        on a machine: supervise its workers and run its tasks
+  shed usage [-since 168h] [-json]  on a machine: what its workers spent, at API rates
   shed mark working|idle|waiting|usage
                                     in a worker's tool hook: tell shed the worker's state;
                                     usage records tokens and changes no state
@@ -86,6 +87,8 @@ func main() {
 		code = cmdResume(args)
 	case "bump":
 		code = cmdBump(args)
+	case "usage":
+		code = cmdUsage(args)
 	case "digest":
 		code = cmdDigest(args)
 	case "template":

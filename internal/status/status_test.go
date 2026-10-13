@@ -963,3 +963,63 @@ func TestAskWorkerIsShownAsOneAndIsNotCountedAsIdle(t *testing.T) {
 		t.Fatalf("output lacks %q:\n%s", want, out.String())
 	}
 }
+
+type fakeUsage struct {
+	byMachine map[string]runlog.UsageSummary
+	err       error
+}
+
+func (f fakeUsage) ReadUsage(_ context.Context, m config.Machine, _ time.Time) (runlog.UsageSummary, error) {
+	return f.byMachine[m.Name], f.err
+}
+
+func TestDigestTotalsUsageByWorkerAndModelAndPricesTheMergedWork(t *testing.T) {
+	summary := runlog.UsageSummary{
+		Workers: []runlog.WorkerUsage{{Worker: "app", Dollars: 14.5, Models: map[string]runlog.ModelTokens{
+			"opus-5-5":   {Input: 1_200_000, CacheWrite: 300_000, CacheRead: 15_700_000, Output: 52_000, Dollars: 12.25, Priced: true},
+			"sonnet-5-5": {Input: 100_000, Output: 10_000, Dollars: 2.25, Priced: true},
+		}}},
+		PRs: []runlog.PRCost{
+			{Repo: "org/app", PR: 51, Dollars: 9.2},
+			{Repo: "org/app", PR: 50, Dollars: 1.1},
+			{Repo: "org/app", PR: 50, Worker: "docs", Dollars: 0.9}, // a rework by another worker
+			{Repo: "org/app", PR: 7, Dollars: 99},                   // not merged in the window
+		},
+	}
+	merged := &fakeMerged{pulls: map[int]looks.Pull{
+		51: {Number: 51, Title: "Paginate the audit log", MergedAt: now.Add(-time.Hour)},
+		50: {Number: 50, Title: "Retry the export", MergedAt: now.Add(-5 * time.Hour)},
+		49: {Number: 49, Title: "Merged by hand", MergedAt: now.Add(-6 * time.Hour)},
+	}}
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}, Usage: fakeUsage{byMachine: map[string]runlog.UsageSummary{"box": summary}}}
+	d := c.Digest(context.Background(), withRepo(true), merged, now.Add(-24*time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	for _, want := range []string{
+		"Usage at API rates: $14.50",
+		"box  app  opus-5-5    in 1.2M  write 300k  read 15.7M  out 52k  $12.25",
+		"box  app  sonnet-5-5  in 100k  write 0     read 0      out 10k  $2.25",
+		"by model: opus-5-5 $12.25, sonnet-5-5 $2.25",
+		"Merged pull requests with a cost: 2 of 3, median $5.60",
+		"org/app#51  $9.20  Paginate the audit log",
+		"org/app#50  $2.00  Retry the export",
+		"The reviewer's own calls are not counted.",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("digest lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "$99") {
+		t.Fatalf("a pull request merged outside the window was counted:\n%s", out.String())
+	}
+}
+
+func TestDigestSaysWhichMachineItCouldNotReadUsageFrom(t *testing.T) {
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}, Usage: fakeUsage{err: errors.New("unknown command \"usage\"")}}
+	d := c.Digest(context.Background(), withRepo(true), &fakeMerged{}, now.Add(-time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	if want := "usage: unknown command \"usage\""; !strings.Contains(out.String(), want) {
+		t.Fatalf("digest lacks %q:\n%s", want, out.String())
+	}
+}

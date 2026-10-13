@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
@@ -84,7 +83,7 @@ func issueCost(issue int, checkins []runlog.Checkin, worker string, usage []runl
 			if !inSpan(u.Time, sp) {
 				continue
 			}
-			model := shortModel(u.Model)
+			model := runlog.ShortModel(u.Model)
 			dollars, isPriced := prices.Cost(u.Model, u.Tokens())
 			for _, byModel := range []map[string]runlog.ModelTokens{one, totals} {
 				t := byModel[model]
@@ -239,28 +238,6 @@ func spellCount(n int) string {
 		scale, suffix = 1_000_000, "M"
 	}
 	return strings.TrimSuffix(strconv.FormatFloat(float64(n)/scale, 'f', 1, 64), ".0") + suffix
-}
-
-// shortModel drops the vendor prefix and a trailing date, so
-// claude-sonnet-4-5-20250929 is sonnet-4-5.
-func shortModel(model string) string {
-	model = strings.TrimPrefix(model, "claude-")
-	if i := strings.LastIndex(model, "-"); i > 0 && len(model)-i == 9 && digits(model[i+1:]) {
-		model = model[:i]
-	}
-	return model
-}
-
-func digits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
 }
 
 func costState(dir, worker string) string {
