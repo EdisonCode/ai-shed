@@ -238,3 +238,36 @@ func TestLookThatCouldNotBeDoneIsBlockedUntilTheOwnerClearsIt(t *testing.T) {
 		t.Fatalf("passed = %+v; a blocked look has not passed", report.Passed)
 	}
 }
+
+func TestParsePullTimesReadsEachStepOfEachPullRequest(t *testing.T) {
+	data := `{"data":{"repository":{
+		"p64":{"createdAt":"2026-10-13T04:42:54Z","mergedAt":"2026-10-13T04:44:18Z",
+			"first":{"nodes":[{"commit":{"authoredDate":"2026-10-13T04:36:24Z"}}]},
+			"head":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[
+				{"__typename":"CheckRun","startedAt":"2026-10-13T04:43:05Z","completedAt":"2026-10-13T04:43:50Z"},
+				{"__typename":"StatusContext","createdAt":"2026-10-13T04:44:03Z"},
+				{"__typename":"CheckRun","startedAt":"2026-10-13T04:43:01Z","completedAt":null}]}}}}]},
+			"timelineItems":{"nodes":[]}},
+		"p65":{"createdAt":"2026-10-13T05:00:00Z","mergedAt":"2026-10-13T07:00:00Z",
+			"first":{"nodes":[{"commit":{"authoredDate":"2026-10-13T04:50:00Z"}}]},
+			"head":{"nodes":[{"commit":{"statusCheckRollup":null}}]},
+			"timelineItems":{"nodes":[{"createdAt":"2026-10-13T06:00:00Z"}]}}}}}`
+	times, err := parsePullTimes([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(s string) time.Time { v, _ := time.Parse(time.RFC3339, s); return v }
+	want := map[int]PullTimes{
+		64: {FirstCommit: at("2026-10-13T04:36:24Z"), Ready: at("2026-10-13T04:42:54Z"),
+			ChecksStarted: at("2026-10-13T04:43:01Z"), ChecksDone: at("2026-10-13T04:44:03Z"), Merged: at("2026-10-13T04:44:18Z")},
+		65: {FirstCommit: at("2026-10-13T04:50:00Z"), Ready: at("2026-10-13T06:00:00Z"), Merged: at("2026-10-13T07:00:00Z")},
+	}
+	if len(times) != len(want) {
+		t.Fatalf("times = %+v, want %+v", times, want)
+	}
+	for n, w := range want {
+		if times[n] != w {
+			t.Errorf("#%d = %+v, want %+v", n, times[n], w)
+		}
+	}
+}

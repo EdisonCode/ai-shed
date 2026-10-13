@@ -76,6 +76,21 @@ type Pull struct {
 	Commit string `json:"commit"`
 }
 
+// PullTimes is when each step of a merged pull request happened, as GitHub
+// records it. A zero time is a step GitHub has no record of.
+type PullTimes struct {
+	// FirstCommit is the author date of the pull request's first commit.
+	FirstCommit time.Time `json:"first_commit,omitzero"`
+	// Ready is when the pull request was last marked ready for review, or
+	// opened when it was never a draft.
+	Ready time.Time `json:"ready,omitzero"`
+	// ChecksStarted and ChecksDone span the checks on the merged head. GitHub
+	// keeps no push time; the first check's start is the nearest record.
+	ChecksStarted time.Time `json:"checks_started,omitzero"`
+	ChecksDone    time.Time `json:"checks_done,omitzero"`
+	Merged        time.Time `json:"merged"`
+}
+
 // GitHub is what the reader asks about a repository.
 type GitHub interface {
 	// ClosedSince returns the source's issues that were closed after since.

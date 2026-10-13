@@ -30,7 +30,7 @@ func cmdDigest(args []string) int {
 	}
 	collector := status.Collector{Runner: probe.ShellRunner{}, Lister: backlog.GH{},
 		Looks: &looks.Reader{GitHub: looks.GH{}, Run: looks.Shell, Now: time.Now},
-		Usage: remoteUsage{Runner: probe.ShellRunner{}, Now: time.Now}}
+		Usage: remoteUsage{Runner: probe.ShellRunner{}, Now: time.Now}, Times: looks.GH{}}
 	now := time.Now()
 	d := collector.Digest(context.Background(), cfg, looks.GH{}, now.Add(-*since), now)
 	if *asJSON {
