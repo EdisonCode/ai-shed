@@ -39,6 +39,9 @@ type PreflightResult struct {
 	// Exited is set when the command ended and left a shell.
 	Exited bool   `json:"exited,omitempty"`
 	Screen string `json:"screen,omitempty"`
+	// Warnings name what works but is set up short, such as a missing hook.
+	// They do not make a worker not ready.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Preflight starts the worker's command in a throwaway window, waits for the
@@ -142,6 +145,14 @@ type Asker interface {
 // the reviewer; when the reviewer cannot be asked, the worker is not ready
 // and the screen is shown so a person can read it.
 func Classify(ctx context.Context, reviewer Asker, r PreflightResult) (line string, ready bool) {
+	line, ready = classify(ctx, reviewer, r)
+	for _, w := range r.Warnings {
+		line += "\n    note: " + w
+	}
+	return line, ready
+}
+
+func classify(ctx context.Context, reviewer Asker, r PreflightResult) (line string, ready bool) {
 	switch {
 	case r.State == PreflightRunning:
 		return r.Worker + ": already running", true

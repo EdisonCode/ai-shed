@@ -723,6 +723,11 @@ those tokens are left out:
 
 `shed mark usage` records tokens and does not change the worker's state, so
 it can run while the parent turn is still going.
+`shed preflight`, and so `shed deploy`, reads the Claude Code settings each
+worker's session loads (`~/.claude/settings.json` and the worker directory's
+`.claude/settings.json` and `settings.local.json`). When the state hooks are
+set and this one is not, the worker's line carries
+`note: cost comments leave out sub-agents`.
 
 ### Settings
 
