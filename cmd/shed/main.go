@@ -40,6 +40,7 @@ Usage:
   shed preflight [-machine name]    on a machine: check that each worker's command comes up ready
   shed agent [-machine name]        on a machine: supervise its workers and run its tasks
   shed usage [-since 168h] [-json]  on a machine: what its workers spent, at API rates
+  shed promote <owner/repo>         what a production deploy would carry, for one approval: go or no-go
   shed context [-contradictions] <machine> <worker>
                                     what a worker loads before its first item: tokens, rules said twice, stale references
   shed mark working|idle|waiting|usage
@@ -93,6 +94,8 @@ func main() {
 		code = cmdBump(args)
 	case "login":
 		code = cmdLogin(args)
+	case "promote":
+		code = cmdPromote(args)
 	case "context":
 		code = cmdContext(args)
 	case "usage":

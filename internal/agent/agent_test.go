@@ -174,3 +174,21 @@ func TestNotifyReportsACommandThatFails(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// Every way the supervisor reaches the world must be wired: a nil one turns
+// a feature off without a word.
+func TestTheSupervisorIsGivenEverythingItCanUse(t *testing.T) {
+	cfg := &config.Config{Supervisor: config.Supervisor{}}
+	m := config.Machine{Name: "box", Host: config.LocalHost}
+	sup := Agent{StateDir: t.TempDir(), Logf: t.Logf}.supervisor(cfg, m)
+	for name, missing := range map[string]bool{
+		"Terminal": sup.Terminal == nil, "Shells": sup.Shells == nil, "Diffs": sup.Diffs == nil,
+		"RunDeploy": sup.RunDeploy == nil, "Reviewer": sup.Reviewer == nil, "Lister": sup.Lister == nil,
+		"Claimer": sup.Claimer == nil, "Releaser": sup.Releaser == nil, "Merger": sup.Merger == nil,
+		"Cost": sup.Cost == nil, "Looks": sup.Looks == nil,
+	} {
+		if missing {
+			t.Errorf("the agent's supervisor has no %s", name)
+		}
+	}
+}

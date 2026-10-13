@@ -477,6 +477,58 @@ supervisor:
   It is the evidence for the tiers: widen `low` (fewer `areas`, a larger
   `high_lines`) while its passes do not escape, and tighten it when they do.
 
+### Approval at promotion
+
+Off unless you turn it on. With verification you read every high-risk pull
+request and every low-risk one a verifier already passed. Where the escape
+rate of `low` has stayed near zero for a while, the merge of a low-risk pull
+request can stop being yours, and the promotion to production stays yours:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    verify:
+      merge_low: true
+      merge_method: squash      # where the repository has no merge queue; the default is merge
+```
+
+- **What is queued.** A pull request a verifier passed at low risk, with
+  its checks green, that is not a draft, and whose issue asks nothing else
+  of you. The machine whose worker built it turns on GitHub's auto-merge:
+  the pull request goes into the merge queue, or merges by itself once its
+  required checks pass. It comments `Queued for merge by shed:` on the
+  issue with the verifier's words. A high-risk pull request waits for you,
+  as before.
+- **It leaves your list.** A pull request on its way to the merge is not in
+  `waits on you`. It reaches staging, and the eye checks run there as
+  before.
+- **The promotion is the batch you approve.**
+
+  ```sh
+  shed promote my-org/my-app
+  ```
+
+  ```
+  my-org/my-app: 6 pull request(s) merged since production (production 9b1e0d4, 2d ago; staging 3f2a1c9)
+  No go yet: see below.
+
+  Queued by shed on the verifier's word, low risk: 4
+    #131  #123  on staging  low  Retry the export when the API times out
+                                 verified: ran the export tests, tried an empty file
+    ...
+  Merged by you: 2
+    #138  #125  NOT ON STAGING  high  Paginate the audit log
+
+  Looks on staging: 1 not done, 0 failed or blocked
+  ```
+
+  It is read-only and exits 1 while something should stop a deploy:
+  merged work that staging does not serve, a look not done, failed or
+  blocked. The deploy to production is still yours.
+- **When it is safe.** Start with a narrow `low`: many `areas`, a small
+  `high_lines`. Widen it only while the digest's escape rate for `low`
+  stays near zero, and turn `merge_low` off when a low pass escapes.
+
 ### Eye checks on staging
 
 A worker tests what it builds, and some work still needs someone to look at

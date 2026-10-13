@@ -42,6 +42,18 @@ wrong, and neither may be able to do damage by being wrong.**
 3. Push a commit that fails lint from the worker machine. The pre-push hook must stop it.
 4. Confirm the worker machine has no production credentials.
 
+## When the merge stops being yours
+
+`repos[].verify.merge_low` moves your approval of a low-risk pull request
+from the merge to the promotion: a pull request a verifier passed at low
+risk, with green checks, is queued for merge by shed, and you approve what
+reaches production with `shed promote`. The guardrails above still hold:
+the merge queue runs the full suite on what lands, staging gets its eye
+checks, and production needs your sign-off. Turn it on only after the
+digest has shown the escape rate of `low` near zero for some weeks, and
+give the worker machines a GitHub login that may enable auto-merge and
+nothing more.
+
 ## A merge queue
 
 Per-pull-request CI tests a branch against the main branch as it was when
