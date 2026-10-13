@@ -295,6 +295,9 @@ type Supervisor struct {
 	// same label of that prefix touch the same code: one is held while a
 	// worker has the other in hand, as for issues whose Paths overlap.
 	OverlapLabels string `yaml:"overlap_labels"`
+	// ContextBudget is how many tokens a worker's tool may load before its
+	// first item; above it, shed status says so. 0 for no budget.
+	ContextBudget int `yaml:"context_budget"`
 }
 
 // NoWorkAfterOrZero is how long a worker may have no work before the owner

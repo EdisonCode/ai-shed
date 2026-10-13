@@ -1238,3 +1238,19 @@ func TestDigestListsTheLessonsToPromoteOncePerLesson(t *testing.T) {
 		t.Fatalf("a settled lesson is listed:\n%s", out.String())
 	}
 }
+
+func TestStatusGivesEachWorkersContextAndSaysWhenOneIsOverBudget(t *testing.T) {
+	res := healthy()
+	res.Context = map[string]int{"app": 31000, "docs": 9000}
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}, {Name: "docs", Dir: "/tmp", Brief: "b"}}}
+	r := Assess(m, signals, now, res, nil)
+	AssessContext(&r, m, *res, 20000)
+	wantAttention(t, r, "worker app loads about 31k tokens before its first item, over the context_budget of 20k: shed context box app")
+	r.Workers[0].Last = &runlog.Checkin{Time: now, Verdict: runlog.VerdictOnTrack}
+	r.Workers[1].Last = &runlog.Checkin{Time: now, Verdict: runlog.VerdictOnTrack}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	if !strings.Contains(out.String(), "context  app 31k, docs 9k tokens before the first item") {
+		t.Fatalf("status:\n%s", out.String())
+	}
+}

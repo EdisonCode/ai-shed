@@ -23,6 +23,7 @@ import (
 	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/pricing"
 	"github.com/edisoncode/ai-shed/internal/runlog"
+	"github.com/edisoncode/ai-shed/internal/sources"
 )
 
 const (
@@ -623,6 +624,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 		return err
 	}
 	st.briefChecked = true
+	s.recordContext(w)
 	s.returnTask(w, st)
 	kind := KindRestart
 	if !windowExists {
@@ -2052,4 +2054,20 @@ func envPrefix(env map[string]string) string {
 		b.WriteString(name + "=" + shellQuote(env[name]) + " ")
 	}
 	return b.String()
+}
+
+// recordContext writes how many tokens the worker's tool loads before its
+// first item, for shed status. A failure costs only the number.
+func (s *Supervisor) recordContext(w config.Worker) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	total := 0
+	for _, src := range sources.Collect(expandHome(w.Dir), home) {
+		total += src.Tokens
+	}
+	if err := runlog.WriteContext(s.StateDir, w.Name, total); err != nil {
+		s.Logf("worker %s: %v", w.Name, err)
+	}
 }
