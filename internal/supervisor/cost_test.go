@@ -139,9 +139,18 @@ func TestCostCommentGivesTheRatioOfCacheReadsToOutput(t *testing.T) {
 }
 
 type fakeCost struct {
-	repos  []string
-	prs    []int
-	bodies []string
+	repos   []string
+	prs     []int
+	bodies  []string
+	markers []string
+}
+
+func (f *fakeCost) PostMarked(_ context.Context, repo string, number int, marker, body string) error {
+	f.repos = append(f.repos, repo)
+	f.prs = append(f.prs, number)
+	f.bodies = append(f.bodies, body)
+	f.markers = append(f.markers, marker)
+	return nil
 }
 
 func (f *fakeCost) PostCost(_ context.Context, repo string, pr int, body string) error {

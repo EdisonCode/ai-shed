@@ -428,3 +428,106 @@ func writeCostBodies(dir, worker string, bodies map[string]string) error {
 	}
 	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
+
+// taskCostHeading starts the cost a task's report is given.
+const taskCostHeading = "## Cost (from shed)"
+
+// postItemCost gives the work the worker just finished its cost, where no
+// pull request carries it: on the issue, for an eye check, a verification
+// or a pass with no pull request, and in the report, for a one-off task.
+// The comment on an issue carries the worker's own marker, so a builder's
+// cost and a looker's on one issue stand side by side.
+func (s *Supervisor) postItemCost(ctx context.Context, w config.Worker, st *workerState, queue []QueueItem) {
+	if s.Cost == nil || (st.issue == 0 && st.task == "") {
+		return
+	}
+	if item, ok := find(queue, st.issue); st.task == "" && ok && item.PR != 0 && !st.look && !st.verify {
+		return // its pull request has the cost comment
+	}
+	if err := runlog.RefreshUsage(s.StateDir, w.Name); err != nil {
+		s.Logf("worker %s: usage: %v", w.Name, err)
+	}
+	usage, err := runlog.ReadUsage(s.StateDir, w.Name)
+	if err != nil {
+		s.Logf("worker %s: usage: %v", w.Name, err)
+		return
+	}
+	checkins, err := runlog.ReadCheckins(s.StateDir)
+	if err != nil {
+		s.Logf("worker %s: usage: %v", w.Name, err)
+		return
+	}
+	if st.task != "" {
+		s.writeTaskCost(w, st.task, checkins, usage)
+		return
+	}
+	if st.repo == "" {
+		return
+	}
+	body, ok := formatCost(st.issue, checkins, w.Name, usage, s.Prices)
+	if !ok {
+		return
+	}
+	marker := fmt.Sprintf("<!-- shed-cost %s -->", w.Name)
+	body = strings.Replace(body, backlog.CostMarker, marker, 1)
+	key := fmt.Sprintf("%s#%d issue", st.repo, st.issue)
+	if s.costPosted(w.Name, key) == body {
+		return
+	}
+	if err := s.Cost.PostMarked(ctx, st.repo, st.issue, marker, body); err != nil {
+		s.Logf("worker %s: cost of %s: %v", w.Name, key, err)
+		return
+	}
+	if err := s.rememberCost(w.Name, key, body); err != nil {
+		s.Logf("worker %s: cost of %s: %v", w.Name, key, err)
+	}
+}
+
+// writeTaskCost adds the tokens the worker spent on a one-off task to the
+// end of its report, once.
+func (s *Supervisor) writeTaskCost(w config.Worker, task string, checkins []runlog.Checkin, usage []runlog.Usage) {
+	path := filepath.Join(expandHome(w.Dir), TaskDir, task+taskReport)
+	report, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(report), taskCostHeading) {
+		return
+	}
+	var start time.Time
+	for _, c := range checkins {
+		if c.Worker == w.Name && c.Sent && c.Task == task {
+			start = c.Time
+		}
+	}
+	if start.IsZero() {
+		return
+	}
+	byModel := map[string]runlog.ModelTokens{}
+	for _, u := range usage {
+		if u.Time.Before(start) {
+			continue
+		}
+		model := runlog.ShortModel(u.Model)
+		t := byModel[model]
+		t.Add(u)
+		dollars, ok := s.Prices.Cost(u.Model, u.Tokens())
+		t.Dollars, t.Priced = t.Dollars+dollars, ok
+		byModel[model] = t
+	}
+	lines := tokenLines("", byModel, s.Prices != nil)
+	if len(lines) == 0 {
+		return
+	}
+	block := fmt.Sprintf("\n%s\n\n%s\n", taskCostHeading, strings.Join(lines, "\n"))
+	if s.Prices != nil {
+		dollars, _ := priced(byModel)
+		block += fmt.Sprintf("\nAt API rates: %s.\n", spellDollars(dollars))
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		s.Logf("worker %s: cost of task %s: %v", w.Name, task, err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(block); err != nil {
+		s.Logf("worker %s: cost of task %s: %v", w.Name, task, err)
+	}
+}
