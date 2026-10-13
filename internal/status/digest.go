@@ -129,6 +129,9 @@ func RenderDigest(w io.Writer, d Digest) {
 			}
 		}
 		fmt.Fprintf(w, "  %d passed in this window; now %s, %d failed\n", passed, r.notDone(), r.count(looks.Failed))
+		if r.Unchecked != "" {
+			fmt.Fprintf(w, "  ! cannot tell which merged work staging serves: %s\n", r.Unchecked)
+		}
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		for _, l := range r.Passed {
 			if l.Since.After(d.Since) {

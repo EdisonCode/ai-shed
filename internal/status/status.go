@@ -174,14 +174,17 @@ type RepoReport struct {
 func (c Collector) CollectRepos(ctx context.Context, cfg *config.Config) []RepoReport {
 	reports := make([]RepoReport, len(cfg.Repos))
 	for i, repo := range cfg.Repos {
-		ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 		reports[i] = c.collectRepo(ctx, cfg, repo)
-		cancel()
 	}
 	return reports
 }
 
-func (c Collector) collectRepo(ctx context.Context, cfg *config.Config, repo config.Repo) RepoReport {
+// collectRepo lists the repository's issues and then reads its release
+// state, each on its own deadline: a long backlog to list does not leave
+// the release state without time.
+func (c Collector) collectRepo(parent context.Context, cfg *config.Config, repo config.Repo) RepoReport {
+	ctx, cancel := context.WithTimeout(parent, probeTimeout)
+	defer cancel()
 	report := RepoReport{Report: looks.Report{Repo: repo.Name}, Now: time.Now()}
 	var sources []config.IssueSource
 	var open []backlog.Issue
@@ -206,7 +209,9 @@ func (c Collector) collectRepo(ctx context.Context, cfg *config.Config, repo con
 			open = append(open, issues...)
 		}
 	}
-	read, err := c.Looks.Read(ctx, repo, sources, open, cfg.Signals)
+	lookCtx, cancelLooks := context.WithTimeout(parent, probeTimeout)
+	defer cancelLooks()
+	read, err := c.Looks.Read(lookCtx, repo, sources, open, cfg.Signals)
 	if err != nil {
 		report.Error = err.Error()
 		return report
@@ -221,6 +226,9 @@ func (r RepoReport) Attention() []string {
 		return []string{"cannot read the release state: " + r.Error}
 	}
 	var attention []string
+	if r.Unchecked != "" {
+		attention = append(attention, "cannot tell which merged work staging serves, so none is counted as on staging: "+r.Unchecked)
+	}
 	if due := r.count(looks.Due); due > 0 && r.Lookers == 0 {
 		attention = append(attention, fmt.Sprintf("%d eye check(s) are due on staging and no worker does eye checks: they are yours", due))
 	}

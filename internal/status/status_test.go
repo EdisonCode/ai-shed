@@ -462,6 +462,25 @@ func TestReleaseStateThatCannotBeReadNeedsOwner(t *testing.T) {
 	}
 }
 
+func TestStagingThatCannotBeAskedStillGivesTheEyeChecks(t *testing.T) {
+	state := releaseState()
+	state.Unchecked = "gh api repos/org/app/compare/a...b: timed out at shed's deadline after 45s"
+	repos := []RepoReport{{Report: state, Lookers: 1, Now: now}}
+	var out bytes.Buffer
+	Render(&out, nil, repos)
+	for _, want := range []string{
+		"eye checks: 2 not done (1 on staging, 1 wait for a staging deploy), 1 failed",
+		"! cannot tell which merged work staging serves, so none is counted as on staging: gh api repos/org/app/compare/a...b: timed out",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if !NeedsOwner(nil, repos) {
+		t.Fatal("a release state read in part does not need the owner")
+	}
+}
+
 func TestJSONReportCarriesTheMachinesAndTheReleaseState(t *testing.T) {
 	report := Report{
 		Machines: []MachineReport{Assess(config.Machine{Name: "box"}, signals, now, healthy(), nil)},
@@ -642,6 +661,18 @@ func TestDigestSaysWhatItCouldNotRead(t *testing.T) {
 	RenderDigest(&out, d)
 	if !strings.Contains(out.String(), "! gh: not logged in") || !strings.Contains(out.String(), "Merged: 0 pull request(s)") {
 		t.Fatalf("digest:\n%s", out.String())
+	}
+}
+
+func TestDigestSaysWhenStagingCouldNotBeAsked(t *testing.T) {
+	state := releaseState()
+	state.Unchecked = "gh api compare: timed out at shed's deadline after 45s"
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{report: state}}
+	d := c.Digest(context.Background(), withRepo(true), &fakeMerged{}, now.Add(-time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	if want := "! cannot tell which merged work staging serves: gh api compare: timed out"; !strings.Contains(out.String(), want) {
+		t.Fatalf("digest lacks %q:\n%s", want, out.String())
 	}
 }
 

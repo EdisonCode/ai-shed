@@ -758,6 +758,7 @@ and the two typed commands to what that tool understands.
 | task missed its run | a scheduled time passed with no run |
 | issue waits on you | a comment asks for a decision, a look or a review, and nothing answers it |
 | cannot read the release state | a `repos` commit command failed or did not print a commit, or GitHub could not be asked |
+| cannot tell which merged work staging serves | GitHub could not say whether staging has a merge commit; the counts stand, but a look that is due shows as waiting for staging |
 | eye checks are due on staging | merged work is on staging, owes a look, and no worker has `eye_checks` |
 | the eye check is blocked | a worker could not do it and said why; clear the cause and comment `Eyes unblocked`, or look yourself |
 | issues queued and no worker is running | there is a backlog and nobody is on it |

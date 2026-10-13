@@ -182,6 +182,9 @@ Run `shed status` and read the repository's release state at the end. It is a
 go only when `eye checks:` shows none not done and none failed. Tell the owner
 the three numbers (merged since production, not done, failed) and what each
 outstanding look waits for. The deploy itself is the owner's call.
+A `cannot tell which merged work staging serves` line leaves the not done and
+failed counts right; only the split between on staging and waiting for a
+deploy is unknown.
 
 ## Reading the supervised lines
 
