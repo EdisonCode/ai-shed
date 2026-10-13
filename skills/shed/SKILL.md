@@ -228,9 +228,12 @@ Run this as a checklist and report each line.
 ## Pick up the results
 
 1. `shed status`. Exit code 1 means something needs the owner. The last line,
-   `Waiting on you: ...`, totals the owner's own backlog by kind with the age
-   of the oldest; each `waits on you` line has its own age. Start with the
-   oldest: idle workers usually wait behind it.
+   `Waiting on you: ...`, totals the owner's own backlog by what answering
+   does, with the age of the oldest: returns to a worker, to read, to merge,
+   in its grace period. The `waits on you` lines come in that order, oldest
+   first inside each. Start with the returns, `which is idle` first: a
+   worker waits behind each of them. A review waits for nobody but the
+   owner, and verified low-risk merges are one sitting at the end.
 2. For each `!` line, give the owner the fact and your recommendation:
    - `issue waits on you (decision)`: read the worker's comment
      (`gh issue view <n> --repo <r> --comments`), put the question to the

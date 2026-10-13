@@ -21,17 +21,28 @@ linux-box  me@linux-box  load 0.52/8  disk 42%  agent ok
   tasks
     nightly-deps  0 3 * * *  ok  9h ago, took 41s
   ! check failed: docker (Cannot connect to the Docker daemon)
+  ! my-org/my-app#124 waits on you (decision 2h; returns to app, which is idle): Drop the legacy column
   ! my-org/my-app#123 waits on you (review #131 5h): Retry the export when the API times out
-  ! my-org/my-app#124 waits on you (decision 2h): Drop the legacy column
 
 mac-mini  me@mac-mini  UNREACHABLE
   ! unreachable: me@mac-mini: exit status 255: Operation timed out
 
 4 item(s) need you.
-Waiting on you: 1 review (oldest 5h), 1 decision (oldest 2h).
+Waiting on you: 1 return to a worker (oldest 2h), 1 to read (oldest 5h).
 ```
 
 The exit code is 1 when anything needs you, so a script or a notifier can act on it.
+
+What waits on you is in the order to answer it, oldest first inside each group:
+
+- **returns**: answering hands the issue back to a worker, ahead of new
+  work. A decision whose grace period is over, an issue that was not ready,
+  each named with the worker it goes to, and `which is idle` when that
+  worker has nothing else.
+- **to read**: a review, a page to look at. The worker has moved on.
+- **to merge**: reviews a verifier passed at low risk with green checks,
+  in one line. Merging is still yours; the tier is an order, not an approval.
+- **in its grace period**: a decision the worker still goes on beside.
 
 ## How it works
 
@@ -1532,8 +1543,10 @@ Eye checks: my-org/my-app
 Idle worker-hours: no work 6.5h, tool error 0.3h, waits on you 2.0h
 
 Waiting on you: 2
-  30h  decision     my-org/my-app#124  Drop the legacy column
-  2h   review #141  my-org/my-app#130  Split the importer
+  returns to a worker when you answer
+    30h  decision  my-org/my-app#124  Drop the legacy column
+  to read
+    2h  review #141  my-org/my-app#130  Split the importer
 
 Also needs you: 1
   ! mac-mini: unreachable: me@mac-mini: exit status 255: Operation timed out

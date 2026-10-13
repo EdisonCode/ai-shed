@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/probe"
 	"github.com/edisoncode/ai-shed/internal/runlog"
@@ -164,39 +165,53 @@ func waitingTotals(reports []MachineReport) string {
 		count  int
 		oldest time.Duration
 	}
-	var kinds []string
 	totals := map[string]*total{}
 	counted := map[string]bool{}
 	for _, r := range reports {
 		for _, i := range r.Issues {
-			for _, a := range i.Asks {
-				key := fmt.Sprintf("%s#%d %s", i.Repo, i.Number, a.Name)
-				if counted[key] {
-					continue
-				}
-				counted[key] = true
-				t := totals[a.Name]
-				if t == nil {
-					t = &total{}
-					totals[a.Name] = t
-					kinds = append(kinds, a.Name)
-				}
-				t.count++
-				if !a.Since.IsZero() {
-					t.oldest = max(t.oldest, r.Now.Sub(a.Since))
-				}
+			if len(i.Asks) == 0 {
+				continue
+			}
+			key := fmt.Sprintf("%s#%d", i.Repo, i.Number)
+			if counted[key] {
+				continue
+			}
+			counted[key] = true
+			effect := effectOf(i.Asks)
+			t := totals[effect]
+			if t == nil {
+				t = &total{}
+				totals[effect] = t
+			}
+			t.count++
+			if at := oldestAsk(i.Asks); !at.IsZero() {
+				t.oldest = max(t.oldest, r.Now.Sub(at))
 			}
 		}
 	}
-	if len(kinds) == 0 {
-		return ""
-	}
-	words := make([]string, len(kinds))
-	for n, kind := range kinds {
-		words[n] = fmt.Sprintf("%d %s", totals[kind].count, kind)
-		if totals[kind].oldest > 0 {
-			words[n] += fmt.Sprintf(" (oldest %s)", Short(totals[kind].oldest))
+	var words []string
+	for _, g := range []struct{ effect, word string }{
+		{backlog.EffectReturns, "return to a worker"},
+		{backlog.EffectRead, "to read"},
+		{"", "to read"},
+		{backlog.EffectMerge, "to merge"},
+		{backlog.EffectGrace, "in its grace period"},
+	} {
+		t := totals[g.effect]
+		if t == nil {
+			continue
 		}
+		if g.effect == "" && totals[backlog.EffectRead] != nil {
+			continue
+		}
+		word := fmt.Sprintf("%d %s", t.count, g.word)
+		if t.oldest > 0 {
+			word += fmt.Sprintf(" (oldest %s)", Short(t.oldest))
+		}
+		words = append(words, word)
+	}
+	if len(words) == 0 {
+		return ""
 	}
 	return "Waiting on you: " + strings.Join(words, ", ") + "."
 }

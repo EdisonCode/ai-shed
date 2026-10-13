@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/runlog"
@@ -108,9 +109,10 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 
 // waitingItem is one thing an issue asks of the owner.
 type waitingItem struct {
-	issue IssueStatus
-	what  string
-	since time.Time
+	issue  IssueStatus
+	what   string
+	since  time.Time
+	effect string
 }
 
 // RenderDigest writes the digest for a terminal or a message.
@@ -188,23 +190,48 @@ func RenderDigest(w io.Writer, d Digest) {
 					continue
 				}
 				seen[key] = true
-				waiting = append(waiting, waitingItem{issue: i, what: a.What(), since: a.Since})
+				waiting = append(waiting, waitingItem{issue: i, what: a.What(), since: a.Since, effect: a.Effect})
 			}
 		}
 	}
-	slices.SortStableFunc(waiting, func(a, b waitingItem) int { return a.since.Compare(b.since) })
+	// In the order to answer them: what returns to a worker, what is to be
+	// read, the merges, then decisions the worker still has time on.
+	slices.SortStableFunc(waiting, func(a, b waitingItem) int {
+		if d := effectOrder[a.effect] - effectOrder[b.effect]; d != 0 {
+			return d
+		}
+		return a.since.Compare(b.since)
+	})
 	renderLessons(w, d)
 
 	fmt.Fprintf(w, "\nWaiting on you: %d\n", len(waiting))
-	tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	for _, item := range waiting {
-		age := "-"
-		if !item.since.IsZero() {
-			age = Short(d.Now.Sub(item.since))
-		}
-		fmt.Fprintf(tw, "  %s\t%s\t%s#%d\t%s\n", age, item.what, item.issue.Repo, item.issue.Number, item.issue.Title)
+	groups := []struct{ effect, title string }{
+		{backlog.EffectReturns, "returns to a worker when you answer"},
+		{backlog.EffectRead, "to read"},
+		{backlog.EffectMerge, "to merge: verified at low risk, checks green"},
+		{backlog.EffectGrace, "in its grace period: the worker goes on with the rest"},
 	}
-	tw.Flush()
+	for _, g := range groups {
+		var items []waitingItem
+		for _, item := range waiting {
+			if item.effect == g.effect || (g.effect == backlog.EffectRead && item.effect == "") {
+				items = append(items, item)
+			}
+		}
+		if len(items) == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "  %s\n", g.title)
+		tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		for _, item := range items {
+			age := "-"
+			if !item.since.IsZero() {
+				age = Short(d.Now.Sub(item.since))
+			}
+			fmt.Fprintf(tw, "    %s\t%s\t%s#%d\t%s\n", age, item.what, item.issue.Repo, item.issue.Number, item.issue.Title)
+		}
+		tw.Flush()
+	}
 
 	// What the workers chose by themselves. It asks nothing of the owner,
 	// who may overrule a choice with a ruling on the issue.
