@@ -722,7 +722,7 @@ A model with no rate shows `no published rate` and is left out of the total.
 The numbers are read from the session transcript the tool's hooks point at.
 They are not the worker's own estimate. A few calls the tool keeps only in
 memory are missing, and the comment says so. The reviewer's own calls are
-not included.
+not included: the digest counts them on a line of their own.
 
 `shed mark` records the transcript whenever the hook passes one, and shed
 reads it again when it posts, so a turn that was still being written is
@@ -738,6 +738,12 @@ those tokens are left out:
 
 `shed mark usage` records tokens and does not change the worker's state, so
 it can run while the parent turn is still going.
+It reads the sub-agent's own transcript, which the hook names, and tags each
+of its calls with the sub-agent's type. The comment then splits the cost:
+`By agent: worker session $2.00 (opus-5-5); implementer $2.00 (opus-5-5,
+sonnet-5-5); Explore $0.50 (haiku-5-5)`, so you can see whether the work ran
+on the model its label named. When the worker started sub-agents and none of
+their tokens were recorded, the comment says the count is partial.
 `shed preflight`, and so `shed deploy`, reads the Claude Code settings each
 worker's session loads (`~/.claude/settings.json` and the worker directory's
 `.claude/settings.json` and `settings.local.json`). When the state hooks are
@@ -748,7 +754,7 @@ set and this one is not, the worker's line carries
 
 ```yaml
 supervisor:
-  command: claude -p --model sonnet   # the reviewer: prompt on stdin, answer on stdout
+  command: claude -p --model sonnet --output-format json   # the reviewer: prompt on stdin, answer on stdout
   cache_ttl: 5m
   scope_every: 30m
   when_cold: clear                    # or: resume
@@ -796,6 +802,11 @@ line that counts them: a manual session, or one left from another workflow.
 It is not something shed asks of you, but it spends the same account limit
 and CPU as the workers. An agent tool is any tool the machine's workers run,
 or a process titled with a version number, as Claude Code titles its own.
+
+`shed tidy -sessions <machine>` lists those sessions with how long each has
+been idle. With `-apply` it closes the ones idle longer than `-idle` (three
+days by default), each by its exact session and window name. Nothing else on
+the machine is touched.
 
 ### Waiting on you: comment signals
 
@@ -1155,10 +1166,16 @@ Usage at API rates: $41.80 (a subscription does not pay this price; it weighs th
 Merged pull requests with a cost: 6 of 7, median $3.10
   my-org/my-app#140  $9.20  Show the total on the order page
   ...
-  The reviewer's own calls are not counted.
+  mac-mini  (reviewer)  sonnet-5-5  in 3.1M  write 1.2M  read 22M  out 190k  $9.90
 
 Idle at a usage limit: mac-mini 40.1h
 ```
+
+The reviewer's calls have a line of their own, `(reviewer)`, when its
+command prints Claude Code's JSON result (`--output-format json`, the
+default): shed takes the answer from it and records the tokens of each
+model. A command that prints plain text still works; the digest then says
+the reviewer's calls are not counted.
 
 The dollars are the published API rates, as on the cost comments: the
 weights that make tokens of different kinds and models comparable. A merged

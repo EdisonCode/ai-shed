@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,6 +99,80 @@ func issueCost(issue int, checkins []runlog.Checkin, worker string, usage []runl
 	return totals, passes
 }
 
+// agentCost is what one kind of agent spent on an issue: the worker's own
+// session (Agent ""), or one type of sub-agent.
+type agentCost struct {
+	agent   string
+	dollars float64
+	models  []string
+}
+
+// agentSplit totals the issue's calls by agent, the worker session first
+// and then the costliest, and counts the sub-agents the worker started and
+// the calls recorded from sub-agents.
+func agentSplit(issue int, checkins []runlog.Checkin, worker string, usage []runlog.Usage, prices pricing.Table) (agents []agentCost, dispatches, subCalls int) {
+	byAgent := map[string]*agentCost{}
+	for _, sp := range issueSpans(checkins, worker) {
+		if sp.issue != issue {
+			continue
+		}
+		for _, u := range usage {
+			if !inSpan(u.Time, sp) {
+				continue
+			}
+			dispatches += u.Dispatches
+			if u.Agent != "" {
+				subCalls++
+			}
+			a := byAgent[u.Agent]
+			if a == nil {
+				a = &agentCost{agent: u.Agent}
+				byAgent[u.Agent] = a
+			}
+			dollars, _ := prices.Cost(u.Model, u.Tokens())
+			a.dollars += dollars
+			if model := runlog.ShortModel(u.Model); !slices.Contains(a.models, model) {
+				a.models = append(a.models, model)
+			}
+		}
+	}
+	for _, a := range byAgent {
+		sort.Strings(a.models)
+		agents = append(agents, *a)
+	}
+	sort.SliceStable(agents, func(i, j int) bool {
+		if (agents[i].agent == "") != (agents[j].agent == "") {
+			return agents[i].agent == ""
+		}
+		if agents[i].dollars != agents[j].dollars {
+			return agents[i].dollars > agents[j].dollars
+		}
+		return agents[i].agent < agents[j].agent
+	})
+	return agents, dispatches, subCalls
+}
+
+// agentWords is the comment's line that splits the cost by agent, as in
+// "By agent: worker session $2.00 (opus-5-5); Explore $0.50 (haiku-5-5)".
+// "" when only the worker's session made calls.
+func agentWords(agents []agentCost, withPrices bool) string {
+	if len(agents) < 2 {
+		return ""
+	}
+	parts := make([]string, len(agents))
+	for i, a := range agents {
+		name := a.agent
+		if name == "" {
+			name = "worker session"
+		}
+		if withPrices {
+			name += " " + spellDollars(a.dollars)
+		}
+		parts[i] = fmt.Sprintf("%s (%s)", name, strings.Join(a.models, ", "))
+	}
+	return "By agent: " + strings.Join(parts, "; ")
+}
+
 // priced sums the dollars of the models that have a price, and names the
 // ones that have none.
 func priced(byModel map[string]runlog.ModelTokens) (dollars float64, unpriced []string) {
@@ -134,6 +209,13 @@ func formatCost(issue int, checkins []runlog.Checkin, worker string, usage []run
 			fmt.Fprintf(&b, ", leaving out %s", strings.Join(unpriced, ", "))
 		}
 		b.WriteString(". A subscription does not pay this price; it weighs the kinds of token as the published rates do.\n")
+	}
+	agents, dispatches, subCalls := agentSplit(issue, checkins, worker, usage, prices)
+	if words := agentWords(agents, withPrices); words != "" {
+		fmt.Fprintf(&b, "\n%s\n", words)
+	}
+	if dispatches > 0 && subCalls == 0 {
+		fmt.Fprintf(&b, "\n%d sub-agent(s) ran and none of their tokens were recorded: this count is partial. The worker's tool needs the SubagentStop hook that runs `shed mark usage`.\n", dispatches)
 	}
 	fmt.Fprintf(&b, "\n%s\n", costNote)
 	return b.String(), true

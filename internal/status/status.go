@@ -371,7 +371,7 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		assessTasks(m, *res, agentUp, &report, attend)
 		assessWorkers(m, *res, &report, attend)
 		assessOneOff(*res, &report)
-		report.Unsupervised = unsupervised(m, res.Windows)
+		report.Unsupervised = Unsupervised(m, res.Windows)
 	}
 
 	queued, working := 0, 0
@@ -608,11 +608,11 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 // Code sets its own.
 var versionRE = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
-// unsupervised lists the windows on a machine with supervised workers that
+// Unsupervised lists the windows on a machine with supervised workers that
 // run an agent tool and are not a worker's own: a manual session, or one
 // left from another workflow. An agent tool is one the fleet's workers run,
 // or a process titled with a version number.
-func unsupervised(m config.Machine, windows []probe.Window) []string {
+func Unsupervised(m config.Machine, windows []probe.Window) []string {
 	if len(m.Workers) == 0 {
 		return nil
 	}

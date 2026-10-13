@@ -9,7 +9,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/probe"
+	"github.com/edisoncode/ai-shed/internal/status"
 	"github.com/edisoncode/ai-shed/internal/tidy"
 )
 
@@ -22,16 +24,21 @@ const tidyTimeout = 10 * time.Minute
 func cmdTidy(args []string) int {
 	fs := flag.NewFlagSet("tidy", flag.ContinueOnError)
 	apply := fs.Bool("apply", false, "remove what is listed; without it tidy only lists")
+	sessions := fs.Bool("sessions", false, "tidy the agent sessions shed does not supervise, not the clones")
+	idle := fs.Duration("idle", 72*time.Hour, "with -sessions: close those idle longer than this")
 	cfg, path, err := loadConfig(fs, args)
 	if err != nil {
 		return fail(err)
 	}
 	if fs.NArg() != 1 {
-		return fail(fmt.Errorf("usage: shed tidy [-apply] <machine>"))
+		return fail(fmt.Errorf("usage: shed tidy [-apply] [-sessions [-idle 72h]] <machine>"))
 	}
 	m, ok := cfg.Machine(fs.Arg(0))
 	if !ok {
 		return fail(fmt.Errorf("machine %q is not in %s", fs.Arg(0), path))
+	}
+	if *sessions {
+		return tidySessions(cfg, m, *apply, *idle)
 	}
 	if len(m.Workers) == 0 {
 		fmt.Printf("%s has no workers, so shed knows no clone on it to tidy.\n", m.Name)
@@ -126,4 +133,55 @@ func verb(apply bool) string {
 		return "to be removed"
 	}
 	return "would be removed"
+}
+
+// tidySessions lists the agent sessions on the machine that shed does not
+// supervise, and with apply closes those idle longer than idle. They share
+// the machine's account limit and CPU with its workers.
+func tidySessions(cfg *config.Config, m config.Machine, apply bool, idle time.Duration) int {
+	if len(m.Workers) == 0 {
+		fmt.Printf("%s has no supervised workers: every session on it is yours.\n", m.Name)
+		return exitOK
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	runner := probe.ShellRunner{}
+	res, err := probe.Run(ctx, runner, m, cfg.ChecksFor(m))
+	if err != nil {
+		return fail(fmt.Errorf("tidy: %w", err))
+	}
+	found := tidy.Sessions(res.Windows, status.Unsupervised(m, res.Windows), res.Now, idle)
+	if len(found) == 0 {
+		fmt.Printf("%s: no unsupervised agent sessions.\n", m.Name)
+		return exitOK
+	}
+	closing := 0
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, s := range found {
+		what := "stays"
+		if s.Close {
+			what = "would be closed"
+			if apply {
+				what = "to be closed"
+			}
+			closing++
+		}
+		fmt.Fprintf(tw, "  %s\tidle %s\t%s\n", s.Name, status.Short(s.Idle), what)
+	}
+	tw.Flush()
+	switch {
+	case closing == 0:
+		fmt.Printf("%s: none idle longer than %s.\n", m.Name, status.Short(idle))
+		return exitOK
+	case !apply:
+		fmt.Printf("%s: %d session(s) idle longer than %s. Nothing was changed. Run `shed tidy -sessions -apply %s` to close them.\n", m.Name, closing, status.Short(idle), m.Name)
+		return exitOK
+	}
+	out, err := runner.Run(ctx, m, m.Command("sh -s"), strings.NewReader(tidy.CloseSessionsScript(found)))
+	closed := strings.Count(string(out), "@@closed ")
+	fmt.Printf("%s: closed %d of %d session(s).\n", m.Name, closed, closing)
+	if err != nil || closed < closing {
+		return exitAttention
+	}
+	return exitOK
 }

@@ -1003,7 +1003,7 @@ func TestDigestTotalsUsageByWorkerAndModelAndPricesTheMergedWork(t *testing.T) {
 		"Merged pull requests with a cost: 2 of 3, median $5.60",
 		"org/app#51  $9.20  Paginate the audit log",
 		"org/app#50  $2.00  Retry the export",
-		"The reviewer's own calls are not counted.",
+		"The reviewer's own calls are not counted: its command must print JSON",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("digest lacks %q:\n%s", want, out.String())
@@ -1040,5 +1040,17 @@ func TestStatusNamesEachMachinesAccountAndWhichShareOne(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestDigestCountsTheReviewerAsItsOwnLine(t *testing.T) {
+	summary := runlog.UsageSummary{Workers: []runlog.WorkerUsage{{Worker: runlog.ReviewerLedger, Dollars: 0.5,
+		Models: map[string]runlog.ModelTokens{"sonnet-5-5": {Output: 50_000, Dollars: 0.5, Priced: true}}}}}
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}, Usage: fakeUsage{byMachine: map[string]runlog.UsageSummary{"box": summary}}}
+	d := c.Digest(context.Background(), withRepo(true), &fakeMerged{}, now.Add(-time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	if !strings.Contains(out.String(), "box  (reviewer)  sonnet-5-5") || strings.Contains(out.String(), "not counted") {
+		t.Fatalf("digest:\n%s", out.String())
 	}
 }

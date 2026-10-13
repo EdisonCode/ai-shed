@@ -66,7 +66,7 @@ func TestTranscriptUsageIsRecordedOnceAndSidechainsAreSkipped(t *testing.T) {
 
 func TestCacheWritesForAnHourAreKeptApart(t *testing.T) {
 	line := `{"type":"assistant","uuid":"a","timestamp":"2026-10-12T15:00:00Z","message":{"id":"m","model":"claude-opus-5-5","usage":{"input_tokens":5,"output_tokens":7,"cache_creation_input_tokens":300,"cache_read_input_tokens":900,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}}}}`
-	u, ok := usageFromLine([]byte(line), "")
+	u, _, ok := usageFromLine([]byte(line), "", "")
 	if !ok || u.CacheWrite != 300 || u.CacheWrite1h != 200 {
 		t.Fatalf("usage = %+v, want 300 written, 200 of it for an hour", u)
 	}
@@ -95,5 +95,64 @@ func TestParseHookReadsTheTranscriptPath(t *testing.T) {
 	}
 	if got := ParseHook(strings.NewReader("not json")); got != (Hook{}) {
 		t.Fatalf("hook = %+v, want none", got)
+	}
+}
+
+func TestParseHookReadsTheSubAgentsOwnTranscript(t *testing.T) {
+	got := ParseHook(strings.NewReader(`{"session_id":"s","transcript_path":"/p.jsonl","agent_type":"Explore","agent_transcript_path":"/s/subagents/agent-1.jsonl"}`))
+	if got.AgentTranscriptPath != "/s/subagents/agent-1.jsonl" || got.AgentType != "Explore" || got.TranscriptPath != "/p.jsonl" {
+		t.Fatalf("hook = %+v", got)
+	}
+}
+
+func TestSubAgentTranscriptIsCountedAndTaggedWithItsType(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent-1.jsonl")
+	// Every row of a sub-agent's own transcript is a sidechain.
+	line := `{"type":"assistant","isSidechain":true,"timestamp":"2026-10-12T15:00:00Z","message":{"id":"sub1","model":"claude-haiku-5-5","usage":{"input_tokens":2,"output_tokens":3,"cache_creation_input_tokens":36388}}}`
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordAgentTranscript(dir, "app", path, "s", "Explore"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshUsage(dir, "app"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadUsage(dir, "app")
+	if err != nil || len(got) != 1 || got[0].Agent != "Explore" || got[0].CacheWrite != 36388 {
+		t.Fatalf("usage = %+v, %v; want the sub-agent's call, tagged Explore", got, err)
+	}
+}
+
+func TestSubAgentTypeFallsBackToItsMetaFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent-2.jsonl")
+	line := `{"type":"assistant","isSidechain":true,"timestamp":"2026-10-12T15:00:00Z","message":{"id":"sub2","model":"claude-sonnet-5-5","usage":{"output_tokens":3}}}`
+	os.WriteFile(path, []byte(line+"\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "agent-2.meta.json"), []byte(`{"agentType":"implementer","description":"x"}`), 0o644)
+	if err := RecordAgentTranscript(dir, "app", path, "s", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ReadUsage(dir, "app"); len(got) != 1 || got[0].Agent != "implementer" {
+		t.Fatalf("usage = %+v", got)
+	}
+}
+
+func TestParentCallsCountTheSubAgentsTheyDispatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	body := strings.Join([]string{
+		`{"type":"assistant","timestamp":"2026-10-12T15:00:00Z","message":{"id":"p1","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"Explore"}}],"usage":{"output_tokens":5}}}`,
+		`{"type":"assistant","timestamp":"2026-10-12T15:00:00Z","message":{"id":"p1","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"t2","name":"Task","input":{"subagent_type":"general-purpose"}}],"usage":{"output_tokens":5}}}`,
+		`{"type":"assistant","timestamp":"2026-10-12T15:01:00Z","message":{"id":"p2","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"t3","name":"Bash","input":{}}],"usage":{"output_tokens":5}}}`,
+	}, "\n")
+	os.WriteFile(path, []byte(body+"\n"), 0o644)
+	if err := RecordTranscript(dir, "app", path, "s"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := ReadUsage(dir, "app")
+	if len(got) != 2 || got[0].Dispatches != 2 || got[1].Dispatches != 0 || got[0].Agent != "" {
+		t.Fatalf("usage = %+v, want two dispatches on p1, none on p2", got)
 	}
 }

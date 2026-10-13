@@ -171,7 +171,7 @@ const (
 )
 
 const (
-	DefaultReviewCommand = "claude -p --model sonnet"
+	DefaultReviewCommand = "claude -p --model sonnet --output-format json"
 	DefaultCacheTTL      = 5 * time.Minute
 	DefaultScopeEvery    = 30 * time.Minute
 	DefaultWorkerCommand = "claude"
