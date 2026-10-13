@@ -1092,3 +1092,32 @@ func TestStatusShowsTheLastGateRunOfEachPullRequest(t *testing.T) {
 		t.Fatalf("an older run of #41 is shown:\n%s", out.String())
 	}
 }
+
+func TestDigestSplitsTheSpendByKindAndFlagsALargeCacheRatio(t *testing.T) {
+	summary := runlog.UsageSummary{
+		Workers: []runlog.WorkerUsage{
+			{Worker: "app", Dollars: 40, Models: map[string]runlog.ModelTokens{"opus-5-5": {CacheRead: 31_000_000, Output: 100_000, Dollars: 40, Priced: true}}},
+			{Worker: "docs", Dollars: 2, Models: map[string]runlog.ModelTokens{"haiku-5-5": {CacheRead: 1_200_000, Output: 10_000, Dollars: 2, Priced: true}}},
+		},
+		Kinds: []runlog.KindSpend{
+			{Kind: runlog.KindPR, Items: []float64{4, 10, 3}},
+			{Kind: runlog.KindLook, Items: []float64{1, 2}},
+			{Kind: runlog.KindNoItem, Items: []float64{22}},
+		},
+	}
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}, Usage: fakeUsage{byMachine: map[string]runlog.UsageSummary{"box": summary}}}
+	d := c.Digest(context.Background(), withRepo(true), &fakeMerged{}, now.Add(-24*time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	for _, want := range []string{
+		"Spend by kind of work:",
+		"pull request  $17.00  40%  3 item(s), median $4.00",
+		"eye check     $3.00   7%   2 item(s), median $1.50",
+		"no item       $22.00  52%  nothing in hand",
+		"Cache reads per output token: app 310 (high), docs 120",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("digest lacks %q:\n%s", want, out.String())
+		}
+	}
+}

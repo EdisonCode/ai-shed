@@ -61,6 +61,16 @@ func cmdUsage(args []string) int {
 			fmt.Printf("  %s  in %d  write %d  read %d  out %d  $%.2f\n", model, t.Input, t.CacheWrite, t.CacheRead, t.Output, t.Dollars)
 		}
 	}
+	if len(s.Kinds) > 0 {
+		fmt.Println("by kind of work")
+	}
+	for _, k := range s.Kinds {
+		sum := 0.0
+		for _, v := range k.Items {
+			sum += v
+		}
+		fmt.Printf("  %s  $%.2f  %d item(s)\n", k.Kind, sum, len(k.Items))
+	}
 	return exitOK
 }
 

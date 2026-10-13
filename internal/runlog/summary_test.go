@@ -74,3 +74,71 @@ func TestShortModelDropsTheVendorTheDateAndTheContextSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestSummarySplitsTheSpendByTheKindOfItemInHand(t *testing.T) {
+	dir := t.TempDir()
+	t0 := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	for _, c := range []Checkin{
+		{Time: at(0), Worker: "app", Verdict: VerdictStarted, Sent: true},
+		{Time: at(10), Worker: "app", Verdict: VerdictNudge, Sent: true, Issue: 12},            // built, PR #41
+		{Time: at(20), Worker: "app", Verdict: VerdictNudge, Sent: true, Issue: 13},            // plan only
+		{Time: at(30), Worker: "app", Verdict: VerdictNudge, Sent: true, Issue: 7, Look: true}, // eye check
+		{Time: at(40), Worker: "app", Verdict: VerdictNudge, Sent: true, Task: "t-1"},          // one-off task
+		{Time: at(50), Worker: "app", Verdict: VerdictDone},                                    // rests
+		{Time: at(60), Worker: "app", Verdict: VerdictNudge, Sent: true, Issue: 14},            // built, PR #42
+	} {
+		if err := AppendCheckin(dir, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	million := func(id string, m int) Usage {
+		return Usage{ID: id, Time: at(m), Model: "claude-haiku-5-5", Output: 1_000_000} // $5 each at haiku's output rate
+	}
+	writeLedger(t, dir, "app", million("before", 5), million("pr", 12), million("pr2", 15), million("plan", 25),
+		million("look", 35), million("task", 45), million("resting", 55), million("pr3", 65))
+	writeLedger(t, dir, ReviewerLedger, million("rev", 30))
+	for _, c := range []PRCost{{Repo: "org/app", PR: 41, Issue: 12, Worker: "app"}, {Repo: "org/app", PR: 42, Issue: 14, Worker: "app"}} {
+		if err := RecordPRCost(dir, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, err := Summarize(dir, t0, at(120), pricing.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var per float64
+	for _, w := range s.Workers {
+		if w.Worker == "app" {
+			per = w.Models["haiku-5-5"].Dollars / 8 // the app ledger has eight calls of one price
+		}
+	}
+	want := map[string][]float64{
+		KindPR:     {2 * per, per},
+		KindPlan:   {per},
+		KindLook:   {per},
+		KindTask:   {per},
+		KindNoItem: {2 * per},
+		KindReview: {per},
+	}
+	if len(s.Kinds) != len(want) {
+		t.Fatalf("kinds = %+v, want %d kinds", s.Kinds, len(want))
+	}
+	for _, k := range s.Kinds {
+		if w := want[k.Kind]; !sameDollars(k.Items, w) {
+			t.Errorf("%s = %v, want %v", k.Kind, k.Items, w)
+		}
+	}
+}
+
+func sameDollars(got, want []float64) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	var a, b float64
+	for i := range got {
+		a, b = a+got[i], b+want[i]
+	}
+	return math.Abs(a-b) < 1e-9
+}
