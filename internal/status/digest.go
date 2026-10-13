@@ -47,6 +47,9 @@ type Digest struct {
 	// Lessons are what workers wrote in their hand-backs for the next
 	// worker to know, that the owner has not settled.
 	Lessons []PendingLesson `json:"lessons,omitempty"`
+	// Defaults is how the safe defaults of each area went, over the issues
+	// closed in the window.
+	Defaults []DefaultGroup `json:"defaults,omitempty"`
 	// Problems lists what could not be read.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -104,6 +107,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 	c.collectStages(ctx, &d)
 	c.collectEscapes(ctx, cfg, &d)
 	c.collectLessons(ctx, cfg, &d)
+	c.collectDefaults(ctx, cfg, &d)
 	return d
 }
 
@@ -134,6 +138,7 @@ func RenderDigest(w io.Writer, d Digest) {
 
 	renderStages(w, d.Stages)
 	renderEscapes(w, d.Verification)
+	renderDefaults(w, d.Defaults)
 
 	// What the idle time was lost to: each cause has its own remedy.
 	var idle []string

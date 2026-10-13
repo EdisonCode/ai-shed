@@ -1297,3 +1297,32 @@ func TestWhatWaitsOnTheOwnerLeadsWithWhatAWorkerTakesAndCollapsesMerges(t *testi
 		t.Fatalf("totals = %q", got)
 	}
 }
+
+func TestDigestCountsTheSafeDefaultsTheOwnerOverruledByArea(t *testing.T) {
+	cfg := withRepo(true)
+	cfg.Supervisor.OverlapLabels = "area:"
+	billing := func(n int, comments ...string) backlog.Issue {
+		i := issue(n, comments...)
+		i.Labels = []backlog.Label{{Name: "area:billing"}}
+		return i
+	}
+	issues := []backlog.Issue{
+		billing(5, "## Hand-back\n**PR:** #40\n**Decided without you:**\n- Kept the old column.", "Owner ruling: drop it"),
+		billing(6, "## Hand-back\n**PR:** #41\n**Decided without you:**\n- Rounded half up."),
+		issue(7, "## Hand-back\n**PR:** #42\n**Decided without you:**\n- Logged at info.", "Owner ruling: accepted"),
+	}
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}, Closed: fakeClosed{issues: issues}}
+	d := c.Digest(context.Background(), cfg, &fakeMerged{}, now.Add(-168*time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	for _, want := range []string{
+		"Safe defaults on the issues closed in this window:",
+		"area:billing  1 held  1 overruled (50%)",
+		"org/app       1 held  0 overruled (0%)",
+		"overruled: org/app#5  Kept the old column. — drop it",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("digest lacks %q:\n%s", want, out.String())
+		}
+	}
+}
