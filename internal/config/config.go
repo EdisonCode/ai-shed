@@ -251,6 +251,10 @@ type Models struct {
 	// the model of. It is needed when some issues switch and some are told:
 	// after a switched issue, the session goes back to it.
 	Session string `yaml:"session"`
+	// EyeChecks is the model an eye check runs on. The session switches to
+	// it for the look and back for the next issue, so a look does not run
+	// on the model the hardest work needs.
+	EyeChecks string `yaml:"eye_checks"`
 }
 
 // Values of Models.Apply.
@@ -383,7 +387,17 @@ type Worker struct {
 	// session is kept running and it is handed no issue and no task: nothing
 	// is typed into the owner's conversation with it.
 	Ask bool `yaml:"ask"`
+	// Env is set in the worker's session: per-worker values such as the
+	// test user it signs in to staging with, so two workers on one machine
+	// do not share one account.
+	Env map[string]string `yaml:"env"`
 }
+
+var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// WorkerPlaceholder in a repository's staging orders is replaced with the
+// name of the worker that reads them.
+const WorkerPlaceholder = "{worker}"
 
 // Check is a command that must exit 0 for the machine to be ready for work.
 type Check struct {
@@ -777,6 +791,11 @@ func (c *Config) validate() error {
 				fail("%s: worker %q has no brief", where, w.Name)
 			}
 			checkSources(fmt.Sprintf("%s: worker %q", where, w.Name), w.Issues)
+			for name := range w.Env {
+				if !envNameRE.MatchString(name) {
+					fail("%s: worker %q: env %q is not a variable name", where, w.Name, name)
+				}
+			}
 			if w.Ask {
 				if len(w.Issues) > 0 {
 					fail("%s: worker %q answers questions and has no queue: remove issues, or remove ask", where, w.Name)
@@ -841,6 +860,14 @@ func (c *Config) validate() error {
 		}
 		if (a == ModelTell) != c.Supervisor.Models.TellOnly() {
 			mixed = true
+		}
+	}
+	if m := c.Supervisor.Models; m.EyeChecks != "" {
+		switch {
+		case (m.TellOnly() || mixed) && m.Session == "":
+			fail("supervisor: models.eye_checks needs models.session: the model a session goes back to after a look")
+		case !m.TellOnly() && !mixed && m.Default == "":
+			fail("supervisor: models.eye_checks needs models.default: the model the next issue goes back to after a look")
 		}
 	}
 	if mixed && c.Supervisor.Models.Session == "" {
