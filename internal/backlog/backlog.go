@@ -32,6 +32,9 @@ type Issue struct {
 	// MergedPRs holds the numbers of the repo's recently merged pull
 	// requests. It is nil when the lister did not look them up.
 	MergedPRs map[int]bool `json:"-"`
+	// Verify is set by the reader when the issue's repository verifies a
+	// handed-back pull request before the owner reviews it.
+	Verify bool `json:"-"`
 	// Deps are the issues this one waits for, with their state: the ones
 	// its text names and the ones GitHub's blocked-by relation names. Nil
 	// when the lister did not look them up.
@@ -45,6 +48,8 @@ type PR struct {
 	Problem string
 	// Draft is set while the pull request is a draft.
 	Draft bool
+	// Pending is set while a check of its head still runs.
+	Pending bool
 }
 
 type Label struct {
@@ -218,6 +223,8 @@ type check struct {
 	Context    string `json:"context"`
 	Conclusion string `json:"conclusion"`
 	State      string `json:"state"`
+	// Status is a check run's progress: QUEUED, IN_PROGRESS, COMPLETED.
+	Status string `json:"status"`
 }
 
 func parsePRs(data []byte) (map[int]PR, error) {
@@ -232,9 +239,20 @@ func parsePRs(data []byte) (map[int]PR, error) {
 	}
 	open := make(map[int]PR, len(prs))
 	for _, pr := range prs {
-		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks), Draft: pr.Draft}
+		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks), Draft: pr.Draft, Pending: pending(pr.Checks)}
 	}
 	return open, nil
+}
+
+// pending reports whether a check still runs: a check run that has not
+// completed, or a commit status that is pending.
+func pending(checks []check) bool {
+	for _, c := range checks {
+		if (c.Name != "" && c.Status != "" && c.Status != "COMPLETED") || c.State == "PENDING" || c.State == "EXPECTED" {
+			return true
+		}
+	}
+	return false
 }
 
 var failed = map[string]bool{"FAILURE": true, "TIMED_OUT": true, "STARTUP_FAILURE": true, "ERROR": true}
@@ -300,10 +318,12 @@ func (a Ask) What() string {
 // Waiting says which asks are left out while the issue needs a worker again.
 func Asks(issue Issue, signals []config.Signal) []Ask {
 	rework := Rework(issue, signals) != ""
+	verifying := unverified(issue, signals)
 	var asks []Ask
 	for _, s := range signals {
 		isOpen, pr, since, line := signalState(issue, s)
-		if !isOpen || (rework && !s.SendsBack) {
+		if !isOpen || (rework && !s.SendsBack) || (verifying && s.FollowsPR) {
+			// A review waits until a verifier has passed the work.
 			continue
 		}
 		ask := Ask{Name: s.Name, Since: since}
@@ -342,6 +362,9 @@ func Rework(issue Issue, signals []config.Signal) string {
 	}
 	if open.Problem != "" {
 		reasons = append(reasons, fmt.Sprintf("pull request #%d %s", pr, open.Problem))
+	}
+	if v := Verification(issue, signals); v.State == VerifyFailed {
+		reasons = append(reasons, fmt.Sprintf("the verifier sent pull request #%d back: %s; fix what it found and hand back again", pr, v.Note))
 	}
 	return strings.Join(reasons, "; ")
 }

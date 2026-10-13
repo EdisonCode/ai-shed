@@ -128,7 +128,43 @@ type Repo struct {
 	// Gates is what the agent runs on the head commit of each pull request
 	// built on its machine.
 	Gates Gates `yaml:"gates"`
+	// Verify, when set, has a worker with verifies: true check each handed-
+	// back pull request before the owner is asked to review it, as deep as
+	// the pull request's risk tier says.
+	Verify *Verify `yaml:"verify"`
 }
+
+// Verify says how a repository's pull requests are tiered for verification.
+type Verify struct {
+	// Areas are the parts of the code a change to which is high risk: money,
+	// sign-in, data migrations, a bounded context with strict invariants.
+	Areas []Area `yaml:"areas"`
+	// HighLines is how many changed lines make a pull request high risk.
+	HighLines int `yaml:"high_lines"`
+}
+
+// Area is a named set of paths whose changes are high risk.
+type Area struct {
+	Name  string   `yaml:"name"`
+	Paths []string `yaml:"paths"`
+}
+
+// DefaultHighLines is the size of a pull request that is high risk by size
+// alone.
+const DefaultHighLines = 400
+
+func (v Verify) HighLinesOrDefault() int {
+	if v.HighLines <= 0 {
+		return DefaultHighLines
+	}
+	return v.HighLines
+}
+
+// Risk tiers of a pull request.
+const (
+	TierLow  = "low"
+	TierHigh = "high"
+)
 
 // Gates is a repository's fast checks: format, lint, unit tests, build. The
 // agent of the machine that built a pull request runs them on its head
@@ -288,6 +324,10 @@ type Models struct {
 	// it for the look and back for the next issue, so a look does not run
 	// on the model the hardest work needs.
 	EyeChecks string `yaml:"eye_checks"`
+	// Verify maps a risk tier to the model a verification at that tier runs
+	// on, as in {low: haiku, high: opus}. The session switches for it and
+	// back for the next issue.
+	Verify map[string]string `yaml:"verify"`
 }
 
 // Values of Models.Apply.
@@ -413,6 +453,10 @@ type Worker struct {
 	// issue, so one issue's conversation does not follow it into the next.
 	// Leave it off for themed work where the issues build on each other.
 	FreshPerIssue bool `yaml:"fresh_per_issue"`
+	// Verifies says the worker checks pull requests that others built before
+	// the owner reviews them. Its queue's repositories need verify under
+	// repos.
+	Verifies bool `yaml:"verifies"`
 	// EyeChecks says the worker has a browser and may do the eye checks of
 	// merged work on staging. Its queue's repositories need a `repos` entry.
 	EyeChecks bool `yaml:"eye_checks"`
@@ -703,7 +747,53 @@ func Parse(data []byte) (*Config, error) {
 	if err := cfg.validateEyeChecks(); err != nil {
 		return nil, err
 	}
+	if err := cfg.validateVerify(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// validateVerify checks that verification can happen where it is asked for:
+// a repository that verifies needs a worker that verifies and takes its
+// issues, or its reviews would wait for a verifier forever.
+func (c *Config) validateVerify() error {
+	var errs []error
+	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+	for _, r := range c.Repos {
+		if r.Verify == nil {
+			continue
+		}
+		covered := false
+		for _, m := range c.Machines {
+			for _, w := range m.Workers {
+				if w.Verifies && slices.ContainsFunc(m.SourcesFor(w), func(s IssueSource) bool { return s.Repo == r.Name }) {
+					covered = true
+				}
+			}
+		}
+		if !covered {
+			fail("repos: %s: verify needs a worker with verifies: true whose queue takes %s", r.Name, r.Name)
+		}
+		for _, a := range r.Verify.Areas {
+			if a.Name == "" || len(a.Paths) == 0 {
+				fail("repos: %s: verify.areas needs a name and paths in every entry", r.Name)
+			}
+		}
+	}
+	for _, m := range c.Machines {
+		for _, w := range m.Workers {
+			if !w.Verifies {
+				continue
+			}
+			if w.Ask {
+				fail("machine %q: worker %q answers questions and verifies nothing: remove verifies, or remove ask", m.Name, w.Name)
+			}
+			if !slices.ContainsFunc(m.SourcesFor(w), func(s IssueSource) bool { r, ok := c.Repo(s.Repo); return ok && r.Verify != nil }) {
+				fail("machine %q: worker %q has verifies, but no repository of its queue has verify under repos", m.Name, w.Name)
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // validateEyeChecks runs after the default signals are in place: a worker
@@ -895,6 +985,19 @@ func (c *Config) validate() error {
 			mixed = true
 		}
 	}
+	for tier := range c.Supervisor.Models.Verify {
+		if tier != TierLow && tier != TierHigh {
+			fail("supervisor: models.verify %q must be %s or %s", tier, TierLow, TierHigh)
+		}
+	}
+	if m := c.Supervisor.Models; len(m.Verify) > 0 && m.EyeChecks == "" {
+		switch {
+		case (m.TellOnly() || mixed) && m.Session == "":
+			fail("supervisor: models.verify needs models.session: the model a session goes back to after a verification")
+		case !m.TellOnly() && !mixed && m.Default == "":
+			fail("supervisor: models.verify needs models.default: the model the next issue goes back to after a verification")
+		}
+	}
 	if m := c.Supervisor.Models; m.EyeChecks != "" {
 		switch {
 		case (m.TellOnly() || mixed) && m.Session == "":
@@ -935,8 +1038,8 @@ func (c *Config) validate() error {
 		switch {
 		case deploys && r.Staging.Commit == "":
 			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
-		case !deploys && r.Gates.Command == "":
-			fail("%s: give it staging or gates, or leave it out", where)
+		case !deploys && r.Gates.Command == "" && r.Verify == nil:
+			fail("%s: give it staging, gates or verify, or leave it out", where)
 		}
 		if r.Gates.Timeout != "" {
 			if d, err := time.ParseDuration(r.Gates.Timeout); err != nil || d <= 0 {

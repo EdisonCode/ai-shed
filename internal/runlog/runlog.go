@@ -140,6 +140,9 @@ type Checkin struct {
 	// Look is set when the issue was handed over for an eye check on
 	// staging, not to be built.
 	Look bool `json:"look,omitempty"`
+	// Verify is set when the issue was handed over to verify its pull
+	// request, not to build it.
+	Verify bool `json:"verify,omitempty"`
 	// Backfill is set when the issue was taken from a backfill source: the
 	// queue had nothing else the worker could act on.
 	Backfill bool `json:"backfill,omitempty"`
@@ -272,7 +275,7 @@ func InHand(checkins []Checkin, worker string) (issue int, look bool) {
 func Builder(checkins []Checkin, issue int) string {
 	worker := ""
 	for _, c := range checkins {
-		if c.Sent && c.Issue == issue && !c.Look {
+		if c.Sent && c.Issue == issue && !c.Look && !c.Verify {
 			worker = c.Worker
 		}
 	}
@@ -317,4 +320,26 @@ func ReworkSpent(checkins []Checkin, issue int, now time.Time) bool {
 		}
 	}
 	return count >= ReworkLimit
+}
+
+// BuildingInHand is IssueInHand for a worker that builds the issue: 0 when
+// the worker was handed it to verify its pull request. A verifier holds no
+// claim on the work.
+func BuildingInHand(checkins []Checkin, worker string) int {
+	issue := 0
+	for _, c := range checkins {
+		switch {
+		case c.Worker != worker:
+		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled:
+			issue = 0
+		case c.Sent && c.Task != "":
+			issue = 0
+		case c.Sent && c.Issue != 0:
+			issue = c.Issue
+			if c.Verify {
+				issue = 0
+			}
+		}
+	}
+	return issue
 }

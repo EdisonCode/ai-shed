@@ -22,6 +22,7 @@ import (
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/gates"
 	"github.com/edisoncode/ai-shed/internal/looks"
+	"github.com/edisoncode/ai-shed/internal/risk"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 	"github.com/edisoncode/ai-shed/internal/supervisor"
 )
@@ -221,6 +222,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		StandingOrders: cfg.Defaults.StandingOrders,
 		Terminal:       supervisor.Tmux{},
 		Shells:         supervisor.Tmux{},
+		Diffs:          risk.GH{},
 		RunDeploy: func(ctx context.Context, command string) (string, int) {
 			return execute(ctx, m.Command(command), deployTimeout)
 		},

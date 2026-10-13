@@ -1163,3 +1163,19 @@ func TestStatusShowsWhyAQueuedIssueIsHeld(t *testing.T) {
 		}
 	}
 }
+
+func TestAPullRequestWaitingForItsVerificationIsNotTheOwners(t *testing.T) {
+	i := issue(12, "## Hand-back\n**PR:** #41 (ready)")
+	i.OpenPRs = map[int]backlog.PR{41: {}}
+	i.Verify = true
+	r := Assess(config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}, signals, now, healthy(), []backlog.Issue{i})
+	wantAttention(t, r)
+	if st := r.Issues[0]; st.State != Verifying || st.Held != "pull request #41 waits for a verifier" {
+		t.Fatalf("issue = %+v", st)
+	}
+	i.Comments = append(i.Comments, backlog.Comment{Body: "Verified (low): ran the tests"})
+	r = Assess(config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}, signals, now, healthy(), []backlog.Issue{i})
+	if st := r.Issues[0]; st.State != Waiting {
+		t.Fatalf("issue after it was verified = %+v, want it waiting on the owner's review", st)
+	}
+}
