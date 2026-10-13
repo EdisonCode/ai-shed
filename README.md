@@ -923,6 +923,46 @@ Lessons to promote: 2 (promote, reject or fold each, then comment "Lessons promo
   3h   my-org/my-app#5, my-org/my-app#6  The suite needs `make db-reset` first.
 ```
 
+To see what a worker loads, and what in it is said twice or out of date:
+
+```sh
+shed context mac-mini app                   # read-only; runs on the machine over SSH
+shed context -contradictions mac-mini app   # also asks the reviewer model for contradictions
+```
+
+```
+mac-mini app: about 13.2k tokens before its first item, read again on every turn
+  global      ~370   /home/me/.claude/CLAUDE.md
+  parent      ~1k    /home/me/AGENTS.md
+  repository  ~6k    /home/me/Projects/my-app/CLAUDE.md
+  memory      ~190   /home/me/.claude/projects/-home-me-Projects-my-app/memory/MEMORY.md
+  brief       ~5.6k  /home/me/Projects/my-app/.shed/BRIEF.md
+
+Said twice: 2 (one home per rule; every copy costs tokens on every turn)
+  /home/me/.claude/CLAUDE.md and /home/me/AGENTS.md: 2
+    lines 7 and 7: **Incremental progress.** Small changes that compile and pass tests.
+
+Stale references: 1
+  /home/me/Projects/my-app/CLAUDE.md:41  internal/legacy/: no such path in the checkout
+```
+
+- **The sources** are what Claude Code reads at session start: your global
+  `CLAUDE.md`, the `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` and
+  `AGENTS.md` of the worker's directory and of each directory above it, what
+  those import with `@path`, the memory index, and the worker's brief. The
+  tokens are estimated at four characters each.
+- **Said twice** compares paragraphs and single statements across sources:
+  nearly the same words, or the same rule inside a longer one.
+- **Stale** are paths in backticks that the worker's checkout does not have,
+  and issues the text calls open that are closed. Only the repository's own
+  sources and memory are checked; the global and parent files span other
+  repositories.
+- **Contradictions** are read by the reviewer model, on request, and are
+  for you to settle. shed changes no source.
+- It exits 1 when it finds anything. `shed status` gives each worker's total
+  under `supervised`, measured when its session starts, and with
+  `supervisor.context_budget: 20000` names a worker that loads more.
+
 You put each one where it belongs, or drop it, and say so on its issue:
 `Lessons promoted`, `Lessons folded` or `Lesson rejected` settles the
 lessons written before it. shed never writes the memory itself, so there is
@@ -1066,6 +1106,7 @@ supervisor:
   no_work_after: 30m                  # optional: notify when a worker has had no work this long
   low_queue: 3                        # optional: notify when a queue has fewer workable issues
   stack: true                         # optional: go on with an issue on a branch from its pull request while it waits for review
+  context_budget: 20000               # optional: tokens a worker may load before its first item
   overlap_labels: "area:"             # optional: issues sharing a label with this prefix are not worked at once
   own_wait_max: 45m                   # optional: how long an idle worker may wait on its own work before it is told to check it; "0" for no bound
 ```

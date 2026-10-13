@@ -267,6 +267,15 @@ func renderMachine(w io.Writer, r MachineReport) {
 			fmt.Fprintf(tw, "    %s\t%s\t%s\t%s ago\t%s\n", wk.Name, hand, wk.Last.Verdict, Short(r.Probe.Now.Sub(wk.Last.Time)), reason)
 		}
 		tw.Flush()
+		var sizes []string
+		for _, wk := range r.Workers {
+			if n, ok := r.Probe.Context[wk.Name]; ok {
+				sizes = append(sizes, fmt.Sprintf("%s %s", wk.Name, count(n)))
+			}
+		}
+		if len(sizes) > 0 {
+			fmt.Fprintf(w, "  context  %s tokens before the first item\n", strings.Join(sizes, ", "))
+		}
 	}
 	if len(r.OneOff) > 0 {
 		fmt.Fprintln(w, "  one-off tasks")

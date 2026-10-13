@@ -350,6 +350,9 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 
 	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
 	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels)
+	if res != nil {
+		AssessContext(&report, m, *res, cfg.Supervisor.ContextBudget)
+	}
 	if probeErr != nil {
 		report.Error = probeErr.Error()
 		report.Attention = append([]string{"unreachable: " + probeErr.Error()}, report.Attention...)
@@ -843,4 +846,17 @@ func verifyState(issue backlog.Issue, signals []config.Signal) string {
 		return fmt.Sprintf("pull request #%d waits for a verifier", v.PR)
 	}
 	return ""
+}
+
+// AssessContext says which workers load more before their first item than
+// the budget allows.
+func AssessContext(report *MachineReport, m config.Machine, res probe.Result, budget int) {
+	if budget <= 0 {
+		return
+	}
+	for _, w := range m.Workers {
+		if n := res.Context[w.Name]; n > budget {
+			report.Attention = append(report.Attention, fmt.Sprintf("worker %s loads about %s tokens before its first item, over the context_budget of %s: shed context %s %s", w.Name, count(n), count(budget), m.Name, w.Name))
+		}
+	}
 }

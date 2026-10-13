@@ -27,6 +27,9 @@ type Result struct {
 	Runs      []runlog.Record `json:"-"`
 	// Checkins are the supervisor's recent check-ins, oldest first.
 	Checkins []runlog.Checkin `json:"-"`
+	// Context is, by worker, the estimated tokens its tool loads at session
+	// start.
+	Context map[string]int `json:"-"`
 	// Gates are the agent's recent gate runs, oldest first.
 	Gates []runlog.Gate `json:"-"`
 	// Deploys are the staging deploys the agent started, oldest first.
@@ -95,6 +98,7 @@ for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(b
 [ -f "$s/` + runlog.PauseFile + `" ] && echo "@@pause $(cat "$s/` + runlog.PauseFile + `")"
 for f in "$s/` + runlog.BumpsDir + `"/*; do [ -f "$f" ] && echo "@@bump $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
+for f in "$s/` + runlog.ContextDir + `"/*; do [ -f "$f" ] && echo "@@context $(basename "$f") $(cat "$f")"; done
 echo "@@end"
 `
 
@@ -174,6 +178,15 @@ func Parse(out string, checks []config.Check) (Result, error) {
 		case "@@checkin":
 			if c, err := runlog.ParseCheckin(rest); err == nil {
 				res.Checkins = append(res.Checkins, c)
+			}
+		case "@@context":
+			if worker, value, ok := strings.Cut(strings.TrimSpace(rest), " "); ok {
+				if n, ok := runlog.ParseContext(value); ok {
+					if res.Context == nil {
+						res.Context = map[string]int{}
+					}
+					res.Context[worker] = n
+				}
 			}
 		case "@@gate":
 			if g, err := runlog.ParseGate(rest); err == nil {

@@ -31,6 +31,7 @@ const linuxOutput = `Welcome banner from the init line
 @@checkin {"time":"2026-09-21T03:10:00Z","worker":"app","kind":"idle","verdict":"nudge","reason":"it stopped","message":"Take #12.","sent":true}
 @@gate {"repo":"org/app","pr":41,"commit":"aaa1111","worker":"app","start":"2026-09-21T03:20:00Z","end":"2026-09-21T03:22:00Z","exit_code":1}
 @@deploy {"repo":"org/app","start":"2026-09-21T03:30:00Z","before":"aaa1111","result":"started","exit_code":0}
+@@context app 13200
 @@recycle app
 @@end
 `
@@ -231,5 +232,15 @@ func TestParseReadsTheStagingDeploys(t *testing.T) {
 	}
 	if len(res.Deploys) != 1 || res.Deploys[0].Result != runlog.DeployStarted {
 		t.Fatalf("deploys = %+v", res.Deploys)
+	}
+}
+
+func TestParseReadsEachWorkersContextSize(t *testing.T) {
+	res, err := Parse(linuxOutput, twoChecks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Context["app"] != 13200 {
+		t.Fatalf("context = %v", res.Context)
 	}
 }
