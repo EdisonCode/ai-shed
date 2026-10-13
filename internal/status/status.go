@@ -167,6 +167,9 @@ type Collector struct {
 	// Usage reads what each machine's workers spent. It is needed only for
 	// a digest, and nil leaves usage out.
 	Usage UsageReader
+	// Closed lists the issues closed in a digest's window, for the escape
+	// rate of each verification tier. Nil leaves it out.
+	Closed ClosedLister
 	// Times reads when each step of a merged pull request happened. It is
 	// needed only for a digest, and nil leaves the stages out.
 	Times PullTimer

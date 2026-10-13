@@ -1179,3 +1179,31 @@ func TestAPullRequestWaitingForItsVerificationIsNotTheOwners(t *testing.T) {
 		t.Fatalf("issue after it was verified = %+v, want it waiting on the owner's review", st)
 	}
 }
+
+type fakeClosed struct{ issues []backlog.Issue }
+
+func (f fakeClosed) ClosedSince(context.Context, config.IssueSource, time.Time) ([]backlog.Issue, error) {
+	return f.issues, nil
+}
+
+func TestDigestGivesTheEscapeRateOfEachVerificationTier(t *testing.T) {
+	cfg := withRepo(true)
+	cfg.Repos[0].Verify = &config.Verify{}
+	escaped := issue(5, "## Hand-back\n**PR:** #40", "Verified (low): ran the tests", "Owner ruling: the export misses a column")
+	clean := issue(6, "## Hand-back\n**PR:** #41", "Verified (low): fine")
+	caught := issue(7, "## Hand-back\n**PR:** #42", "Verification failed (high): accepts a refund of 0", "## Hand-back\n**PR:** #42", "Verified (high): refunds checked")
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Looks: &fakeLooks{}, Closed: fakeClosed{issues: []backlog.Issue{escaped, clean, caught}}}
+	d := c.Digest(context.Background(), cfg, &fakeMerged{}, now.Add(-168*time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	for _, want := range []string{
+		"Verification of the issues closed in this window:",
+		"low   2 passed  1 escaped (50%)  0 sent back",
+		"high  1 passed  0 escaped (0%)   1 sent back",
+		"escaped: org/app#5: the owner sent it back after it was verified",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("digest lacks %q:\n%s", want, out.String())
+		}
+	}
+}

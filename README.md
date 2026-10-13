@@ -434,6 +434,21 @@ supervisor:
   under `verification`.
 - A repository with `verify` needs a worker that verifies and takes its
   issues, and the fleet file says so when it has none.
+- **The escape rate.** `shed digest` counts, over the issues closed in its
+  window, each tier's verifications: how many passed, how many sent the
+  work back, and how many passes a fault got through. A pass escaped when,
+  before the next verification, you sent the work back with a ruling or a
+  look on staging failed. Each escape is named.
+
+  ```
+  Verification of the issues closed in this window:
+    low   18 passed  1 escaped (6%)  3 sent back
+    high  5 passed   0 escaped (0%)  2 sent back
+    escaped: my-org/my-app#123: the owner sent it back after it was verified
+  ```
+
+  It is the evidence for the tiers: widen `low` (fewer `areas`, a larger
+  `high_lines`) while its passes do not escape, and tighten it when they do.
 
 ### Eye checks on staging
 
