@@ -299,6 +299,12 @@ func limitedWords(r MachineReport, w WorkerStatus) string {
 	if left := w.Last.Until.Sub(r.Probe.Now); left > 0 {
 		words = "held for up to another " + Short(left)
 	}
+	if reset := resetWords(w.Last.Resets, r.Probe.Now); reset != "" {
+		words = reset + ", " + words
+	}
+	if w.Last.Limit != "" {
+		words = w.Last.Limit + " limit, " + words
+	}
 	stale := false
 	for _, win := range r.Probe.Windows {
 		if win.Session != workerSession || win.Name != w.Name {
@@ -315,6 +321,15 @@ func limitedWords(r MachineReport, w WorkerStatus) string {
 		return words
 	}
 	return words + ". " + w.Last.Reason
+}
+
+// resetWords says when a limit resets, on the machine's clock: "resets Wed
+// 18:00 (in 46h)". "" when the time is unknown or past.
+func resetWords(resets, now time.Time) string {
+	if !resets.After(now) {
+		return ""
+	}
+	return fmt.Sprintf("resets %s (in %s)", resets.In(now.Location()).Format("Mon 15:04"), Short(resets.Sub(now)))
 }
 
 func inHand(w WorkerStatus) string {

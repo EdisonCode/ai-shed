@@ -781,6 +781,35 @@ func TestLimitedWorkerShowsHowLongItIsHeldAndHowToEndIt(t *testing.T) {
 	}
 }
 
+func weeklyLimited(worker string) runlog.Checkin {
+	c := checkin(runlog.VerdictLimited, "the screen says the weekly limit resets Wed at 6pm")
+	c.Worker, c.Until, c.Limit, c.Resets = worker, now.Add(6*time.Hour), runlog.LimitWeekly, now.Add(46*time.Hour)
+	return c
+}
+
+func TestLimitedWorkerSaysWhichLimitAndWhenItResets(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{weeklyLimited("app")}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{Assess(appWorker, signals, now, res, nil)}, nil)
+	if want := "weekly limit, resets " + now.Add(46*time.Hour).Format("Mon 15:04") + " (in 46h), held for up to another 6h"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}
+
+func TestMachineWithEveryWorkerAtItsWeeklyLimitNeedsTheOwner(t *testing.T) {
+	two := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}, {Name: "api", Dir: "/tmp", Brief: "b"}}}
+	res := healthy()
+	fiveHour := weeklyLimited("api")
+	fiveHour.Limit = runlog.LimitFiveHour
+	res.Checkins = []runlog.Checkin{weeklyLimited("app"), fiveHour}
+	wantAttention(t, Assess(two, signals, now, res, nil))
+
+	res.Checkins = []runlog.Checkin{weeklyLimited("app"), weeklyLimited("api")}
+	wantAttention(t, Assess(two, signals, now, res, nil),
+		"every worker is at its weekly limit: switch the machine's account or wait until "+now.Add(46*time.Hour).Format("Mon 15:04"))
+}
+
 func TestLimitedWorkerThatWorkedSinceDoesNotShowTheOldReason(t *testing.T) {
 	out := limitedReport(t, 2*time.Minute) // the limit was seen 5 minutes ago
 	if !strings.Contains(out, "but active 2m ago, after the limit was seen") || strings.Contains(out, "resets Oct 7") {

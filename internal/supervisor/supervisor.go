@@ -358,6 +358,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 			st.notBefore, st.reviewerLimited = now.Add(limitRecheck), true
 			c.Kind, c.Verdict, c.Until = KindLimit, runlog.VerdictLimited, st.notBefore
 			c.Reason = "the reviewer is at its usage limit: " + err.Error()
+			c.Limit = limitKind(err.Error())
 		}
 		// The same failure is recorded once, not every retry.
 		if err.Error() != st.lastError {
@@ -631,6 +632,9 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	if err != nil {
 		return err
 	}
+	if verdict.Verdict == runlog.VerdictLimited {
+		verdict.Limit = limitKind(terminal)
+	}
 	st.limitOver = ""
 	if st.reviewerLimited {
 		// The workers run on the reviewer's account. Its limit is over, so
@@ -693,6 +697,10 @@ func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, 
 		}
 		st.limitedUntil = now.Add(wait)
 		c.Until = st.limitedUntil
+		c.Limit = verdict.Limit
+		if verdict.ResumeInMinutes > 0 {
+			c.Resets = now.Add(time.Duration(verdict.ResumeInMinutes) * time.Minute)
+		}
 	}
 	switch {
 	case verdict.Verdict != runlog.VerdictToolError:
@@ -1024,6 +1032,22 @@ func (s *Supervisor) resume(worker string, st *workerState, now time.Time) {
 func (s *Supervisor) dropHold(worker string, st *workerState, now time.Time, why string) {
 	st.limitedUntil, st.reviewedActivity, st.lastReview = time.Time{}, time.Time{}, now
 	s.record(st, runlog.Checkin{Time: now, Worker: worker, Kind: KindLimit, Verdict: runlog.VerdictOnTrack, Reason: "its usage limit hold was dropped: " + why})
+}
+
+// limitKind says which usage limit a screen names: the one it names last,
+// as that is the newest. "" when it names neither.
+func limitKind(screen string) string {
+	screen = strings.ToLower(screen)
+	weekly := strings.LastIndex(screen, "weekly limit")
+	fiveHour := max(strings.LastIndex(screen, "5-hour limit"), strings.LastIndex(screen, "session limit"))
+	switch {
+	case weekly < 0 && fiveHour < 0:
+		return ""
+	case weekly > fiveHour:
+		return runlog.LimitWeekly
+	default:
+		return runlog.LimitFiveHour
+	}
 }
 
 // isLimit reports whether a reviewer failed because it reached a usage limit.

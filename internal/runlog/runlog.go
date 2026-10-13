@@ -97,6 +97,12 @@ const (
 	VerdictError      = "error"       // the check-in itself failed
 )
 
+// Usage limits a worker's screen names.
+const (
+	LimitFiveHour = "5-hour" // the rolling session window; waiting is the remedy
+	LimitWeekly   = "weekly" // can idle a machine for days; another account is the remedy
+)
+
 // Checkin is one line of checkins.jsonl: what the supervisor saw and did.
 type Checkin struct {
 	Time    time.Time `json:"time"`
@@ -120,6 +126,11 @@ type Checkin struct {
 	// Until is when a limited worker is looked at again, or when a worker
 	// whose tool stopped on an error is told to continue.
 	Until time.Time `json:"until,omitzero"`
+	// Limit is which usage limit a limited worker is at, when its screen
+	// says, and Resets when the screen says it resets. Until may come
+	// sooner: a long limit is looked at again before it ends.
+	Limit  string    `json:"limit,omitempty"`
+	Resets time.Time `json:"resets,omitzero"`
 	// Rework is set when the issue was handed back to a worker because its
 	// pull request could not merge; it says why.
 	Rework string `json:"rework,omitempty"`

@@ -583,6 +583,30 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 		}
 		report.Workers = append(report.Workers, st)
 	}
+	if until, ok := allWeekly(report.Workers, res.Now); ok {
+		attend("every worker is at its weekly limit: switch the machine's account or wait until %s", until)
+	}
+}
+
+// allWeekly reports whether every worker is held at its weekly limit, and
+// when the first of them resets. Waiting can idle the machine for days.
+func allWeekly(workers []WorkerStatus, now time.Time) (string, bool) {
+	var first time.Time
+	for _, w := range workers {
+		if w.Last == nil || w.Last.Verdict != runlog.VerdictLimited || w.Last.Limit != runlog.LimitWeekly {
+			return "", false
+		}
+		if r := w.Last.Resets; r.After(now) && (first.IsZero() || r.Before(first)) {
+			first = r
+		}
+	}
+	if len(workers) == 0 {
+		return "", false
+	}
+	if first.IsZero() {
+		return "it resets", true
+	}
+	return first.In(now.Location()).Format("Mon 15:04"), true
 }
 
 func assessTasks(m config.Machine, res probe.Result, agentUp bool, report *MachineReport, attend func(string, ...any)) {

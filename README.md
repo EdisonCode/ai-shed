@@ -112,6 +112,7 @@ Guards against wasted tokens:
 - A session that exits three times in 30 minutes is not started a fourth time.
 - A failed check-in (`gh` is logged out, the reviewer command is broken) is retried after 10 minutes, not every tick.
 - A usage limit costs no nudges. A limited worker is left alone until its reset. A reviewer that is itself at its limit is tried again after 15 minutes and is not reported as a failure.
+- A limited worker's line names the limit its screen shows and when it resets: `weekly limit, resets Wed 18:00 (in 46h), held for up to another 6h`. A 5-hour limit means wait. A weekly limit can idle a machine for days, so when every worker of a machine is at its weekly limit, `shed status` and the digest list the machine under what needs you: `switch the machine's account or wait until Wed 18:00`.
 - A limit may end before the time the screen names: you reset the usage, or bought more. The screen does not change when that happens, so the hold on a limited worker ends early in three ways:
   - `shed resume <machine>` ends it for every worker of the machine, and `shed resume <machine> <worker>` for one. The worker is looked at within a minute and told to continue. A worker that was at no limit is left as it is.
   - The worker's screen moves. A worker at its limit prints nothing, so one that prints is reviewed like any other.
@@ -759,6 +760,7 @@ and the two typed commands to what that tool understands.
 | issue waits on you | a comment asks for a decision, a look or a review, and nothing answers it |
 | cannot read the release state | a `repos` commit command failed or did not print a commit, or GitHub could not be asked |
 | cannot tell which merged work staging serves | GitHub could not say whether staging has a merge commit; the counts stand, but a look that is due shows as waiting for staging |
+| every worker is at its weekly limit | the whole machine waits days for a reset; log it in to an account with room, or wait |
 | eye checks are due on staging | merged work is on staging, owes a look, and no worker has `eye_checks` |
 | the eye check is blocked | a worker could not do it and said why; clear the cause and comment `Eyes unblocked`, or look yourself |
 | issues queued and no worker is running | there is a backlog and nobody is on it |

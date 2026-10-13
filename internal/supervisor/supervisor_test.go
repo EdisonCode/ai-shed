@@ -895,6 +895,34 @@ func TestLimitedWorkerIsLeftAloneUntilItsLimitResets(t *testing.T) {
 	}
 }
 
+func TestLimitedWorkerRecordsWhichLimitAndWhenItResets(t *testing.T) {
+	f := started(t, config.Supervisor{}, limited(46*60))
+	f.term.screen = "You've hit your weekly limit · resets Oct 14, 6pm"
+	f.tick(2 * time.Minute)
+	c := f.lastCheckin(t)
+	if c.Limit != runlog.LimitWeekly || !c.Resets.Equal(f.now.Add(46*time.Hour)) {
+		t.Fatalf("check-in = %+v, want the weekly limit resetting in 46h", c)
+	}
+	if !c.Until.Equal(f.now.Add(limitLongest)) {
+		t.Fatalf("held until %s, want the longest hold: the worker is still looked at again", c.Until)
+	}
+}
+
+func TestLimitKindIsReadFromTheScreen(t *testing.T) {
+	for screen, want := range map[string]string{
+		"You've hit your weekly limit · resets Oct 14, 6pm":            runlog.LimitWeekly,
+		"Opus weekly limit reached ∙ resets Wed 6pm":                   runlog.LimitWeekly,
+		"5-hour limit reached ∙ resets 3am":                            runlog.LimitFiveHour,
+		"You've hit your session limit · resets 3pm":                   runlog.LimitFiveHour,
+		"weekly limit is near\n...\n5-hour limit reached ∙ resets 3am": runlog.LimitFiveHour,
+		"Claude usage limit reached. Your limit will reset at 3pm.":    "",
+	} {
+		if got := limitKind(screen); got != want {
+			t.Errorf("limitKind(%q) = %q, want %q", screen, got, want)
+		}
+	}
+}
+
 func TestLimitResumeInsideTheCacheKeepsTheContext(t *testing.T) {
 	f := started(t, config.Supervisor{CacheTTL: "2h"}, limited(30), nudge("Your limit has reset. Continue with #12."))
 	f.tick(2 * time.Minute)

@@ -35,6 +35,9 @@ type Verdict struct {
 	// ResumeInMinutes is, for a limited worker, how long until its limit
 	// resets; 0 when the screen does not say.
 	ResumeInMinutes int `json:"resume_in_minutes"`
+	// Limit is which usage limit the screen names. It is read from the
+	// screen, not from the reviewer.
+	Limit string `json:"-"`
 }
 
 // Reviewer judges a worker from the review prompt.
