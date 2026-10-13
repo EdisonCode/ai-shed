@@ -16,6 +16,19 @@ import (
 	"github.com/edisoncode/ai-shed/internal/pricing"
 )
 
+// ReviewerLedger is the ledger of the reviewer's own calls. A worker's name
+// cannot start with "_", so it is no worker's.
+const ReviewerLedger = "_reviewer"
+
+// RecordReviewerUsage adds the reviewer's calls to its ledger.
+func RecordReviewerUsage(dir string, calls []Usage) error {
+	found := make(map[string]Usage, len(calls))
+	for _, u := range calls {
+		found[u.ID] = u
+	}
+	return appendUsage(dir, ReviewerLedger, found)
+}
+
 // UsageDir holds one ledger per worker: the tokens its tool reported, and
 // the transcript files those tokens were read from.
 const UsageDir = "usage"

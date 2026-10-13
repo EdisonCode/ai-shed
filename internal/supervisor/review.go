@@ -346,10 +346,14 @@ func clip(s string, max int) string {
 }
 
 // CommandReviewer asks a command-line model: the prompt goes to stdin, the
-// answer comes from stdout. Dir is where the command runs.
+// answer comes from stdout. Dir is where the command runs. A command that
+// prints Claude Code's JSON result (`claude -p --output-format json`) is
+// unwrapped, and with UsageDir set its tokens are recorded in the
+// reviewer's ledger there.
 type CommandReviewer struct {
-	Command string
-	Dir     string
+	Command  string
+	Dir      string
+	UsageDir string
 }
 
 func (r CommandReviewer) Review(ctx context.Context, prompt string) (Verdict, error) {
@@ -360,7 +364,7 @@ func (r CommandReviewer) Review(ctx context.Context, prompt string) (Verdict, er
 	return ParseVerdict(answer)
 }
 
-// Ask runs the command with the prompt on stdin and returns what it printed.
+// Ask runs the command with the prompt on stdin and returns its answer.
 func (r CommandReviewer) Ask(ctx context.Context, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, reviewTimeout)
 	defer cancel()
@@ -370,8 +374,43 @@ func (r CommandReviewer) Ask(ctx context.Context, prompt string) (string, error)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("reviewer command: %w: %s", err, clip(strings.TrimSpace(stderr.String()+" "+string(out)), 300))
+	answer, calls, wrapped := unwrapResult(out, time.Now())
+	if wrapped && r.UsageDir != "" && len(calls) > 0 {
+		// The answer does not wait on the ledger.
+		_ = runlog.RecordReviewerUsage(r.UsageDir, calls)
 	}
-	return string(out), nil
+	if err != nil {
+		return "", fmt.Errorf("reviewer command: %w: %s", err, clip(strings.TrimSpace(stderr.String()+" "+answer), 300))
+	}
+	return answer, nil
+}
+
+// unwrapResult reads Claude Code's JSON result: the answer, and one call per
+// model with its tokens. Output that is not such a result is the answer as
+// it is, with wrapped false.
+func unwrapResult(out []byte, now time.Time) (answer string, calls []runlog.Usage, wrapped bool) {
+	var res struct {
+		Type       string `json:"type"`
+		Result     string `json:"result"`
+		SessionID  string `json:"session_id"`
+		ModelUsage map[string]struct {
+			Input      int `json:"inputTokens"`
+			Output     int `json:"outputTokens"`
+			CacheRead  int `json:"cacheReadInputTokens"`
+			CacheWrite int `json:"cacheCreationInputTokens"`
+		} `json:"modelUsage"`
+	}
+	trimmed := bytes.TrimSpace(out)
+	if !bytes.HasPrefix(trimmed, []byte("{")) || json.Unmarshal(trimmed, &res) != nil || res.Type != "result" {
+		return string(out), nil, false
+	}
+	session := res.SessionID
+	if session == "" {
+		session = now.UTC().Format(time.RFC3339Nano)
+	}
+	for model, u := range res.ModelUsage {
+		calls = append(calls, runlog.Usage{ID: session + "/" + model, Time: now, Session: res.SessionID, Model: model,
+			Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite})
+	}
+	return res.Result, calls, true
 }

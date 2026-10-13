@@ -132,7 +132,7 @@ func renderUsage(w io.Writer, d Digest) {
 					if t.Priced {
 						cost = dollars(t.Dollars)
 					}
-					fmt.Fprintf(tw, "  %s\t%s\t%s\tin %s\twrite %s\tread %s\tout %s\t%s\n", mu.Machine, wu.Worker, model,
+					fmt.Fprintf(tw, "  %s\t%s\t%s\tin %s\twrite %s\tread %s\tout %s\t%s\n", mu.Machine, workerWord(wu.Worker), model,
 						count(t.Input), count(t.CacheWrite), count(t.CacheRead), count(t.Output), cost)
 				}
 			}
@@ -164,7 +164,9 @@ func renderUsage(w io.Writer, d Digest) {
 			}
 			tw.Flush()
 		}
-		fmt.Fprintln(w, "  The reviewer's own calls are not counted.")
+		if !reviewerCounted(d) {
+			fmt.Fprintln(w, "  The reviewer's own calls are not counted: its command must print JSON (claude -p --output-format json).")
+		}
 	}
 
 	var limited []string
@@ -176,6 +178,26 @@ func renderUsage(w io.Writer, d Digest) {
 	if len(limited) > 0 {
 		fmt.Fprintf(w, "\nIdle at a usage limit: %s\n", strings.Join(limited, ", "))
 	}
+}
+
+// workerWord names a ledger in the usage table: the reviewer's is not a
+// worker's.
+func workerWord(ledger string) string {
+	if ledger == runlog.ReviewerLedger {
+		return "(reviewer)"
+	}
+	return ledger
+}
+
+func reviewerCounted(d Digest) bool {
+	for _, mu := range d.Usage {
+		for _, wu := range mu.Summary.Workers {
+			if wu.Worker == runlog.ReviewerLedger {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func dollars(d float64) string {

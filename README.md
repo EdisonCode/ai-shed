@@ -722,7 +722,7 @@ A model with no rate shows `no published rate` and is left out of the total.
 The numbers are read from the session transcript the tool's hooks point at.
 They are not the worker's own estimate. A few calls the tool keeps only in
 memory are missing, and the comment says so. The reviewer's own calls are
-not included.
+not included: the digest counts them on a line of their own.
 
 `shed mark` records the transcript whenever the hook passes one, and shed
 reads it again when it posts, so a turn that was still being written is
@@ -754,7 +754,7 @@ set and this one is not, the worker's line carries
 
 ```yaml
 supervisor:
-  command: claude -p --model sonnet   # the reviewer: prompt on stdin, answer on stdout
+  command: claude -p --model sonnet --output-format json   # the reviewer: prompt on stdin, answer on stdout
   cache_ttl: 5m
   scope_every: 30m
   when_cold: clear                    # or: resume
@@ -1166,10 +1166,16 @@ Usage at API rates: $41.80 (a subscription does not pay this price; it weighs th
 Merged pull requests with a cost: 6 of 7, median $3.10
   my-org/my-app#140  $9.20  Show the total on the order page
   ...
-  The reviewer's own calls are not counted.
+  mac-mini  (reviewer)  sonnet-5-5  in 3.1M  write 1.2M  read 22M  out 190k  $9.90
 
 Idle at a usage limit: mac-mini 40.1h
 ```
+
+The reviewer's calls have a line of their own, `(reviewer)`, when its
+command prints Claude Code's JSON result (`--output-format json`, the
+default): shed takes the answer from it and records the tokens of each
+model. A command that prints plain text still works; the digest then says
+the reviewer's calls are not counted.
 
 The dollars are the published API rates, as on the cost comments: the
 weights that make tokens of different kinds and models comparable. A merged

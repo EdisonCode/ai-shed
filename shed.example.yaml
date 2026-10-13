@@ -143,7 +143,7 @@ supervisor:
   # rest on a branch from that pull request's branch.
   # stack: true
   # The reviewer: any command that reads a prompt on stdin and prints an answer.
-  command: claude -p --model sonnet
+  command: claude -p --model sonnet --output-format json
   # How long a worker's prompt cache stays warm on your plan. shed cannot see
   # the cache; a worker that has been silent longer than this is "cold".
   cache_ttl: 5m
