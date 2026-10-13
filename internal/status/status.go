@@ -630,7 +630,14 @@ func unsupervised(m config.Machine, windows []probe.Window) []string {
 // when the first of them resets. Waiting can idle the machine for days.
 func allWeekly(workers []WorkerStatus, now time.Time) (string, bool) {
 	var first time.Time
+	builders := 0
 	for _, w := range workers {
+		// A worker that only answers questions spends little and is not
+		// what the machine is for.
+		if w.Ask {
+			continue
+		}
+		builders++
 		if w.Last == nil || w.Last.Verdict != runlog.VerdictLimited || w.Last.Limit != runlog.LimitWeekly {
 			return "", false
 		}
@@ -638,7 +645,7 @@ func allWeekly(workers []WorkerStatus, now time.Time) (string, bool) {
 			first = r
 		}
 	}
-	if len(workers) == 0 {
+	if builders == 0 {
 		return "", false
 	}
 	if first.IsZero() {

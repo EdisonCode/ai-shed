@@ -849,6 +849,11 @@ func TestMachineWithEveryWorkerAtItsWeeklyLimitNeedsTheOwner(t *testing.T) {
 	res.Checkins = []runlog.Checkin{weeklyLimited("app"), weeklyLimited("api")}
 	wantAttention(t, Assess(two, signals, now, res, nil),
 		"every worker is at its weekly limit: switch the machine's account or wait until "+now.Add(46*time.Hour).Format("Mon 15:04"))
+
+	// A worker that only answers questions does not keep the machine busy.
+	two.Workers[1].Ask = true
+	res.Checkins = []runlog.Checkin{weeklyLimited("app")}
+	wantAttention(t, Assess(two, signals, now, res, nil), "every worker is at its weekly limit")
 }
 
 func TestLimitedWorkerThatWorkedSinceDoesNotShowTheOldReason(t *testing.T) {
