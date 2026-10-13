@@ -643,6 +643,23 @@ A message about the issue already in hand never clears anything, and the
 first issue of a session is not cleared, since that context is already empty.
 The agent remembers the issue in hand across its own restarts.
 
+### Clear a large context inside an issue
+
+```yaml
+supervisor:
+  recycle_context: 300000   # tokens
+```
+
+`fresh_per_issue` clears between issues, not inside a long one, where each
+turn re-reads a context that grew through planning, building, review and
+fixes. With `recycle_context`, once the last call of the worker's own
+session carried more context than this, the agent clears it at the next
+hand-off where the worker is idle: the message that sends it on starts with
+"Your context was cleared", and the worker picks the work up from the
+issue, the branch and the pull request. The check-in records the size it
+was cleared at. The cost comment gives the ratio of cache reads to output,
+so an issue that carried a large context through many turns stands out.
+
 ### Standing orders
 
 `defaults.standing_orders` is text that goes into every worker's brief on

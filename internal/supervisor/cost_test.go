@@ -126,6 +126,18 @@ func TestCostCommentFlagsSubAgentsThatRanOffTheIssuesModel(t *testing.T) {
 	}
 }
 
+func TestCostCommentGivesTheRatioOfCacheReadsToOutput(t *testing.T) {
+	checkins := []runlog.Checkin{{Time: t0, Worker: "app", Sent: true, Issue: 12, Verdict: runlog.VerdictNudge}}
+	usage := []runlog.Usage{
+		{ID: "a", Time: t0.Add(time.Minute), Model: "claude-opus-5-5", CacheRead: 15_700_000, Output: 52_000},
+		{ID: "b", Time: t0.Add(2 * time.Minute), Model: "claude-sonnet-5-5", CacheRead: 300_000, Output: 8_000},
+	}
+	body, _ := formatCost(12, checkins, "app", usage, nil)
+	if want := "Cache read to output: 267 to 1."; !strings.Contains(body, want) {
+		t.Fatalf("body lacks %q:\n%s", want, body)
+	}
+}
+
 type fakeCost struct {
 	repos  []string
 	prs    []int

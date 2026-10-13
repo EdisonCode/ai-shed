@@ -142,6 +142,9 @@ supervisor:
   # lists what is still to do, keep the worker on the issue: it builds the
   # rest on a branch from that pull request's branch.
   # stack: true
+  # Optional. Clear a worker's context at its next idle hand-off once its
+  # session carries more than this many tokens of context.
+  # recycle_context: 300000
   # The reviewer: any command that reads a prompt on stdin and prints an answer.
   command: claude -p --model sonnet --output-format json
   # How long a worker's prompt cache stays warm on your plan. shed cannot see

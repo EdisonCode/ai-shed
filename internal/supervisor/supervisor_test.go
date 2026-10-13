@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -670,6 +671,44 @@ func TestALabelThatSwitchesRunsTheWholeSessionOnItsModelAndTheNextIssueSwitchesB
 	sent := f.handOver()
 	if len(sent) != 3 || sent[0] != "/clear" || sent[1] != "/model opus" || !strings.HasSuffix(sent[2], "The model for this issue is opus.") {
 		t.Fatalf("sent = %q, want the session back on opus and told the model", sent)
+	}
+}
+
+func recordContext(t *testing.T, f *fixture, id string, at time.Time, context int) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	line := `{"type":"assistant","timestamp":"` + at.UTC().Format(time.RFC3339) + `","message":{"id":"` + id + `","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":` + strconv.Itoa(context) + `,"output_tokens":5}}}`
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runlog.RecordTranscript(f.StateDir, "app", path, "s"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestALargeContextIsClearedAtTheNextIdleHandOff(t *testing.T) {
+	f := started(t, config.Supervisor{RecycleContext: 200_000}, assign(12), nudge("Go on with #12: open the pull request."), nudge("Go on with #12: answer the review."))
+	f.tick(2 * time.Minute) // #12 is handed over
+	recordContext(t, f, "m1", f.now, 450_000)
+	sent := f.handOver()
+	if len(sent) != 2 || sent[0] != "/clear" || sent[1] != reorient+"Go on with #12: open the pull request." {
+		t.Fatalf("sent = %q, want the context cleared before the nudge", sent)
+	}
+	if c := f.lastCheckin(t); c.Context != 450_010 {
+		t.Fatalf("check-in = %+v, want the context size it was cleared at", c)
+	}
+	// The same large call is not a reason to clear again.
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Go on with #12: answer the review."}) {
+		t.Fatalf("sent = %q, want the nudge alone", sent)
+	}
+}
+
+func TestASmallContextIsKept(t *testing.T) {
+	f := started(t, config.Supervisor{RecycleContext: 200_000}, assign(12), nudge("Go on with #12."))
+	f.tick(2 * time.Minute)
+	recordContext(t, f, "m1", f.now, 50_000)
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Go on with #12."}) {
+		t.Fatalf("sent = %q", sent)
 	}
 }
 

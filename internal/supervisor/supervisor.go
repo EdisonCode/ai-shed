@@ -195,6 +195,9 @@ type LookReader interface {
 // costs a working worker nothing: no extra review and no repeated message.
 type workerState struct {
 	briefChecked bool
+	// contextSince is when the worker's context was last emptied: calls
+	// before it say nothing of the context it carries now.
+	contextSince time.Time
 	// held is a hand-over that waits for the machine to have room.
 	held *heldHandOver
 	// limitedUntil is set while the worker is at a usage limit. Nothing is
@@ -604,6 +607,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 	st.waiting = false
 	// What did not help the last session says nothing about this one.
 	st.nudges = nil
+	st.contextSince = now
 	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: runlog.VerdictStarted, Message: command, Sent: true})
 	return nil
 }
@@ -789,7 +793,15 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	// already empty.
 	fresh := newIssue && w.FreshPerIssue && st.worked
 	coldClear := c.Cold && s.Settings.ClearWhenCold()
-	cleared := switchModel || fresh || coldClear
+	big := s.contextOver(w, st, idle)
+	cleared := switchModel || fresh || coldClear || big > 0
+	if big > 0 {
+		c.Context = big
+		c.Reason += fmt.Sprintf("; its context had grown to %s tokens, so it was cleared", spellCount(big))
+	}
+	if cleared {
+		st.contextSince = now
+	}
 	switch {
 	case cleared:
 		if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
@@ -995,6 +1007,25 @@ func (s *Supervisor) command(w config.Worker, line string) error {
 	return nil
 }
 
+// contextOver returns the context the idle worker's session carries when
+// it is over the fleet's recycle_context; 0 when it is not, or when the
+// worker is not idle. A failure to read the ledger keeps the context.
+func (s *Supervisor) contextOver(w config.Worker, st *workerState, idle time.Duration) int {
+	limit := s.Settings.RecycleContext
+	if limit <= 0 || idle < settle {
+		return 0
+	}
+	n, err := runlog.LastContext(s.StateDir, w.Name, st.contextSince)
+	if err != nil {
+		s.Logf("worker %s: context: %v", w.Name, err)
+		return 0
+	}
+	if n <= limit {
+		return 0
+	}
+	return n
+}
+
 // recycleRequested reports whether the owner asked for a fresh session for
 // the worker, and whether they asked for it at once.
 func (s *Supervisor) recycleRequested(worker string) (pending, immediately bool) {
@@ -1088,11 +1119,16 @@ func (s *Supervisor) recover(worker string) *workerState {
 		if c.Worker != worker {
 			continue
 		}
+		// A message that starts by saying the context was cleared empties it.
+		if c.Sent && strings.HasPrefix(c.Message, reorient) {
+			st.contextSince = c.Time
+		}
 		st.recent = append(st.recent, c)
 		st.noted(c)
 		st.reviewerLimited = false
 		switch {
 		case c.Verdict == runlog.VerdictStarted:
+			st.contextSince = c.Time
 			// A new session: nothing in hand, the model its command gave it.
 			st.issue, st.look, st.model, st.briefStale = 0, false, "", false
 			st.task, st.worked = "", false

@@ -120,6 +120,11 @@ type Supervisor struct {
 	// branch from that pull request's. Without it the worker takes another
 	// issue while the review waits.
 	Stack bool `yaml:"stack"`
+	// RecycleContext clears a worker's context at its next idle hand-off
+	// once its session's last call carried more than this many tokens of
+	// context. Every turn re-reads that context, so it is most of the spend
+	// of a long issue. 0 never clears for size.
+	RecycleContext int `yaml:"recycle_context"`
 }
 
 // NoWorkAfterOrZero is how long a worker may have no work before the owner

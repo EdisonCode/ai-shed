@@ -251,6 +251,15 @@ func formatCost(issue int, checkins []runlog.Checkin, worker string, usage []run
 		}
 		b.WriteString(". A subscription does not pay this price; it weighs the kinds of token as the published rates do.\n")
 	}
+	read, output := 0, 0
+	for _, t := range totals {
+		read, output = read+t.CacheRead, output+t.Output
+	}
+	if output > 0 && read > 0 {
+		// Each turn re-reads the context: a high ratio is a long context
+		// carried through many turns.
+		fmt.Fprintf(&b, "\nCache read to output: %d to 1.\n", (read+output/2)/output)
+	}
 	agents, dispatches, subCalls := agentSplit(issue, checkins, worker, usage, prices)
 	if words := agentWords(agents, withPrices); words != "" {
 		fmt.Fprintf(&b, "\n%s\n", words)

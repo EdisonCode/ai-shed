@@ -159,6 +159,23 @@ func RefreshUsage(dir, worker string) error {
 	return first
 }
 
+// LastContext is the context the worker's own session carried on its last
+// call after since: uncached input, cache writes and cache reads. 0 when no
+// call of its session was recorded after since.
+func LastContext(dir, worker string, since time.Time) (int, error) {
+	calls, err := ReadUsage(dir, worker)
+	if err != nil {
+		return 0, err
+	}
+	var last Usage
+	for _, u := range calls {
+		if u.Agent == "" && u.Time.After(since) && !u.Time.Before(last.Time) {
+			last = u
+		}
+	}
+	return last.Input + last.CacheWrite + last.CacheRead, nil
+}
+
 // ReadUsage returns the worker's calls, one per id. A call written twice
 // keeps the larger token counts. A missing ledger is no calls.
 func ReadUsage(dir, worker string) ([]Usage, error) {
