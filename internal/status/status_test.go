@@ -1054,3 +1054,22 @@ func TestDigestCountsTheReviewerAsItsOwnLine(t *testing.T) {
 		t.Fatalf("digest:\n%s", out.String())
 	}
 }
+
+func TestStatusShowsEachMachinesPaceAndEachAccountsTotal(t *testing.T) {
+	report := func(name string, spend, line float64, state string) MachineReport {
+		res := healthy()
+		res.Pace = &runlog.Pace{Account: "max", Budget: 400, Share: 200, Spend: spend, Line: line, State: state}
+		return Assess(config.Machine{Name: name}, signals, now, res, nil)
+	}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{report("box", 120, 100, runlog.PaceAhead), report("mini", 60, 100, runlog.PaceOn)}, nil)
+	for _, want := range []string{
+		"pace     $120.00 of a $200.00 share this week, pace line $100.00: ahead, only priority work is handed out",
+		"pace     $60.00 of a $200.00 share this week, pace line $100.00: on pace",
+		"Account max: $180.00 of $400.00 this week, pace line $200.00 (box, mini)",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}

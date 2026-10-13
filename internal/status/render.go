@@ -26,6 +26,7 @@ func Render(w io.Writer, reports []MachineReport, repos []RepoReport) {
 		total += len(r.Attention)
 		fmt.Fprintln(w)
 	}
+	renderAccounts(w, reports)
 	for _, r := range repos {
 		renderRepo(w, r)
 		total += len(r.Attention())
@@ -84,6 +85,44 @@ func renderRepo(w io.Writer, r RepoReport) {
 	}
 	for _, a := range r.Attention() {
 		fmt.Fprintf(w, "  ! %s\n", a)
+	}
+}
+
+// paceWords says what each pace state does to the hand-outs.
+var paceWords = map[string]string{
+	runlog.PaceOn:       "on pace",
+	runlog.PaceAhead:    "ahead, only priority work is handed out",
+	runlog.PaceFarAhead: "far ahead, new work is held on all but a few workers",
+}
+
+// renderAccounts totals the pace of each account over its machines. Each
+// machine is paced to its own share; the account's limit is what they
+// spend together.
+func renderAccounts(w io.Writer, reports []MachineReport) {
+	type total struct {
+		budget, spend, line float64
+		machines            []string
+	}
+	var names []string
+	totals := map[string]*total{}
+	for _, r := range reports {
+		if r.Probe == nil || r.Probe.Pace == nil {
+			continue
+		}
+		p := r.Probe.Pace
+		t := totals[p.Account]
+		if t == nil {
+			t = &total{budget: p.Budget}
+			totals[p.Account] = t
+			names = append(names, p.Account)
+		}
+		t.spend += p.Spend
+		t.line += p.Line
+		t.machines = append(t.machines, r.Name)
+	}
+	for _, name := range names {
+		t := totals[name]
+		fmt.Fprintf(w, "Account %s: $%.2f of $%.2f this week, pace line $%.2f (%s)\n\n", name, t.spend, t.budget, t.line, strings.Join(t.machines, ", "))
 	}
 }
 
@@ -170,6 +209,9 @@ func renderMachine(w io.Writer, r MachineReport) {
 		fmt.Fprintf(w, "%s  %s  load %.2f/%d  disk %d%%  agent %s\n", r.Name, r.Host, p.Load1, p.Cores, p.DiskUsedPct, agentWord(r))
 		if p.Account != "" {
 			fmt.Fprintf(w, "  account  %s%s\n", p.Account, r.sharedWith)
+		}
+		if pc := p.Pace; pc != nil {
+			fmt.Fprintf(w, "  pace     $%.2f of a $%.2f share this week, pace line $%.2f: %s\n", pc.Spend, pc.Share, pc.Line, paceWords[pc.State])
 		}
 		if !p.PausedUntil.IsZero() {
 			fmt.Fprintf(w, "  paused   for another %s: nothing is handed out and no worker is nudged\n", Short(p.PausedUntil.Sub(p.Now)))

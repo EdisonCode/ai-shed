@@ -190,7 +190,12 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 	reader := &looks.Reader{GitHub: looks.GH{}, Now: time.Now, Run: func(ctx context.Context, command string) (string, error) {
 		return looks.Shell(ctx, m.Command(command))
 	}}
+	var account *config.Account
+	if a, ok := cfg.AccountOf(m.Name); ok {
+		account = &a
+	}
 	return &supervisor.Supervisor{
+		Account:        account,
 		Repos:          cfg.Repos,
 		Looks:          reader,
 		Machine:        m,

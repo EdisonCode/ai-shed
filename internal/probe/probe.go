@@ -43,6 +43,9 @@ type Result struct {
 	// its own state file; "" when it names none. Machines with one account
 	// share one usage limit.
 	Account string `json:"account,omitempty"`
+	// Pace is the agent's last reading of the machine's spend against its
+	// share of its account's weekly budget; nil when it is in no account.
+	Pace *runlog.Pace `json:"pace,omitempty"`
 }
 
 // Task is a one-off task's file on the machine. Where is the worker it waits
@@ -78,6 +81,7 @@ echo "@@disk $(df -Pk "$HOME" | tail -n 1)"
 const footer = `tmux list-windows -a -F '@@win|#{window_activity}|#{session_name}|#{pane_current_command}|#{window_name}' 2>/dev/null
 s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.HeartbeatFile + `" ] && echo "@@heartbeat $(cat "$s/` + runlog.HeartbeatFile + `")"
+[ -f "$s/` + runlog.PaceFile + `" ] && echo "@@pace $(cat "$s/` + runlog.PaceFile + `")"
 [ -f "$s/` + runlog.RunsFile + `" ] && tail -n 200 "$s/` + runlog.RunsFile + `" | sed 's/^/@@run /'
 [ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 500 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
 [ -d "$s/` + runlog.RecycleDir + `" ] && ls "$s/` + runlog.RecycleDir + `" | sed 's/^/@@recycle /'
@@ -126,6 +130,10 @@ func Parse(out string, checks []config.Check) (Result, error) {
 		switch tag {
 		case "@@now":
 			res.Now = epoch(rest)
+		case "@@pace":
+			if p, ok, err := runlog.ParsePace([]byte(rest)); err == nil && ok {
+				res.Pace = &p
+			}
 		case "@@account":
 			res.Account = strings.TrimSpace(rest)
 		case "@@cores":

@@ -41,6 +41,75 @@ type Config struct {
 	// in place of the published one, or adds a model shed has no price for.
 	// The rates weigh the tokens in cost comments and the digest.
 	Pricing map[string]pricing.Rate `yaml:"pricing"`
+	// Accounts names the machines that share one Claude account, and so one
+	// weekly limit, with a budget to pace the week to.
+	Accounts []Account `yaml:"accounts"`
+}
+
+// Account is a Claude account that some machines share.
+type Account struct {
+	Name     string   `yaml:"name"`
+	Machines []string `yaml:"machines"`
+	// WeeklyBudget is what the account may spend in a week, in US dollars at
+	// the published API rates: the same weights as the cost comments.
+	WeeklyBudget float64 `yaml:"weekly_budget"`
+	// Resets is when the weekly limit starts again, on the machines' clock,
+	// as "Wed 18:00".
+	Resets string `yaml:"resets"`
+	// HoldAllBut is how many workers of a machine may still take new work
+	// when the account is far ahead of its pace. Nil is 1.
+	HoldAllBut *int `yaml:"hold_all_but"`
+}
+
+const resetLayout = "Mon 15:04"
+
+// Share is a machine's part of the weekly budget: each machine's agent sees
+// only its own spend, so each is paced to an equal share.
+func (a Account) Share() float64 {
+	if len(a.Machines) == 0 {
+		return 0
+	}
+	return a.WeeklyBudget / float64(len(a.Machines))
+}
+
+// HoldAllButOrDefault is how many workers keep taking work far ahead of pace.
+func (a Account) HoldAllButOrDefault() int {
+	if a.HoldAllBut == nil {
+		return 1
+	}
+	return *a.HoldAllBut
+}
+
+// WeekStart is the last reset at or before now, in now's location.
+func (a Account) WeekStart(now time.Time) time.Time {
+	at, err := time.Parse(resetLayout, a.Resets)
+	if err != nil {
+		return now.Add(-7 * 24 * time.Hour)
+	}
+	start := time.Date(now.Year(), now.Month(), now.Day(), at.Hour(), at.Minute(), 0, 0, now.Location())
+	for start.Weekday() != weekdayOf(a.Resets) || start.After(now) {
+		start = start.AddDate(0, 0, -1)
+	}
+	return start
+}
+
+func weekdayOf(resets string) time.Weekday {
+	for d := time.Sunday; d <= time.Saturday; d++ {
+		if strings.HasPrefix(resets, d.String()[:3]) {
+			return d
+		}
+	}
+	return time.Sunday
+}
+
+// AccountOf returns the account the machine is in.
+func (c *Config) AccountOf(machine string) (Account, bool) {
+	for _, a := range c.Accounts {
+		if slices.Contains(a.Machines, machine) {
+			return a, true
+		}
+	}
+	return Account{}, false
 }
 
 // Prices is the published price table with the fleet file's rates in it.
@@ -707,6 +776,30 @@ func (c *Config) validate() error {
 	}
 	if a := c.Supervisor.Models.Apply; a != "" && a != ModelSwitch && a != ModelTell {
 		fail("supervisor: models.apply %q must be %s or %s", a, ModelSwitch, ModelTell)
+	}
+	inAccount := map[string]string{}
+	for _, a := range c.Accounts {
+		if a.Name == "" {
+			fail("accounts: every account needs a name")
+		}
+		if a.WeeklyBudget <= 0 {
+			fail("accounts: %s: weekly_budget must be a positive amount in dollars at API rates", a.Name)
+		}
+		if _, err := time.Parse(resetLayout, a.Resets); err != nil {
+			fail("accounts: %s: resets %q must be a day and a time, such as \"Wed 18:00\"", a.Name, a.Resets)
+		}
+		if a.HoldAllBut != nil && *a.HoldAllBut < 0 {
+			fail("accounts: %s: hold_all_but must not be negative", a.Name)
+		}
+		for _, m := range a.Machines {
+			if _, ok := c.Machine(m); !ok {
+				fail("accounts: %s: machine %q is not in the fleet file", a.Name, m)
+			}
+			if other, ok := inAccount[m]; ok {
+				fail("accounts: machine %s is in both %s and %s", m, other, a.Name)
+			}
+			inAccount[m] = a.Name
+		}
 	}
 	mixed := false
 	for label, a := range c.Supervisor.Models.ApplyLabels {

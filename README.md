@@ -1076,6 +1076,46 @@ starts a new one, which reads the brief and is handed the next issue.
 A scheduled task that is running when the agent restarts is stopped and
 recorded as stopped.
 
+### Pacing a week
+
+Every worker on an account runs at full speed until the account reaches its
+weekly limit, and then all of them idle until the reset, with the week's
+budget spent on whatever came first. With `accounts`, shed paces the week:
+
+```yaml
+accounts:
+  - name: max-1
+    machines: [mac-mini, linux-box]   # the machines logged in to this account
+    weekly_budget: 400                # dollars at API rates, as on the cost comments
+    resets: Wed 18:00                 # when the weekly limit starts again, machine time
+    hold_all_but: 1                   # optional: workers that keep taking work far ahead of pace
+```
+
+Each machine's agent sees only its own spend, so each is paced to an equal
+share of the budget: here $200. The pace line is that share times the part
+of the week gone since the reset. When the machine has spent more:
+
+- **ahead**: only issues with a label from their source's `priority` list
+  are handed out;
+- **far ahead** (more than a quarter of the share over the line): new work
+  is held while `hold_all_but` other workers of the machine have some.
+
+Work already started is never held: the issue in hand, rework, an answered
+question, stacked work and eye checks. The reviewer sees why an issue is
+held. `shed status` shows each machine's spend against its line and each
+account's total:
+
+```
+mac-mini  me@mac-mini  load 1.20/8  disk 41%  agent ok
+  account  me@example.com  (one usage limit with linux-box)
+  pace     $120.00 of a $200.00 share this week, pace line $100.00: ahead, only priority work is handed out
+
+Account max-1: $180.00 of $400.00 this week, pace line $200.00 (mac-mini, linux-box)
+```
+
+Pick the budget from what a week of your plan has bought: the digest's
+`Usage at API rates` over `-since 168h` for a week that ended at the limit.
+
 ### Switching a machine's account
 
 When a machine's Claude account reaches its weekly limit, it can move to an

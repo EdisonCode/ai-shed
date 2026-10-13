@@ -79,6 +79,12 @@ type QueueItem struct {
 	// Remaining. Empty when it may not.
 	Stack     string
 	Remaining []string
+	// Paced says why the item is not handed out while the account is ahead
+	// of its weekly pace; empty when it may be.
+	Paced string
+	// priority is set when the issue has a label of its source's priority
+	// list.
+	priority bool
 	// PR is the pull request the issue's latest hand-back named; 0 for none.
 	PR    int
 	claim string
@@ -89,7 +95,7 @@ type QueueItem struct {
 // Workable reports whether a worker can act on the item: it needs a worker
 // again, it is an eye check, or it does not wait on the owner.
 func (q QueueItem) Workable() bool {
-	return q.Rework != "" || q.Look != "" || len(q.Waiting) == 0
+	return q.Rework != "" || q.Look != "" || (len(q.Waiting) == 0 && q.Paced == "")
 }
 
 // resumes reports whether the item is started work that came back to a
@@ -198,6 +204,9 @@ func Prompt(in ReviewInput) string {
 		}
 		if q.Look != "" {
 			fmt.Fprintf(&b, " [eye check: %s]", q.Look)
+		}
+		if q.Paced != "" {
+			fmt.Fprintf(&b, " [held: %s]", q.Paced)
 		}
 		if q.Stack != "" {
 			fmt.Fprintf(&b, " [stack: %s; build what is still to do on a branch from it: %s]", q.Stack, strings.Join(q.Remaining, "; "))

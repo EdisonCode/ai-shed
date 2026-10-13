@@ -220,3 +220,11 @@ signals:
     # A hand-back with no pull request ("**PR:** none") has nothing to review.
     clear: ["none"]
     follows_pr: true
+
+# Optional. Pace a shared account through its week, so the weekly limit is
+# not spent on whatever came first. Each machine gets an equal share.
+# accounts:
+#   - name: max-1
+#     machines: [linux-box]
+#     weekly_budget: 400      # dollars at API rates
+#     resets: Wed 18:00       # when the weekly limit starts again

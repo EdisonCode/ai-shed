@@ -394,3 +394,46 @@ func TestMixedApplyNeedsTheSessionModel(t *testing.T) {
 		t.Fatal("an apply_labels value that is neither switch nor tell was accepted")
 	}
 }
+
+const twoMachines = "machines:\n  - name: box\n    host: local\n  - name: mini\n    host: me@mini\n"
+
+func TestAnAccountSharesItsWeeklyBudgetAmongItsMachines(t *testing.T) {
+	cfg, err := Parse([]byte(twoMachines + "accounts:\n  - name: max\n    machines: [box, mini]\n    weekly_budget: 400\n    resets: Wed 18:00\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := cfg.AccountOf("mini")
+	if !ok || a.Name != "max" || a.Share() != 200 || a.HoldAllButOrDefault() != 1 {
+		t.Fatalf("account = %+v, %v", a, ok)
+	}
+	if _, ok := cfg.AccountOf("pc"); ok {
+		t.Fatal("a machine in no account has one")
+	}
+}
+
+func TestTheWeekStartsAtTheLastReset(t *testing.T) {
+	a := Account{Resets: "Wed 18:00"}
+	loc := time.FixedZone("PDT", -7*60*60)
+	for now, want := range map[time.Time]time.Time{
+		time.Date(2026, 10, 12, 9, 0, 0, 0, loc):  time.Date(2026, 10, 7, 18, 0, 0, 0, loc),  // Monday
+		time.Date(2026, 10, 14, 17, 0, 0, 0, loc): time.Date(2026, 10, 7, 18, 0, 0, 0, loc),  // Wednesday, before
+		time.Date(2026, 10, 14, 19, 0, 0, 0, loc): time.Date(2026, 10, 14, 18, 0, 0, 0, loc), // Wednesday, after
+	} {
+		if got := a.WeekStart(now); !got.Equal(want) {
+			t.Errorf("week of %s starts %s, want %s", now, got, want)
+		}
+	}
+}
+
+func TestAccountsAreChecked(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown machine": "accounts:\n  - name: a\n    machines: [pc]\n    weekly_budget: 1\n    resets: Wed 18:00\n",
+		"no budget":       "accounts:\n  - name: a\n    machines: [box]\n    resets: Wed 18:00\n",
+		"bad reset":       "accounts:\n  - name: a\n    machines: [box]\n    weekly_budget: 1\n    resets: someday\n",
+		"in two accounts": "accounts:\n  - name: a\n    machines: [box]\n    weekly_budget: 1\n    resets: Wed 18:00\n  - name: b\n    machines: [box]\n    weekly_budget: 1\n    resets: Wed 18:00\n",
+	} {
+		if _, err := Parse([]byte(twoMachines + body)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

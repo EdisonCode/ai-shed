@@ -203,3 +203,11 @@ func TestProbeReadsTheAccountTheToolIsLoggedInAs(t *testing.T) {
 		t.Fatalf("account = %q", res.Account)
 	}
 }
+
+func TestParseReadsThePace(t *testing.T) {
+	out := "@@now 1790000000\n@@pace {\"account\":\"max\",\"share\":200,\"spend\":120,\"line\":100,\"state\":\"ahead\"}\n@@end\n"
+	res, err := Parse(out, nil)
+	if err != nil || res.Pace == nil || res.Pace.Account != "max" || res.Pace.State != "ahead" {
+		t.Fatalf("pace = %+v, %v", res.Pace, err)
+	}
+}
