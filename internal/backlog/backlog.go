@@ -299,6 +299,9 @@ type Ask struct {
 	// hand-back says what it waits for, as in "#41 (draft: waits for #40)".
 	// Such a pull request is not ready for the owner to review.
 	WaitsFor string `json:"waits_for,omitempty"`
+	// Effect is what answering the ask does: returns, in grace, read or
+	// merge. Empty when it was not worked out.
+	Effect string `json:"effect,omitempty"`
 }
 
 // What names the ask and the pull request it waits on, as in "review #41".

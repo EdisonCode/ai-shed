@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -109,7 +110,7 @@ func TestIssueWaitingOnDecisionNeedsOwner(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{window("app-7", 3*time.Hour)}
 	r := Assess(config.Machine{}, signals, now, res, []backlog.Issue{issue(7, "## Hand-back\nDecisions needed: 1. which one?")})
-	wantAttention(t, r, "org/app#7 waits on you (decision)")
+	wantAttention(t, r, "org/app#7 waits on you (decision; returns to a worker)")
 	if r.Issues[0].State != Waiting {
 		t.Fatalf("state = %s", r.Issues[0].State)
 	}
@@ -138,7 +139,7 @@ func TestRenderTotalsWhatWaitsOnTheOwnerByKind(t *testing.T) {
 	var out bytes.Buffer
 	// The same issues are in the queue of two machines. They wait once.
 	Render(&out, []MachineReport{Assess(config.Machine{Name: "a"}, signals, now, healthy(), issues), Assess(config.Machine{Name: "b"}, signals, now, healthy(), issues)}, nil)
-	want := "Waiting on you: 2 review (oldest 5h), 1 eyes (oldest 40m), 1 decision (oldest 2h)."
+	want := "Waiting on you: 1 return to a worker (oldest 2h), 2 to read (oldest 5h)."
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("output lacks %q:\n%s", want, out.String())
 	}
@@ -622,7 +623,7 @@ func TestLookAWorkerWillDoIsNotTheOwnersBacklog(t *testing.T) {
 		wantTotals    string
 	}{
 		{"a worker does eye checks", true, nil, Look, ""},
-		{"no worker does them", false, []string{"org/app#7 waits on you (eyes)"}, Waiting, "Waiting on you: 1 eyes."},
+		{"no worker does them", false, []string{"org/app#7 waits on you (eyes)"}, Waiting, "Waiting on you: 1 to read."},
 	} {
 		c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{merged}}, Looks: &fakeLooks{report: state}}
 		report := c.CollectAll(context.Background(), withRepo(tc.eyeChecks))
@@ -693,7 +694,7 @@ func TestDigestSaysWhatMergedHowTheLooksWentAndWhatWaits(t *testing.T) {
 		"#3  PR #43  passed  3h ago  Show the total",
 		"#4  PR #44  FAILED  1h ago  Fix the thing",
 		"Waiting on you: 2",
-		"30h  decision    org/app#9  Fix the thing\n  2h   review #52  org/app#8  Fix the thing",
+		"  returns to a worker when you answer\n    30h  decision  org/app#9  Fix the thing\n  to read\n    2h  review #52  org/app#8  Fix the thing",
 		"Also needs you: 1\n  ! box: unreachable: connection timed out",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -1252,5 +1253,47 @@ func TestStatusGivesEachWorkersContextAndSaysWhenOneIsOverBudget(t *testing.T) {
 	Render(&out, []MachineReport{r}, nil)
 	if !strings.Contains(out.String(), "context  app 31k, docs 9k tokens before the first item") {
 		t.Fatalf("status:\n%s", out.String())
+	}
+}
+
+func TestWhatWaitsOnTheOwnerLeadsWithWhatAWorkerTakesAndCollapsesMerges(t *testing.T) {
+	asked := func(number int, ago time.Duration, comments ...string) backlog.Issue {
+		i := issue(number)
+		i.OpenPRs = map[int]backlog.PR{40 + number: {}}
+		i.Verify = true
+		for n, body := range comments {
+			i.Comments = append(i.Comments, backlog.Comment{Body: body, CreatedAt: now.Add(-ago + time.Duration(n)*time.Minute)})
+		}
+		return i
+	}
+	pr := func(n int) string { return "## Hand-back\n**PR:** #" + strconv.Itoa(40+n) + " (ready)" }
+	issues := []backlog.Issue{
+		asked(1, 30*time.Hour, pr(1), "Verified (low): ran the tests"),
+		asked(2, 20*time.Hour, pr(2), "Verified (high): tried to break it"),
+		asked(3, 2*time.Hour, "## Hand-back\nDecisions needed: 1. which one?"),
+		asked(4, 10*time.Hour, pr(4), "Verified (low): fine"),
+	}
+	res := healthy()
+	res.Checkins = []runlog.Checkin{
+		{Time: now.Add(-3 * time.Hour), Worker: "app", Kind: "idle", Verdict: runlog.VerdictNudge, Sent: true, Issue: 3},
+		{Time: now.Add(-time.Hour), Worker: "app", Kind: "idle", Verdict: runlog.VerdictDone},
+	}
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}
+	r := Assess(m, signals, now, res, issues)
+	if len(r.Attention) < 3 {
+		t.Fatalf("attention = %q", r.Attention)
+	}
+	wantInOrder := []string{
+		"org/app#3 waits on you (decision 2h; returns to app, which is idle)",
+		"org/app#2 waits on you (review #42 20h)",
+		"2 pull request(s) verified at low risk with green checks wait for your merge, oldest 30h: #1 #4",
+	}
+	for n, want := range wantInOrder {
+		if !strings.Contains(r.Attention[len(r.Attention)-3+n], want) {
+			t.Fatalf("attention = %q, want %q at %d", r.Attention, want, n)
+		}
+	}
+	if got := waitingTotals([]MachineReport{r}); got != "Waiting on you: 1 return to a worker (oldest 2h), 1 to read (oldest 20h), 2 to merge (oldest 30h)." {
+		t.Fatalf("totals = %q", got)
 	}
 }

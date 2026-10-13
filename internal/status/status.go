@@ -109,6 +109,10 @@ type IssueStatus struct {
 	// Held says why a queued issue is not handed out: an issue it depends on
 	// is open, or one in a worker's hands touches the same code.
 	Held string `json:"held,omitempty"`
+	// ReturnsTo is the worker an answer hands the issue back to, when it
+	// returns to one, and ReturnsIdle says that worker has no work now.
+	ReturnsTo   string `json:"returns_to,omitempty"`
+	ReturnsIdle bool   `json:"returns_idle,omitempty"`
 }
 
 // One-off task states.
@@ -402,9 +406,12 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 	}
 
 	queued, working := 0, 0
+	// What waits on the owner is told after the loop, in the order to
+	// answer it.
+	var waiting []IssueStatus
 	for _, issue := range issues {
 		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
-			State: Queued, Asks: backlog.Asks(issue, signals), Rework: backlog.Rework(issue, signals),
+			State: Queued, Asks: backlog.Effects(issue, signals, now), Rework: backlog.Rework(issue, signals),
 			Decided: backlog.Decided(issue, signals)}
 		workerLook := workerLooks[issueKey(issue.Repo, issue.Number)]
 		if workerLook {
@@ -441,7 +448,11 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		switch {
 		case len(st.Waiting) > 0:
 			st.State = Waiting
-			attend("%s#%d waits on you (%s): %s", issue.Repo, issue.Number, askWords(st.Asks, now), issue.Title)
+			if res != nil && effectOf(st.Asks) == backlog.EffectReturns {
+				st.ReturnsTo = runlog.Builder(res.Checkins, issue.Number)
+				st.ReturnsIdle = workerIdle(report.Workers, st.ReturnsTo)
+			}
+			waiting = append(waiting, st)
 		case st.Rework != "" && res != nil && runlog.ReworkSpent(res.Checkins, issue.Number, res.Now):
 			// A worker was sent back to it as often as allowed. It is the
 			// owner's now, whoever has it in hand.
@@ -479,6 +490,7 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		}
 		report.Issues = append(report.Issues, st)
 	}
+	attendWaiting(waiting, now, attend)
 	if line := noWork(report, now); line != "" {
 		// It goes above the rest: it is why the other lines matter.
 		report.Attention = append([]string{line}, report.Attention...)
@@ -507,9 +519,13 @@ func noWork(r MachineReport, now time.Time) string {
 		}
 	}
 	waiting, oldest := 0, time.Duration(0)
+	first, firstAt := 0, time.Time{}
 	for _, i := range r.Issues {
 		if len(i.Asks) > 0 {
 			waiting++
+		}
+		if t := oldestAsk(i.Asks); effectOf(i.Asks) == backlog.EffectReturns && (firstAt.IsZero() || t.Before(firstAt)) {
+			first, firstAt = i.Number, t
 		}
 		for _, a := range i.Asks {
 			if !a.Since.IsZero() {
@@ -526,6 +542,9 @@ func noWork(r MachineReport, now time.Time) string {
 	}
 	if oldest > 0 {
 		why += fmt.Sprintf(" (oldest %s)", Short(oldest))
+	}
+	if first != 0 {
+		why += fmt.Sprintf("; #%d goes back to a worker when you answer it", first)
 	}
 	return fmt.Sprintf("%d of %d workers have no work: %s", idle, builders, why)
 }
@@ -858,5 +877,85 @@ func AssessContext(report *MachineReport, m config.Machine, res probe.Result, bu
 		if n := res.Context[w.Name]; n > budget {
 			report.Attention = append(report.Attention, fmt.Sprintf("worker %s loads about %s tokens before its first item, over the context_budget of %s: shed context %s %s", w.Name, count(n), count(budget), m.Name, w.Name))
 		}
+	}
+}
+
+// effectOrder is the order the owner answers asks in: what frees a worker
+// first, then what is to be read, then merges, then decisions the worker
+// still has time on.
+var effectOrder = map[string]int{backlog.EffectReturns: 0, backlog.EffectRead: 1, "": 1, backlog.EffectMerge: 2, backlog.EffectGrace: 3}
+
+// effectOf is the effect of an issue's most urgent ask.
+func effectOf(asks []backlog.Ask) string {
+	best := ""
+	for n, a := range asks {
+		if n == 0 || effectOrder[a.Effect] < effectOrder[best] {
+			best = a.Effect
+		}
+	}
+	return best
+}
+
+// oldestAsk is when the issue's oldest ask was made.
+func oldestAsk(asks []backlog.Ask) time.Time {
+	var oldest time.Time
+	for _, a := range asks {
+		if !a.Since.IsZero() && (oldest.IsZero() || a.Since.Before(oldest)) {
+			oldest = a.Since
+		}
+	}
+	return oldest
+}
+
+// workerIdle reports whether the worker has no work now.
+func workerIdle(workers []WorkerStatus, name string) bool {
+	for _, w := range workers {
+		if w.Name == name {
+			return w.Last != nil && w.Last.Verdict == runlog.VerdictDone && w.Task == ""
+		}
+	}
+	return false
+}
+
+// attendWaiting tells what waits on the owner in the order to answer it:
+// returns first, oldest first inside each group. Merges that a verifier
+// passed at low risk are one line: a run of them must not bury a return.
+func attendWaiting(waiting []IssueStatus, now time.Time, attend func(string, ...any)) {
+	slices.SortStableFunc(waiting, func(a, b IssueStatus) int {
+		if d := effectOrder[effectOf(a.Asks)] - effectOrder[effectOf(b.Asks)]; d != 0 {
+			return d
+		}
+		return oldestAsk(a.Asks).Compare(oldestAsk(b.Asks))
+	})
+	var merges []string
+	var oldestMerge time.Time
+	for _, st := range waiting {
+		effect := effectOf(st.Asks)
+		if effect == backlog.EffectMerge {
+			merges = append(merges, fmt.Sprintf("#%d", st.Number))
+			if t := oldestAsk(st.Asks); oldestMerge.IsZero() || t.Before(oldestMerge) {
+				oldestMerge = t
+			}
+			continue
+		}
+		what := askWords(st.Asks, now)
+		switch {
+		case effect == backlog.EffectReturns && st.ReturnsTo != "" && st.ReturnsIdle:
+			what += "; returns to " + st.ReturnsTo + ", which is idle"
+		case effect == backlog.EffectReturns && st.ReturnsTo != "":
+			what += "; returns to " + st.ReturnsTo
+		case effect == backlog.EffectReturns:
+			what += "; returns to a worker"
+		case effect == backlog.EffectGrace:
+			what += "; the worker goes on with the rest until it parks"
+		}
+		attend("%s#%d waits on you (%s): %s", st.Repo, st.Number, what, st.Title)
+	}
+	if len(merges) > 0 {
+		age := ""
+		if !oldestMerge.IsZero() {
+			age = ", oldest " + Short(now.Sub(oldestMerge))
+		}
+		attend("%d pull request(s) verified at low risk with green checks wait for your merge%s: %s", len(merges), age, strings.Join(merges, " "))
 	}
 }
