@@ -152,6 +152,47 @@ func agentSplit(issue int, checkins []runlog.Checkin, worker string, usage []run
 	return agents, dispatches, subCalls
 }
 
+// issueModel is the model the issue was last handed over with; "" for none.
+func issueModel(issue int, checkins []runlog.Checkin, worker string) string {
+	model := ""
+	for _, c := range checkins {
+		if c.Worker == worker && c.Sent && c.Issue == issue && c.Model != "" {
+			model = c.Model
+		}
+	}
+	return model
+}
+
+// offModel names the sub-agents that ran on a model of another family than
+// the issue's, as "implementer (opus-5-5)". The worker's own session is left
+// out: one that is told the model orchestrates on its own.
+func offModel(agents []agentCost, model string) []string {
+	want := family(model)
+	var off []string
+	for _, a := range agents {
+		if a.agent == "" {
+			continue
+		}
+		var other []string
+		for _, m := range a.models {
+			if family(m) != want {
+				other = append(other, m)
+			}
+		}
+		if len(other) > 0 {
+			off = append(off, fmt.Sprintf("%s (%s)", a.agent, strings.Join(other, ", ")))
+		}
+	}
+	return off
+}
+
+// family is a model's line, as in sonnet for claude-sonnet-5-5 or sonnet.
+func family(model string) string {
+	short := runlog.ShortModel(model)
+	f, _, _ := strings.Cut(short, "-")
+	return f
+}
+
 // agentWords is the comment's line that splits the cost by agent, as in
 // "By agent: worker session $2.00 (opus-5-5); Explore $0.50 (haiku-5-5)".
 // "" when only the worker's session made calls.
@@ -210,9 +251,23 @@ func formatCost(issue int, checkins []runlog.Checkin, worker string, usage []run
 		}
 		b.WriteString(". A subscription does not pay this price; it weighs the kinds of token as the published rates do.\n")
 	}
+	read, output := 0, 0
+	for _, t := range totals {
+		read, output = read+t.CacheRead, output+t.Output
+	}
+	if output > 0 && read > 0 {
+		// Each turn re-reads the context: a high ratio is a long context
+		// carried through many turns.
+		fmt.Fprintf(&b, "\nCache read to output: %d to 1.\n", (read+output/2)/output)
+	}
 	agents, dispatches, subCalls := agentSplit(issue, checkins, worker, usage, prices)
 	if words := agentWords(agents, withPrices); words != "" {
 		fmt.Fprintf(&b, "\n%s\n", words)
+	}
+	if model := issueModel(issue, checkins, worker); model != "" {
+		if off := offModel(agents, model); len(off) > 0 {
+			fmt.Fprintf(&b, "\nRan on another model than the issue's (%s): %s.\n", model, strings.Join(off, "; "))
+		}
 	}
 	if dispatches > 0 && subCalls == 0 {
 		fmt.Fprintf(&b, "\n%d sub-agent(s) ran and none of their tokens were recorded: this count is partial. The worker's tool needs the SubagentStop hook that runs `shed mark usage`.\n", dispatches)

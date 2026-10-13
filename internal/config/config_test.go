@@ -370,3 +370,70 @@ func TestFleetFileRatesReplaceThePublishedOnes(t *testing.T) {
 		t.Fatalf("opus-5-5 output = %v (%v), want the fleet file's 2", got, ok)
 	}
 }
+
+func TestApplyCanBeSetPerLabel(t *testing.T) {
+	m := Models{Default: "opus", Labels: map[string]string{"model:sonnet": "sonnet"}, Apply: ModelTell,
+		ApplyLabels: map[string]string{"model:sonnet": ModelSwitch}, Session: "opus"}
+	if got := m.ApplyFor([]string{"bug", "model:sonnet"}); got != ModelSwitch {
+		t.Errorf("model:sonnet applies %q, want switch", got)
+	}
+	if got := m.ApplyFor([]string{"bug"}); got != ModelTell {
+		t.Errorf("an unlabelled issue applies %q, want the default tell", got)
+	}
+}
+
+func TestMixedApplyNeedsTheSessionModel(t *testing.T) {
+	base := "machines:\n  - name: box\n    host: local\nsupervisor:\n  models:\n    default: opus\n    apply: tell\n    labels: {model:sonnet: sonnet}\n    apply_labels: {model:sonnet: switch}\n"
+	if _, err := Parse([]byte(base)); err == nil || !strings.Contains(err.Error(), "models.session") {
+		t.Fatalf("err = %v, want models.session to be asked for", err)
+	}
+	if _, err := Parse([]byte(base + "    session: opus\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse([]byte(strings.Replace(base, "{model:sonnet: switch}", "{model:sonnet: maybe}", 1) + "    session: opus\n")); err == nil {
+		t.Fatal("an apply_labels value that is neither switch nor tell was accepted")
+	}
+}
+
+const twoMachines = "machines:\n  - name: box\n    host: local\n  - name: mini\n    host: me@mini\n"
+
+func TestAnAccountSharesItsWeeklyBudgetAmongItsMachines(t *testing.T) {
+	cfg, err := Parse([]byte(twoMachines + "accounts:\n  - name: max\n    machines: [box, mini]\n    weekly_budget: 400\n    resets: Wed 18:00\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := cfg.AccountOf("mini")
+	if !ok || a.Name != "max" || a.Share() != 200 || a.HoldAllButOrDefault() != 1 {
+		t.Fatalf("account = %+v, %v", a, ok)
+	}
+	if _, ok := cfg.AccountOf("pc"); ok {
+		t.Fatal("a machine in no account has one")
+	}
+}
+
+func TestTheWeekStartsAtTheLastReset(t *testing.T) {
+	a := Account{Resets: "Wed 18:00"}
+	loc := time.FixedZone("PDT", -7*60*60)
+	for now, want := range map[time.Time]time.Time{
+		time.Date(2026, 10, 12, 9, 0, 0, 0, loc):  time.Date(2026, 10, 7, 18, 0, 0, 0, loc),  // Monday
+		time.Date(2026, 10, 14, 17, 0, 0, 0, loc): time.Date(2026, 10, 7, 18, 0, 0, 0, loc),  // Wednesday, before
+		time.Date(2026, 10, 14, 19, 0, 0, 0, loc): time.Date(2026, 10, 14, 18, 0, 0, 0, loc), // Wednesday, after
+	} {
+		if got := a.WeekStart(now); !got.Equal(want) {
+			t.Errorf("week of %s starts %s, want %s", now, got, want)
+		}
+	}
+}
+
+func TestAccountsAreChecked(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown machine": "accounts:\n  - name: a\n    machines: [pc]\n    weekly_budget: 1\n    resets: Wed 18:00\n",
+		"no budget":       "accounts:\n  - name: a\n    machines: [box]\n    resets: Wed 18:00\n",
+		"bad reset":       "accounts:\n  - name: a\n    machines: [box]\n    weekly_budget: 1\n    resets: someday\n",
+		"in two accounts": "accounts:\n  - name: a\n    machines: [box]\n    weekly_budget: 1\n    resets: Wed 18:00\n  - name: b\n    machines: [box]\n    weekly_budget: 1\n    resets: Wed 18:00\n",
+	} {
+		if _, err := Parse([]byte(twoMachines + body)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

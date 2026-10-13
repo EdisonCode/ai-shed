@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/looks"
+	"github.com/edisoncode/ai-shed/internal/pricing"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
@@ -654,6 +656,138 @@ func TestOrchestratorIsToldTheModelAndNotSwitched(t *testing.T) {
 	}
 	if c := f.lastCheckin(t); c.Issue != 12 || c.Model != "sonnet" {
 		t.Fatalf("check-in = %+v", c)
+	}
+}
+
+func TestALabelThatSwitchesRunsTheWholeSessionOnItsModelAndTheNextIssueSwitchesBack(t *testing.T) {
+	mixed := config.Models{Default: "opus", Labels: map[string]string{"model:sonnet": "sonnet"}, Apply: config.ModelTell,
+		ApplyLabels: map[string]string{"model:sonnet": config.ModelSwitch}, Session: "opus"}
+	f := started(t, config.Supervisor{Models: mixed}, assign(12), assign(13))
+	f.lister.issues[0].Labels = append(f.lister.issues[0].Labels, backlog.Label{Name: "model:sonnet"})
+	f.lister.issues = append(f.lister.issues, backlog.Issue{Repo: "org/app", Number: 13, Title: "Design it", Labels: []backlog.Label{{Name: "machine:box"}}})
+	f.tick(2 * time.Minute)
+	if !slices.Equal(f.term.sent[:2], []string{"/clear", "/model sonnet"}) || strings.Contains(f.term.sent[2], "The model for this issue") {
+		t.Fatalf("sent = %q, want the session switched to sonnet and not told", f.term.sent)
+	}
+	sent := f.handOver()
+	if len(sent) != 3 || sent[0] != "/clear" || sent[1] != "/model opus" || !strings.HasSuffix(sent[2], "The model for this issue is opus.") {
+		t.Fatalf("sent = %q, want the session back on opus and told the model", sent)
+	}
+}
+
+func recordContext(t *testing.T, f *fixture, id string, at time.Time, context int) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	line := `{"type":"assistant","timestamp":"` + at.UTC().Format(time.RFC3339) + `","message":{"id":"` + id + `","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":` + strconv.Itoa(context) + `,"output_tokens":5}}}`
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runlog.RecordTranscript(f.StateDir, "app", path, "s"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestALargeContextIsClearedAtTheNextIdleHandOff(t *testing.T) {
+	f := started(t, config.Supervisor{RecycleContext: 200_000}, assign(12), nudge("Go on with #12: open the pull request."), nudge("Go on with #12: answer the review."))
+	f.tick(2 * time.Minute) // #12 is handed over
+	recordContext(t, f, "m1", f.now, 450_000)
+	sent := f.handOver()
+	if len(sent) != 2 || sent[0] != "/clear" || sent[1] != reorient+"Go on with #12: open the pull request." {
+		t.Fatalf("sent = %q, want the context cleared before the nudge", sent)
+	}
+	if c := f.lastCheckin(t); c.Context != 450_010 {
+		t.Fatalf("check-in = %+v, want the context size it was cleared at", c)
+	}
+	// The same large call is not a reason to clear again.
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Go on with #12: answer the review."}) {
+		t.Fatalf("sent = %q, want the nudge alone", sent)
+	}
+}
+
+func TestASmallContextIsKept(t *testing.T) {
+	f := started(t, config.Supervisor{RecycleContext: 200_000}, assign(12), nudge("Go on with #12."))
+	f.tick(2 * time.Minute)
+	recordContext(t, f, "m1", f.now, 50_000)
+	if sent := f.handOver(); !slices.Equal(sent, []string{"Go on with #12."}) {
+		t.Fatalf("sent = %q", sent)
+	}
+}
+
+// spent records calls of the worker's that cost this much at API rates:
+// Opus 5.5 output is $20 per million tokens.
+func spent(t *testing.T, f *fixture, dollars float64) {
+	t.Helper()
+	if err := runlog.RecordReviewerUsage(f.StateDir, []runlog.Usage{{ID: "spend", Time: f.now.Add(-time.Hour), Model: "claude-opus-5-5", Output: int(dollars / 20 * 1e6)}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendCheckin(t *testing.T, f *fixture, c runlog.Checkin) {
+	t.Helper()
+	if err := runlog.AppendCheckin(f.StateDir, c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func paced(f *fixture, budget float64) {
+	f.Account = &config.Account{Name: "max", Machines: []string{"box"}, WeeklyBudget: budget, Resets: f.now.Add(2*time.Minute - 84*time.Hour).Format("Mon 15:04")}
+	f.Prices = pricing.Default()
+	f.Machine.Issues[0].Priority = []string{"P1"}
+}
+
+func TestAheadOfPaceOnlyPriorityWorkIsHandedOut(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	paced(f, 200) // half the week gone: the pace line is $100
+	spent(t, f, 120)
+	f.lister.issues = []backlog.Issue{labeled(5), labeled(6, "P1")}
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	if !strings.Contains(prompt, "org/app#5 Issue [held: the account is ahead of its weekly pace ($120.00 spent, pace line $100.00); only priority work is handed out]") {
+		t.Fatalf("prompt:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "#6 Issue [held") {
+		t.Fatalf("priority work was held:\n%s", prompt)
+	}
+	p, ok, err := runlog.ReadPace(f.StateDir)
+	if err != nil || !ok || p.State != runlog.PaceAhead || p.Spend != 120 {
+		t.Fatalf("pace kept for status = %+v, %v, %v", p, ok, err)
+	}
+}
+
+func TestOnPaceNothingIsHeld(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	paced(f, 200)
+	spent(t, f, 80)
+	f.lister.issues = []backlog.Issue{labeled(5)}
+	f.tick(2 * time.Minute)
+	if strings.Contains(f.reviewer.prompts[0], "[held") {
+		t.Fatalf("prompt:\n%s", f.reviewer.prompts[0])
+	}
+}
+
+func TestFarAheadOfPaceNewWorkWaitsWhileAnotherWorkerHasSome(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	paced(f, 200)
+	spent(t, f, 160) // more than a quarter of the share over the line
+	f.Machine.Workers = append(f.Machine.Workers, config.Worker{Name: "docs", Dir: f.dir, Brief: "b"})
+	f.lister.issues = []backlog.Issue{labeled(6, "P1"), labeled(7)}
+	appendCheckin(t, f, runlog.Checkin{Time: f.now, Worker: "docs", Kind: "idle", Verdict: runlog.VerdictNudge, Sent: true, Issue: 7})
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	if !strings.Contains(prompt, "org/app#6 Issue [held: the account is far ahead of its weekly pace ($160.00 spent, pace line $100.00); 1 other worker has work, and new work is held on all but 1]") {
+		t.Fatalf("prompt:\n%s", prompt)
+	}
+}
+
+func TestPacingNeverHoldsTheIssueInHand(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(5), onTrack)
+	f.tick(2 * time.Minute) // #5 is handed over before the spend
+	paced(f, 200)
+	spent(t, f, 160)
+	f.term.running(f.now)
+	f.tick(2 * time.Minute)
+	if prompt := f.reviewer.prompts[len(f.reviewer.prompts)-1]; strings.Contains(prompt, "#5 Issue [held") {
+		t.Fatalf("the issue in hand was held:\n%s", prompt)
 	}
 }
 

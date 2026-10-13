@@ -5,6 +5,7 @@
 package supervisor
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -139,7 +140,11 @@ type Supervisor struct {
 	// Cost posts the tokens an issue cost onto the pull request its hand-back
 	// named. Nil posts nothing.
 	Cost CostPoster
-	// Prices weighs the tokens in the cost comment. Nil names tokens only.
+	// Account is the account the machine shares, with its weekly budget;
+	// nil paces nothing.
+	Account *config.Account
+	// Prices weighs the tokens in the cost comment and the pace. Nil names
+	// tokens only.
 	Prices      pricing.Table
 	QueueLabels []string
 	// Repos is what the fleet file says about each repository's deploys, and
@@ -168,6 +173,9 @@ type Supervisor struct {
 	// lowTold holds the queues the owner was told are short, by their
 	// sources.
 	lowTold map[string]bool
+	// pace is the last reading of the weekly pace, made at paceAt.
+	pace   runlog.Pace
+	paceAt time.Time
 	// wasPaused is whether the last tick found the machine paused, so that
 	// a pause is logged when it starts and when it ends.
 	wasPaused bool
@@ -194,6 +202,9 @@ type LookReader interface {
 // costs a working worker nothing: no extra review and no repeated message.
 type workerState struct {
 	briefChecked bool
+	// contextSince is when the worker's context was last emptied: calls
+	// before it say nothing of the context it carries now.
+	contextSince time.Time
 	// held is a hand-over that waits for the machine to have room.
 	held *heldHandOver
 	// limitedUntil is set while the worker is at a usage limit. Nothing is
@@ -603,6 +614,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 	st.waiting = false
 	// What did not help the last session says nothing about this one.
 	st.nudges = nil
+	st.contextSince = now
 	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: kind, Verdict: runlog.VerdictStarted, Message: command, Sent: true})
 	return nil
 }
@@ -774,13 +786,29 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	c.Message, c.Issue = verdict.Message, verdict.Issue
 	model := item.Model
 	c.Rework = item.Rework
-	tellOnly := s.Settings.Models.TellOnly()
+	apply := cmp.Or(item.Apply, s.Settings.Models.Apply)
+	tellOnly := apply == config.ModelTell
 	switchModel := newIssue && !tellOnly && model != "" && model != st.model
+	// A told issue after a switched one: the session goes back to the
+	// model it orchestrates on.
+	session := s.Settings.Models.Session
+	backToSession := newIssue && tellOnly && session != "" && st.model != "" && st.model != session
+	if backToSession {
+		switchModel, model = true, session
+	}
 	// The first issue of a session lands on a context that is
 	// already empty.
 	fresh := newIssue && w.FreshPerIssue && st.worked
 	coldClear := c.Cold && s.Settings.ClearWhenCold()
-	cleared := switchModel || fresh || coldClear
+	big := s.contextOver(w, st, idle)
+	cleared := switchModel || fresh || coldClear || big > 0
+	if big > 0 {
+		c.Context = big
+		c.Reason += fmt.Sprintf("; its context had grown to %s tokens, so it was cleared", spellCount(big))
+	}
+	if cleared {
+		st.contextSince = now
+	}
 	switch {
 	case cleared:
 		if err := s.command(w, s.Settings.ClearCommandOrDefault()); err != nil {
@@ -802,9 +830,9 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 		st.issue, st.look = verdict.Issue, item.Look != ""
 		st.task, st.worked = "", true
 	}
-	if tellOnly && model != "" {
-		c.Model = model
-		c.Message += fmt.Sprintf(modelTold, model)
+	if tellOnly && item.Model != "" {
+		c.Model = item.Model
+		c.Message += fmt.Sprintf(modelTold, item.Model)
 	}
 	if newIssue && item.Bumped {
 		c.Message += fmt.Sprintf(bumpTold, verdict.Issue)
@@ -986,6 +1014,104 @@ func (s *Supervisor) command(w config.Worker, line string) error {
 	return nil
 }
 
+// contextOver returns the context the idle worker's session carries when
+// it is over the fleet's recycle_context; 0 when it is not, or when the
+// worker is not idle. A failure to read the ledger keeps the context.
+func (s *Supervisor) contextOver(w config.Worker, st *workerState, idle time.Duration) int {
+	limit := s.Settings.RecycleContext
+	if limit <= 0 || idle < settle {
+		return 0
+	}
+	n, err := runlog.LastContext(s.StateDir, w.Name, st.contextSince)
+	if err != nil {
+		s.Logf("worker %s: context: %v", w.Name, err)
+		return 0
+	}
+	if n <= limit {
+		return 0
+	}
+	return n
+}
+
+// paceEvery is how often the week's spend is read again from the ledgers.
+const paceEvery = 5 * time.Minute
+
+// readPace returns where the machine's spend stands against its share of
+// the account's weekly budget, and keeps it for `shed status`. ok is false
+// when the machine is in no account or the ledgers cannot be read.
+func (s *Supervisor) readPace() (runlog.Pace, bool) {
+	if s.Account == nil {
+		return runlog.Pace{}, false
+	}
+	now := s.Now()
+	if !s.paceAt.IsZero() && now.Sub(s.paceAt) < paceEvery {
+		return s.pace, true
+	}
+	start := s.Account.WeekStart(now)
+	sum, err := runlog.Summarize(s.StateDir, start, now, s.Prices)
+	if err != nil {
+		s.Logf("pace: %v", err)
+		return runlog.Pace{}, false
+	}
+	spend := 0.0
+	for _, w := range sum.Workers {
+		spend += w.Dollars
+	}
+	s.pace = runlog.NewPace(s.Account.Name, s.Account.WeeklyBudget, s.Account.Share(), spend, start, now)
+	s.paceAt = now
+	if err := runlog.WritePace(s.StateDir, s.pace); err != nil {
+		s.Logf("pace: %v", err)
+	}
+	return s.pace, true
+}
+
+// applyPace holds new work while the account is ahead of its weekly pace.
+// Ahead, only priority work is handed out. Far ahead, new work waits while
+// hold_all_but other workers have some. Started work is never held: the
+// issue in hand, rework, a ruling, stacked work and eye checks.
+func (s *Supervisor) applyPace(w config.Worker, items []QueueItem, checkins []runlog.Checkin) {
+	p, ok := s.readPace()
+	if !ok || p.State == runlog.PaceOn {
+		return
+	}
+	inHand := 0
+	if st := s.workers[w.Name]; st != nil {
+		inHand = st.issue
+	}
+	busy := 0
+	latest := runlog.LatestCheckins(checkins)
+	for _, other := range s.Machine.Workers {
+		if other.Name == w.Name || other.Ask {
+			continue
+		}
+		if runlog.IssueInHand(checkins, other.Name) != 0 && latest[other.Name].Verdict != runlog.VerdictDone {
+			busy++
+		}
+	}
+	keep := s.Account.HoldAllButOrDefault()
+	numbers := fmt.Sprintf("($%.2f spent, pace line $%.2f)", p.Spend, p.Line)
+	for i := range items {
+		it := &items[i]
+		if it.Number == inHand || it.resumes() || it.Look != "" {
+			continue
+		}
+		switch {
+		case p.State == runlog.PaceFarAhead && busy >= keep:
+			it.Paced = fmt.Sprintf("the account is far ahead of its weekly pace %s; %d other worker%s work, and new work is held on all but %d",
+				numbers, busy, plural(busy, " has", "s have"), keep)
+		case !it.priority:
+			it.Paced = fmt.Sprintf("the account is ahead of its weekly pace %s; only priority work is handed out", numbers)
+		}
+	}
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 // recycleRequested reports whether the owner asked for a fresh session for
 // the worker, and whether they asked for it at once.
 func (s *Supervisor) recycleRequested(worker string) (pending, immediately bool) {
@@ -1079,11 +1205,16 @@ func (s *Supervisor) recover(worker string) *workerState {
 		if c.Worker != worker {
 			continue
 		}
+		// A message that starts by saying the context was cleared empties it.
+		if c.Sent && strings.HasPrefix(c.Message, reorient) {
+			st.contextSince = c.Time
+		}
 		st.recent = append(st.recent, c)
 		st.noted(c)
 		st.reviewerLimited = false
 		switch {
 		case c.Verdict == runlog.VerdictStarted:
+			st.contextSince = c.Time
 			// A new session: nothing in hand, the model its command gave it.
 			st.issue, st.look, st.model, st.briefStale = 0, false, "", false
 			st.task, st.worked = "", false
@@ -1203,6 +1334,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	if items, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
 	}
+	s.applyPace(w, items, checkins)
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
 		switch {
@@ -1230,7 +1362,9 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 // item is the queue item of an open issue from this source.
 func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []runlog.Checkin) QueueItem {
 	item := QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title, Waiting: backlog.Waiting(i, s.Signals),
-		Model: s.Settings.Models.For(i.LabelNames()), PR: backlog.HandedPR(i, s.Signals), rank: src.Rank(i.LabelNames())}
+		Model: s.Settings.Models.For(i.LabelNames()), Apply: s.Settings.Models.ApplyFor(i.LabelNames()),
+		PR: backlog.HandedPR(i, s.Signals), rank: src.Rank(i.LabelNames())}
+	item.priority = item.rank < len(src.Priority)
 	item.Ruled = backlog.Ruled(i, s.Signals)
 	for _, ask := range backlog.Asks(i, s.Signals) {
 		if grace := s.signal(ask.Name).GraceOrDefault(); grace > 0 && !ask.Since.IsZero() {
@@ -1451,20 +1585,27 @@ func (s *Supervisor) tellStarved(w config.Worker, st *workerState, queue []Queue
 	if s.Notify == nil {
 		return
 	}
-	workable, waiting := 0, 0
+	workable, waiting, held := 0, 0, 0
 	for _, q := range queue {
 		switch {
 		case q.Workable():
 			workable++
 		case len(q.Waiting) > 0:
 			waiting++
+		case q.Paced != "":
+			held++
 		}
+	}
+	paced := ""
+	if held > 0 {
+		paced = fmt.Sprintf(", and %d are held by the weekly pace", held)
 	}
 	if after := s.Settings.NoWorkAfterOrZero(); after > 0 && !st.noWorkTold && !st.doneSince.IsZero() && now.Sub(st.doneSince) >= after {
 		st.noWorkTold = true
-		s.Notify(w.Name, fmt.Sprintf("%s: worker %s has had no work for %s: %d issue(s) of its queue wait on you", s.Machine.Name, w.Name, spell(now.Sub(st.doneSince).Truncate(time.Minute)), waiting))
+		s.Notify(w.Name, fmt.Sprintf("%s: worker %s has had no work for %s: %d issue(s) of its queue wait on you%s", s.Machine.Name, w.Name, spell(now.Sub(st.doneSince).Truncate(time.Minute)), waiting, paced))
 	}
-	if s.Settings.LowQueue == 0 {
+	// A queue the pace holds back is short on purpose.
+	if s.Settings.LowQueue == 0 || held > 0 {
 		return
 	}
 	key := fmt.Sprint(s.Machine.SourcesFor(w))

@@ -109,6 +109,35 @@ func TestCostCommentSaysWhenSubAgentsRanAndWereNotCounted(t *testing.T) {
 	}
 }
 
+func TestCostCommentFlagsSubAgentsThatRanOffTheIssuesModel(t *testing.T) {
+	checkins := []runlog.Checkin{{Time: t0, Worker: "app", Sent: true, Issue: 12, Model: "sonnet", Verdict: runlog.VerdictNudge}}
+	usage := []runlog.Usage{
+		{ID: "a", Time: t0.Add(time.Minute), Model: "claude-opus-5-5", Output: 1000},
+		{ID: "b", Time: t0.Add(2 * time.Minute), Model: "claude-opus-5-5", Output: 1000, Agent: "implementer"},
+		{ID: "c", Time: t0.Add(3 * time.Minute), Model: "claude-sonnet-5-5", Output: 1000, Agent: "general-purpose"},
+	}
+	body, _ := formatCost(12, checkins, "app", usage, nil)
+	if want := "Ran on another model than the issue's (sonnet): implementer (opus-5-5)."; !strings.Contains(body, want) {
+		t.Fatalf("body lacks %q:\n%s", want, body)
+	}
+	usage[1].Model = "claude-sonnet-5-5"
+	if body, _ := formatCost(12, checkins, "app", usage, nil); strings.Contains(body, "another model") {
+		t.Fatalf("every sub-agent ran on the issue's model, yet:\n%s", body)
+	}
+}
+
+func TestCostCommentGivesTheRatioOfCacheReadsToOutput(t *testing.T) {
+	checkins := []runlog.Checkin{{Time: t0, Worker: "app", Sent: true, Issue: 12, Verdict: runlog.VerdictNudge}}
+	usage := []runlog.Usage{
+		{ID: "a", Time: t0.Add(time.Minute), Model: "claude-opus-5-5", CacheRead: 15_700_000, Output: 52_000},
+		{ID: "b", Time: t0.Add(2 * time.Minute), Model: "claude-sonnet-5-5", CacheRead: 300_000, Output: 8_000},
+	}
+	body, _ := formatCost(12, checkins, "app", usage, nil)
+	if want := "Cache read to output: 267 to 1."; !strings.Contains(body, want) {
+		t.Fatalf("body lacks %q:\n%s", want, body)
+	}
+}
+
 type fakeCost struct {
 	repos  []string
 	prs    []int

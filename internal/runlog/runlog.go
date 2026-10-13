@@ -131,6 +131,9 @@ type Checkin struct {
 	// sooner: a long limit is looked at again before it ends.
 	Limit  string    `json:"limit,omitempty"`
 	Resets time.Time `json:"resets,omitzero"`
+	// Context is set when the worker's context was cleared for its size:
+	// the tokens of context its last call carried.
+	Context int `json:"context,omitempty"`
 	// Rework is set when the issue was handed back to a worker because its
 	// pull request could not merge; it says why.
 	Rework string `json:"rework,omitempty"`

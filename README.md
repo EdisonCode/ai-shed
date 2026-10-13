@@ -605,6 +605,25 @@ an orchestrator and hands work to sub-agents on models it chooses itself, set
 Say in the standing orders what the worker does with that. Set the
 orchestrator's own model in the worker's `command`.
 
+An orchestrator told "sonnet" may still run its implementers on its own
+model. To run a plain implementation issue's whole session on its model and
+tell the rest, set `apply` per label:
+
+```yaml
+supervisor:
+  models:
+    default: opus
+    apply: tell
+    labels: { "model:sonnet": sonnet }
+    apply_labels: { "model:sonnet": switch }   # the session switches to sonnet
+    session: opus                               # and back to opus for a told issue
+```
+
+`session` is needed whenever some labels switch and others are told. The
+cost comment names any sub-agent that ran on another model than the issue's
+(`Ran on another model than the issue's (sonnet): implementer (opus-5-5)`),
+and the digest shows each worker's spend by model.
+
 ### Fresh context per issue
 
 ```yaml
@@ -623,6 +642,23 @@ learned on one issue helps with the next.
 A message about the issue already in hand never clears anything, and the
 first issue of a session is not cleared, since that context is already empty.
 The agent remembers the issue in hand across its own restarts.
+
+### Clear a large context inside an issue
+
+```yaml
+supervisor:
+  recycle_context: 300000   # tokens
+```
+
+`fresh_per_issue` clears between issues, not inside a long one, where each
+turn re-reads a context that grew through planning, building, review and
+fixes. With `recycle_context`, once the last call of the worker's own
+session carried more context than this, the agent clears it at the next
+hand-off where the worker is idle: the message that sends it on starts with
+"Your context was cleared", and the worker picks the work up from the
+issue, the branch and the pull request. The check-in records the size it
+was cleared at. The cost comment gives the ratio of cache reads to output,
+so an issue that carried a large context through many turns stands out.
 
 ### Standing orders
 
@@ -1039,6 +1075,46 @@ starts a new one, which reads the brief and is handed the next issue.
 
 A scheduled task that is running when the agent restarts is stopped and
 recorded as stopped.
+
+### Pacing a week
+
+Every worker on an account runs at full speed until the account reaches its
+weekly limit, and then all of them idle until the reset, with the week's
+budget spent on whatever came first. With `accounts`, shed paces the week:
+
+```yaml
+accounts:
+  - name: max-1
+    machines: [mac-mini, linux-box]   # the machines logged in to this account
+    weekly_budget: 400                # dollars at API rates, as on the cost comments
+    resets: Wed 18:00                 # when the weekly limit starts again, machine time
+    hold_all_but: 1                   # optional: workers that keep taking work far ahead of pace
+```
+
+Each machine's agent sees only its own spend, so each is paced to an equal
+share of the budget: here $200. The pace line is that share times the part
+of the week gone since the reset. When the machine has spent more:
+
+- **ahead**: only issues with a label from their source's `priority` list
+  are handed out;
+- **far ahead** (more than a quarter of the share over the line): new work
+  is held while `hold_all_but` other workers of the machine have some.
+
+Work already started is never held: the issue in hand, rework, an answered
+question, stacked work and eye checks. The reviewer sees why an issue is
+held. `shed status` shows each machine's spend against its line and each
+account's total:
+
+```
+mac-mini  me@mac-mini  load 1.20/8  disk 41%  agent ok
+  account  me@example.com  (one usage limit with linux-box)
+  pace     $120.00 of a $200.00 share this week, pace line $100.00: ahead, only priority work is handed out
+
+Account max-1: $180.00 of $400.00 this week, pace line $200.00 (mac-mini, linux-box)
+```
+
+Pick the budget from what a week of your plan has bought: the digest's
+`Usage at API rates` over `-since 168h` for a week that ended at the limit.
 
 ### Switching a machine's account
 
