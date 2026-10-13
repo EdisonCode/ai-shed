@@ -296,6 +296,9 @@ func renderMachine(w io.Writer, r MachineReport) {
 			if i.Rework != "" {
 				title += " (" + i.Rework + ")"
 			}
+			if i.Held != "" {
+				title += " (" + i.Held + ")"
+			}
 			for _, d := range i.Drafts {
 				title += " (" + d.What() + ")"
 			}

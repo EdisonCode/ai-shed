@@ -37,6 +37,7 @@ const (
 	Look    = "eye check" // its merged work waits for a worker to look at it on staging
 	Draft   = "draft"     // its pull request is a draft on purpose and says what it waits for
 	Merged  = "merged"    // its pull request merged and its hand-back lists nothing still to do; it is not handed out
+	Held    = "held"      // it waits for an issue it depends on, or for work in flight on the same code
 )
 
 // Task states.
@@ -104,6 +105,9 @@ type IssueStatus struct {
 	// `shed bump`, and BumpedTo names the worker it was moved to, if any.
 	Bumped   bool   `json:"bumped,omitempty"`
 	BumpedTo string `json:"bumped_to,omitempty"`
+	// Held says why a queued issue is not handed out: an issue it depends on
+	// is open, or one in a worker's hands touches the same code.
+	Held string `json:"held,omitempty"`
 }
 
 // One-off task states.
@@ -336,6 +340,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 	}
 
 	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
+	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels)
 	if probeErr != nil {
 		report.Error = probeErr.Error()
 		report.Attention = append([]string{"unreachable: " + probeErr.Error()}, report.Attention...)
@@ -783,5 +788,35 @@ func deployWords(d runlog.Deploy) string {
 		return fmt.Sprintf("failed (exit %d)", d.ExitCode)
 	default:
 		return "was not served within the hour"
+	}
+}
+
+// MarkHeld marks the queued issues that the supervisor holds back, with
+// why: an issue they depend on that is still open, or an issue a worker has
+// in hand that touches the same code. It reads what the supervisor reads.
+func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels string) {
+	byKey := map[string]backlog.Issue{}
+	for _, i := range issues {
+		byKey[issueKey(i.Repo, i.Number)] = i
+	}
+	for n := range report.Issues {
+		st := &report.Issues[n]
+		issue, ok := byKey[issueKey(st.Repo, st.Number)]
+		if st.State != Queued || !ok {
+			continue
+		}
+		if deps := backlog.OpenDeps(issue); len(deps) > 0 {
+			st.State, st.Held = Held, fmt.Sprintf("waits for %s to close", backlog.DepWords(deps, issue.Repo))
+			continue
+		}
+		for _, other := range report.Issues {
+			if other.State != Working || other.Repo != st.Repo {
+				continue
+			}
+			if why := backlog.Overlap(issue, byKey[issueKey(other.Repo, other.Number)], overlapLabels); why != "" {
+				st.State, st.Held = Held, fmt.Sprintf("overlaps #%d in hand: %s", other.Number, why)
+				break
+			}
+		}
 	}
 }
