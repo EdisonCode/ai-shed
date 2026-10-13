@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,5 +101,42 @@ func TestTheSameRuleInOtherWordsIsSaidTwice(t *testing.T) {
 	got := duplicates([]Source{a, b})
 	if len(got) != 1 || got[0].A.Line != 3 || got[0].B.Line != 3 {
 		t.Fatalf("duplicates = %+v, want the incremental-progress rule once", got)
+	}
+}
+
+func TestGitRefsAreNotStalePaths(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "app")
+	write(t, filepath.Join(dir, "CLAUDE.md"), "Branches are `feat/…`, `fix/...` or `docs/<topic>`. Rebase on `origin/main` or `upstream/main`. Release from `release/2026-10`.\n")
+	gitRun(t, dir, "init", "-q")
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "start")
+	gitRun(t, dir, "branch", "release/2026-10")
+	a := Run(context.Background(), dir, home, nil)
+	if len(a.Stale) != 0 {
+		t.Fatalf("stale = %+v, want none: each is a git ref", a.Stale)
+	}
+}
+
+func TestAMissingMemoryIndexIsReportedWhenASiblingCheckoutHasOne(t *testing.T) {
+	home := t.TempDir()
+	main := filepath.Join(home, "Projects", "my-app")
+	worker := filepath.Join(home, "Projects", "my-app-wt-app")
+	write(t, filepath.Join(worker, "CLAUDE.md"), "# my-app\n")
+	write(t, filepath.Join(home, ".claude", "projects", MemorySlug(main), "memory", "MEMORY.md"), "- a lesson\n")
+	write(t, filepath.Join(home, ".claude", "projects", MemorySlug(filepath.Join(home, "elsewhere")), "memory", "MEMORY.md"), "- not this repo\n")
+	gitRun(t, worker, "init", "-q")
+	gitRun(t, worker, "remote", "add", "origin", "git@github.com:org/my-app.git")
+	a := Run(context.Background(), worker, home, nil)
+	if len(a.Hints) != 1 || !strings.Contains(a.Hints[0], "memory: none for this directory") || !strings.Contains(a.Hints[0], MemorySlug(main)) {
+		t.Fatalf("hints = %q", a.Hints)
+	}
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 }

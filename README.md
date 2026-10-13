@@ -984,9 +984,25 @@ Stale references: 1
   and issues the text calls open that are closed. Only the repository's own
   sources and memory are checked; the global and parent files span other
   repositories.
+- **Memory is per directory.** Claude Code keys it by the working
+  directory, under `~/.claude/projects/<the directory, with / as ->`. A
+  fleet usually syncs one memory folder for a repository, under a main
+  checkout's path, and every worker runs in a checkout of its own: no
+  worker loads it, and nothing else says so. When a worker has no memory
+  index and another checkout of the same repository has one, `shed context`
+  says where it is. Link each worker's folder to the synced one in the
+  deploy hook:
+
+  ```sh
+  ln -sfn ~/.claude/projects/-home-me-Projects-my-app/memory \
+          ~/.claude/projects/-home-me-Projects-my-app-wt-app/memory
+  ```
+- Branch names in backticks (`origin/main`, `feat/…`, a branch the
+  checkout has) are git refs, not stale paths.
 - **Contradictions** are read by the reviewer model, on request, and are
   for you to settle. shed changes no source.
-- It exits 1 when it finds anything. `shed status` gives each worker's total
+- It exits 1 when it finds anything; the half that runs on the machine
+  exits 0 and puts its findings in the report. `shed status` gives each worker's total
   under `supervised`, measured when its session starts, and with
   `supervisor.context_budget: 20000` names a worker that loads more.
 
