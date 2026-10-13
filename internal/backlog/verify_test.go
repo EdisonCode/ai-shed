@@ -80,3 +80,22 @@ func TestAFailedVerificationSendsThePullRequestBack(t *testing.T) {
 		t.Fatalf("rework = %q", reason)
 	}
 }
+
+func TestAVerificationEscapedWhenTheOwnerOrAnEyeCheckFoundAFaultAfterIt(t *testing.T) {
+	signals := config.DefaultSignals()
+	i := verifying(handedBack, "Verified (low): ran the tests", "Owner ruling: the total is off by one",
+		handedBack, "Verification failed (high): still off by one", handedBack, "Verified (high): checked the totals", "Owner ruling: accepted")
+	got := VerifyOutcomes(i, signals)
+	want := []VerifyOutcome{
+		{Tier: "low", Passed: true, Escaped: "the owner sent it back"},
+		{Tier: "high", Passed: false},
+		{Tier: "high", Passed: true},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("outcomes = %+v, want %+v", got, want)
+	}
+	eyes := verifying(handedBack, "Verified (low): fine", "Eyes failed: the button is hidden on mobile")
+	if got := VerifyOutcomes(eyes, signals); len(got) != 1 || got[0].Escaped != "an eye check failed" {
+		t.Fatalf("outcomes = %+v", got)
+	}
+}

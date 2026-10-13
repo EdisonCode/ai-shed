@@ -86,3 +86,38 @@ func unverified(issue Issue, signals []config.Signal) bool {
 	}
 	return false
 }
+
+// VerifyOutcome is what came of one verification: it passed the work or sent
+// it back, and for a pass, what found a fault after it, if anything did.
+type VerifyOutcome struct {
+	Tier    string `json:"tier"`
+	Passed  bool   `json:"passed"`
+	Escaped string `json:"escaped,omitempty"`
+}
+
+// VerifyOutcomes reads every verification of the issue, in order. A pass
+// escaped when, before the next verification, the owner sent the work back
+// (an answer that is not an acceptance) or a look on staging failed: the
+// verifier passed something that was not right.
+func VerifyOutcomes(issue Issue, signals []config.Signal) []VerifyOutcome {
+	var out []VerifyOutcome
+	for _, c := range issue.Comments {
+		if m := verdictRE.FindStringSubmatch(c.Body); m != nil {
+			out = append(out, VerifyOutcome{Tier: strings.ToLower(m[2]), Passed: !strings.EqualFold(m[1], VerificationFailedPhrase)})
+			continue
+		}
+		if len(out) == 0 || !out[len(out)-1].Passed || out[len(out)-1].Escaped != "" {
+			continue
+		}
+		body := strings.ToLower(c.Body)
+		for _, s := range signals {
+			switch {
+			case s.FailedBy != "" && strings.Contains(body, strings.ToLower(s.FailedBy)):
+				out[len(out)-1].Escaped = "an eye check failed"
+			case s.SendsBack && s.AnsweredBy != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) && !accepts(c.Body, s):
+				out[len(out)-1].Escaped = "the owner sent it back"
+			}
+		}
+	}
+	return out
+}

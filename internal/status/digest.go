@@ -40,6 +40,9 @@ type Digest struct {
 	// Stages is where the time of each pull request merged in the window
 	// went, when the collector reads pull request times.
 	Stages []PullStages `json:"stages,omitempty"`
+	// Verification is how each risk tier's verifications went, over the
+	// issues closed in the window.
+	Verification []TierOutcome `json:"verification,omitempty"`
 	// Problems lists what could not be read.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -95,6 +98,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 		d.Merged = append(d.Merged, rm)
 	}
 	c.collectStages(ctx, &d)
+	c.collectEscapes(ctx, cfg, &d)
 	return d
 }
 
@@ -123,6 +127,7 @@ func RenderDigest(w io.Writer, d Digest) {
 	tw.Flush()
 
 	renderStages(w, d.Stages)
+	renderEscapes(w, d.Verification)
 
 	// What the idle time was lost to: each cause has its own remedy.
 	var idle []string
