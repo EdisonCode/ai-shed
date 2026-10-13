@@ -163,9 +163,16 @@ func renderMachine(w io.Writer, r MachineReport) {
 	if r.Probe != nil && len(r.Probe.Windows) > 0 {
 		fmt.Fprintln(w, "  windows")
 		for _, win := range r.Probe.Windows {
-			fmt.Fprintf(tw, "    %s:%s\t%s\tactive %s ago\n", win.Session, win.Name, windowCommand(r, win), Short(r.Probe.Now.Sub(win.LastActivity)))
+			mark := ""
+			if slices.Contains(r.Unsupervised, win.Session+":"+win.Name) {
+				mark = "\tunsupervised"
+			}
+			fmt.Fprintf(tw, "    %s:%s\t%s\tactive %s ago%s\n", win.Session, win.Name, windowCommand(r, win), Short(r.Probe.Now.Sub(win.LastActivity)), mark)
 		}
 		tw.Flush()
+		if n := len(r.Unsupervised); n > 0 {
+			fmt.Fprintf(w, "  %d unsupervised agent session(s) share this machine's account and CPU with its workers\n", n)
+		}
 	}
 	if len(r.Workers) > 0 && r.Probe != nil {
 		fmt.Fprintln(w, "  supervised")

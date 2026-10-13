@@ -5,6 +5,7 @@ package status
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -68,6 +69,10 @@ type MachineReport struct {
 	OneOff []TaskState `json:"one_off,omitempty"`
 	// Attention lists what needs the owner. Empty means the machine is on track.
 	Attention []string `json:"attention"`
+	// Unsupervised names the agent sessions on a machine with supervised
+	// workers that are not one of them, as "session:window". They share
+	// the machine's account and CPU with the workers.
+	Unsupervised []string `json:"unsupervised,omitempty"`
 	// Now is when the report was made, by the watcher's clock. The age of
 	// what waits on the owner is counted from it.
 	Now time.Time `json:"now"`
@@ -359,6 +364,7 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		assessTasks(m, *res, agentUp, &report, attend)
 		assessWorkers(m, *res, &report, attend)
 		assessOneOff(*res, &report)
+		report.Unsupervised = unsupervised(m, res.Windows)
 	}
 
 	queued, working := 0, 0
@@ -586,6 +592,38 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 	if until, ok := allWeekly(report.Workers, res.Now); ok {
 		attend("every worker is at its weekly limit: switch the machine's account or wait until %s", until)
 	}
+}
+
+// versionRE matches a process title that is a version number, as Claude
+// Code sets its own.
+var versionRE = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
+// unsupervised lists the windows on a machine with supervised workers that
+// run an agent tool and are not a worker's own: a manual session, or one
+// left from another workflow. An agent tool is one the fleet's workers run,
+// or a process titled with a version number.
+func unsupervised(m config.Machine, windows []probe.Window) []string {
+	if len(m.Workers) == 0 {
+		return nil
+	}
+	tools, workers := map[string]bool{"claude": true}, map[string]bool{}
+	for _, w := range m.Workers {
+		workers[w.Name] = true
+		if fields := strings.Fields(w.CommandOrDefault()); len(fields) > 0 {
+			tools[filepath.Base(fields[0])] = true
+		}
+	}
+	var names []string
+	for _, win := range windows {
+		if !tools[win.Command] && !versionRE.MatchString(win.Command) {
+			continue
+		}
+		if win.Session == workerSession && (workers[win.Name] || strings.HasPrefix(win.Name, "preflight-")) {
+			continue
+		}
+		names = append(names, win.Session+":"+win.Name)
+	}
+	return names
 }
 
 // allWeekly reports whether every worker is held at its weekly limit, and

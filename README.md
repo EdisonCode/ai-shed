@@ -774,6 +774,13 @@ and the two typed commands to what that tool understands.
 An issue counts as *working* when a tmux window on its machine has the issue
 number in its name (`app-123`).
 
+On a machine with supervised workers, a window that runs an agent tool and
+is not a worker's own is marked `unsupervised` under `windows`, with one
+line that counts them: a manual session, or one left from another workflow.
+It is not something shed asks of you, but it spends the same account limit
+and CPU as the workers. An agent tool is any tool the machine's workers run,
+or a process titled with a version number, as Claude Code titles its own.
+
 ### Waiting on you: comment signals
 
 A worker cannot ask you a question, so it writes one in its issue, in its

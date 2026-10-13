@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -342,6 +343,46 @@ func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestAgentSessionsOutsideTheFleetAreMarkedUnsupervised(t *testing.T) {
+	res := healthy()
+	res.Windows = []probe.Window{
+		{Session: "shed", Name: "app", Command: "2.1.289", LastActivity: now},
+		{Session: "shed", Name: "preflight-app", Command: "2.1.289", LastActivity: now},
+		{Session: "work", Name: "notes", Command: "2.1.289", LastActivity: now.Add(-6 * 24 * time.Hour)},
+		{Session: "work", Name: "old", Command: "claude", LastActivity: now.Add(-3 * time.Hour)},
+		{Session: "work", Name: "edit", Command: "vim", LastActivity: now},
+	}
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}
+	r := Assess(m, signals, now, res, nil)
+	wantAttention(t, r)
+	if want := []string{"work:notes", "work:old"}; !slices.Equal(r.Unsupervised, want) {
+		t.Fatalf("unsupervised = %q, want %q", r.Unsupervised, want)
+	}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	for _, want := range []string{
+		"work:notes          2.1.289  active 6d ago  unsupervised",
+		"2 unsupervised agent session(s) share this machine's account and CPU with its workers",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if (strings.Contains(line, "shed:app ") || strings.Contains(line, "shed:preflight-app")) && strings.Contains(line, "unsupervised") {
+			t.Fatalf("a window of shed's own is marked: %q", line)
+		}
+	}
+}
+
+func TestMachineWithNoSupervisedWorkersHasNoUnsupervisedSessions(t *testing.T) {
+	res := healthy()
+	res.Windows = []probe.Window{window("notes", time.Hour)}
+	if r := Assess(config.Machine{Name: "box"}, signals, now, res, nil); len(r.Unsupervised) != 0 {
+		t.Fatalf("unsupervised = %q on a machine where every session is the owner's", r.Unsupervised)
 	}
 }
 
