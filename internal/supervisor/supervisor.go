@@ -1810,6 +1810,7 @@ new brief.
 - Do not wait for an answer that nobody is there to give. The Choices section says which choices are yours and what to do with one that is not.
 - Write the plan in the issue when you choose the approach, and write the progress when a step lands. A usage limit or a cleared context can end a turn before you stop. What is not in the issue, the branch or a pull request is lost.
 - Run a long command in the foreground and wait for it. A command that must outlive your turn writes an exit marker when it ends, and you check for that marker with a timeout. A watcher built on ` + "`pgrep -f`" + ` matches its own command line and never ends. End every command you started before you hand back.
+- When you learned something about this repository or its tools that the next worker should know, and that is not in its instructions yet, add a ` + "`**Lessons:**`" + ` part to your hand-back, one entry per lesson: what to do, and why. Do not edit the repository's instructions or any memory for it: the owner reads the lessons and decides where each one belongs.
 - When nothing is left that you can act on, say so and stop. Do not invent work.
 `)
 	return b.String()
