@@ -60,7 +60,7 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"negative max_load", minimal + "    capacity: {max_load: -1}\n", "max_load"},
 		{"bad max_wait", minimal + "    capacity: {max_wait: later}\n", "max_wait"},
 		{"bad models.apply", minimal + "supervisor: {models: {apply: maybe}}\n", "models.apply"},
-		{"repo without a staging commit", minimal + "repos: [{repo: org/app}]\n", "staging.commit is required"},
+		{"repo without a staging commit", minimal + "repos: [{repo: org/app, production: {commit: x}}]\n", "staging.commit is required"},
 		{"duplicate repo", minimal + "repos: [{repo: org/app, staging: {commit: x}}, {repo: org/app, staging: {commit: x}}]\n", "duplicate entry"},
 		{"bad look_back", minimal + "repos: [{repo: org/app, staging: {commit: x}, look_back: 14d}]\n", "look_back"},
 		{"viewport that is not a size", minimal + "repos: [{repo: org/app, staging: {commit: x, viewport: wide}}]\n", "staging.viewport \"wide\" is not a size"},
@@ -434,6 +434,31 @@ func TestAccountsAreChecked(t *testing.T) {
 	} {
 		if _, err := Parse([]byte(twoMachines + body)); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestARepoMayBeListedForItsGatesAlone(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + "repos:\n  - repo: org/app\n    gates: {command: make lint test, timeout: 20m}\n"))
+	if err != nil {
+		t.Fatalf("a repo with gates and no staging: %v", err)
+	}
+	repo, _ := cfg.Repo("org/app")
+	if repo.Deployed() || repo.Gates.TimeoutOrDefault() != 20*time.Minute {
+		t.Fatalf("repo = %+v", repo)
+	}
+}
+
+func TestARepoNeedsStagingOrGatesAndAGatesTimeoutIsADuration(t *testing.T) {
+	for _, tc := range []struct{ repo, want string }{
+		{"{repo: org/app}", "give it staging or gates"},
+		{"{repo: org/app, gates: {command: make, timeout: soon}}", "gates.timeout"},
+		{"{repo: org/app, gates: {timeout: 5m}, staging: {commit: echo x}}", "gates.timeout needs gates.command"},
+		{"{repo: org/app, staging: {url: https://s.example.com}}", "staging.commit is required"},
+	} {
+		_, err := Parse([]byte(minimal + "repos: [" + tc.repo + "]\n"))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.repo, err, tc.want)
 		}
 	}
 }

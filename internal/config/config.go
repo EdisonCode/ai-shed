@@ -125,6 +125,26 @@ type Repo struct {
 	// LookBack is how far back merged work is looked for when production's
 	// commit is older than that, or is not known.
 	LookBack string `yaml:"look_back"`
+	// Gates is what the agent runs on the head commit of each pull request
+	// built on its machine.
+	Gates Gates `yaml:"gates"`
+}
+
+// Gates is a repository's fast checks: format, lint, unit tests, build. The
+// agent of the machine that built a pull request runs them on its head
+// commit and posts the result as the shed/gates commit status.
+type Gates struct {
+	// Command runs in a checkout of the commit, after the machine's init
+	// line. Exit 0 passes.
+	Command string `yaml:"command"`
+	Timeout string `yaml:"timeout"`
+}
+
+// DefaultGatesTimeout is how long a gate run may take.
+const DefaultGatesTimeout = 30 * time.Minute
+
+func (g Gates) TimeoutOrDefault() time.Duration {
+	return durationOr(g.Timeout, DefaultGatesTimeout)
 }
 
 // Environment is one place a repository is deployed to.
@@ -143,6 +163,13 @@ type Environment struct {
 
 // DefaultLookBack is how far back merged work is looked for.
 const DefaultLookBack = 14 * 24 * time.Hour
+
+// Deployed reports whether shed knows how to read what staging serves: the
+// release state and the eye checks need it. A repository may be listed for
+// its gates alone.
+func (r Repo) Deployed() bool {
+	return r.Staging.Commit != ""
+}
 
 func (r Repo) LookBackOrDefault() time.Duration {
 	return durationOr(r.LookBack, DefaultLookBack)
@@ -844,8 +871,20 @@ func (c *Config) validate() error {
 			fail("%s: duplicate entry", where)
 		}
 		repos[r.Name] = true
-		if r.Staging.Commit == "" {
+		deploys := r.Staging != (Environment{}) || r.Production != (Environment{}) || r.LookBack != ""
+		switch {
+		case deploys && r.Staging.Commit == "":
 			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
+		case !deploys && r.Gates.Command == "":
+			fail("%s: give it staging or gates, or leave it out", where)
+		}
+		if r.Gates.Timeout != "" {
+			if d, err := time.ParseDuration(r.Gates.Timeout); err != nil || d <= 0 {
+				fail("%s: gates.timeout %q is not a positive duration such as 20m", where, r.Gates.Timeout)
+			}
+		}
+		if r.Gates.Timeout != "" && r.Gates.Command == "" {
+			fail("%s: gates.timeout needs gates.command", where)
 		}
 		if r.Staging.Viewport != "" && !viewportRE.MatchString(r.Staging.Viewport) {
 			fail("%s: staging.viewport %q is not a size such as 1440x900", where, r.Staging.Viewport)

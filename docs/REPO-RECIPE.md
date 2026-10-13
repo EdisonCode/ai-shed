@@ -41,3 +41,24 @@ wrong, and neither may be able to do damage by being wrong.**
 2. Open a pull request with a failing test. Merging must be blocked.
 3. Push a commit that fails lint from the worker machine. The pre-push hook must stop it.
 4. Confirm the worker machine has no production credentials.
+
+## A merge queue
+
+Per-pull-request CI tests a branch against the main branch as it was when
+the branch was made. With several workers merging in a day, what lands is a
+combination that nobody tested, and each merge sends the other open pull
+requests through a rebase and another full run.
+
+A merge queue tests what will land: each pull request on top of the ones
+queued before it. Run the full suite there, and only there:
+
+1. Turn on the merge queue in the main branch's protection rules, and make
+   the full suite a required check.
+2. Run the full suite's workflow on `merge_group`. A required check must
+   also report on the pull request, so give the pull request a light job of
+   the same name, or run there only what the gates do not cover.
+3. Give the repository `gates` in the fleet file. The machine that built the
+   pull request runs them on every push, in minutes, on warm caches.
+
+The gates catch most failures before the queue; the queue catches the rest
+on the real combination, where no worker can post a status for it.

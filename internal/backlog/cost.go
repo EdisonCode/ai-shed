@@ -15,9 +15,15 @@ const CostMarker = "<!-- shed-cost -->"
 
 // PostCost creates the cost comment on the pull request, or replaces the
 // one shed posted before. The body must contain CostMarker.
-func (GH) PostCost(ctx context.Context, repo string, pr int, body string) error {
-	if !strings.Contains(body, CostMarker) {
-		return fmt.Errorf("gh comment %s#%d: cost comment has no marker", repo, pr)
+func (g GH) PostCost(ctx context.Context, repo string, pr int, body string) error {
+	return g.PostMarked(ctx, repo, pr, CostMarker, body)
+}
+
+// PostMarked creates a comment on the issue or pull request, or replaces the
+// last one that carries the same marker. The body must contain the marker.
+func (GH) PostMarked(ctx context.Context, repo string, pr int, marker, body string) error {
+	if !strings.Contains(body, marker) {
+		return fmt.Errorf("gh comment %s#%d: comment has no marker %s", repo, pr, marker)
 	}
 	listed, err := ghAPI(ctx, "GET", fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repo, pr), nil)
 	if err != nil {
@@ -27,7 +33,7 @@ func (GH) PostCost(ctx context.Context, repo string, pr int, body string) error 
 	if err != nil {
 		return err
 	}
-	if id, ok := costCommentID(listed); ok {
+	if id, ok := markedCommentID(listed, marker); ok {
 		_, err = ghAPI(ctx, "PATCH", fmt.Sprintf("repos/%s/issues/comments/%d", repo, id), payload)
 		return err
 	}
@@ -35,8 +41,8 @@ func (GH) PostCost(ctx context.Context, repo string, pr int, body string) error 
 	return err
 }
 
-// costCommentID returns the id of the last comment that carries the marker.
-func costCommentID(data []byte) (int, bool) {
+// markedCommentID returns the id of the last comment that carries the marker.
+func markedCommentID(data []byte, marker string) (int, bool) {
 	var comments []struct {
 		ID   int    `json:"id"`
 		Body string `json:"body"`
@@ -47,11 +53,21 @@ func costCommentID(data []byte) (int, bool) {
 	var id int
 	var found bool
 	for _, c := range comments {
-		if strings.Contains(c.Body, CostMarker) {
+		if strings.Contains(c.Body, marker) {
 			id, found = c.ID, true
 		}
 	}
 	return id, found
+}
+
+// SetStatus sets a commit status.
+func (GH) SetStatus(ctx context.Context, repo, commit, context, state, description string) error {
+	payload, err := json.Marshal(map[string]string{"state": state, "context": context, "description": description})
+	if err != nil {
+		return err
+	}
+	_, err = ghAPI(ctx, "POST", fmt.Sprintf("repos/%s/statuses/%s", repo, commit), payload)
+	return err
 }
 
 func ghAPI(ctx context.Context, method, path string, body []byte) ([]byte, error) {

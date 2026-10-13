@@ -187,9 +187,11 @@ type RepoReport struct {
 
 // CollectRepos reports on every repository under `repos` in the fleet file.
 func (c Collector) CollectRepos(ctx context.Context, cfg *config.Config) []RepoReport {
-	reports := make([]RepoReport, len(cfg.Repos))
-	for i, repo := range cfg.Repos {
-		reports[i] = c.collectRepo(ctx, cfg, repo)
+	var reports []RepoReport
+	for _, repo := range cfg.Repos {
+		if repo.Deployed() {
+			reports = append(reports, c.collectRepo(ctx, cfg, repo))
+		}
 	}
 	return reports
 }
