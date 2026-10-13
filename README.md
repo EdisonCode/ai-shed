@@ -1029,6 +1029,35 @@ starts a new one, which reads the brief and is handed the next issue.
 A scheduled task that is running when the agent restarts is stopped and
 recorded as stopped.
 
+### Switching a machine's account
+
+When a machine's Claude account reaches its weekly limit, it can move to an
+account with room without an ssh session:
+
+```sh
+shed login mac-mini                    # prints the sign-in URL
+shed login -code 'aBc123...#xyz' mac-mini
+```
+
+The first step starts the machine's tool in a throwaway `login-account`
+window, types `/login`, takes the subscription login, and prints the URL as
+one line. Open it, sign in with the account the machine should use, and give
+the code the page shows to the second step, which types it into that window.
+It then prints the account the machine is logged in as, ends the usage-limit
+holds of its workers (as `shed resume` does), and types `/remote-control`
+into each idle worker whose screen says its Remote Control connection
+dropped. A worker in the middle of a turn is named instead: a command typed
+into a turn would be read as a message. A code that the tool did not take
+leaves the window open for another.
+
+`shed status` names each machine's account, read from Claude Code's own
+`~/.claude.json`, and which machines share one usage limit:
+
+```
+mac-mini  me@mac-mini  load 1.20/8  disk 41%  agent ok
+  account  me@example.com  (one usage limit with linux-box)
+```
+
 ### Tidying up after merged work
 
 A worker starts each issue on a new branch, and its tool makes worktrees for

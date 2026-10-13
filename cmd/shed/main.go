@@ -31,6 +31,8 @@ Usage:
   shed resume <machine> [worker]    end a pause early, and a hold at a usage limit that is over
   shed recycle [-now] <machine> <worker>
                                     give a worker a fresh session after its current issue
+  shed login <machine>              print the URL to sign the machine's tool in to another account
+  shed login -code <code> <machine> give it the code the sign-in page showed; ends usage-limit holds
   shed tidy [-apply] <machine>      list the worktrees and branches whose pull request is merged;
                                     with -apply, remove them
   shed template issue               print an issue template for issues a worker can take
@@ -87,6 +89,8 @@ func main() {
 		code = cmdResume(args)
 	case "bump":
 		code = cmdBump(args)
+	case "login":
+		code = cmdLogin(args)
 	case "usage":
 		code = cmdUsage(args)
 	case "digest":

@@ -201,3 +201,27 @@ func TestTmuxKnowsWhichWorkerAPaneBelongsTo(t *testing.T) {
 		t.Fatalf("worker = %q, %v", worker, err)
 	}
 }
+
+func TestCaptureJoinedReadsAWrappedURLAsOneLine(t *testing.T) {
+	tm := privateTmux(t)
+	if err := tm.Open("login", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	long := "https://claude.ai/oauth/authorize?state=" + strings.Repeat("x", 300)
+	if err := tm.Send("login", "clear; printf '%s\\n' '"+long+"'"); err != nil {
+		t.Fatal(err)
+	}
+	var url string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		screen, _ := tm.CaptureJoined("login", 40)
+		if url = LoginURL(screen); url == long {
+			break
+		}
+	}
+	if url != long {
+		t.Fatalf("url = %q (%d chars), want the whole %d-char URL", url, len(url), len(long))
+	}
+	if err := tm.Send("login", ""); err != nil {
+		t.Fatalf("Enter alone: %v", err)
+	}
+}

@@ -19,6 +19,7 @@ const workerSession = "shed"
 // Render writes the report for a terminal: each machine, then the release
 // state of each repository the fleet file knows the deploys of.
 func Render(w io.Writer, reports []MachineReport, repos []RepoReport) {
+	markSharedAccounts(reports)
 	total := 0
 	for _, r := range reports {
 		renderMachine(w, r)
@@ -86,6 +87,29 @@ func renderRepo(w io.Writer, r RepoReport) {
 	}
 }
 
+// markSharedAccounts notes, on each machine, the other machines logged in
+// to the same account: they share one usage limit.
+func markSharedAccounts(reports []MachineReport) {
+	byAccount := map[string][]string{}
+	for _, r := range reports {
+		if r.Probe != nil && r.Probe.Account != "" {
+			byAccount[r.Probe.Account] = append(byAccount[r.Probe.Account], r.Name)
+		}
+	}
+	for i, r := range reports {
+		if r.Probe == nil || len(byAccount[r.Probe.Account]) < 2 {
+			continue
+		}
+		var others []string
+		for _, name := range byAccount[r.Probe.Account] {
+			if name != r.Name {
+				others = append(others, name)
+			}
+		}
+		reports[i].sharedWith = "  (one usage limit with " + strings.Join(others, ", ") + ")"
+	}
+}
+
 func clip(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -144,6 +168,9 @@ func renderMachine(w io.Writer, r MachineReport) {
 	} else {
 		p := r.Probe
 		fmt.Fprintf(w, "%s  %s  load %.2f/%d  disk %d%%  agent %s\n", r.Name, r.Host, p.Load1, p.Cores, p.DiskUsedPct, agentWord(r))
+		if p.Account != "" {
+			fmt.Fprintf(w, "  account  %s%s\n", p.Account, r.sharedWith)
+		}
 		if !p.PausedUntil.IsZero() {
 			fmt.Fprintf(w, "  paused   for another %s: nothing is handed out and no worker is nudged\n", Short(p.PausedUntil.Sub(p.Now)))
 		}

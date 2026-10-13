@@ -1023,3 +1023,22 @@ func TestDigestSaysWhichMachineItCouldNotReadUsageFrom(t *testing.T) {
 		t.Fatalf("digest lacks %q:\n%s", want, out.String())
 	}
 }
+
+func TestStatusNamesEachMachinesAccountAndWhichShareOne(t *testing.T) {
+	report := func(name, account string) MachineReport {
+		res := healthy()
+		res.Account = account
+		return Assess(config.Machine{Name: name}, signals, now, res, nil)
+	}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{report("box", "a@example.com"), report("mini", "a@example.com"), report("pc", "b@example.com")}, nil)
+	for _, want := range []string{
+		"account  a@example.com  (one usage limit with mini)",
+		"account  a@example.com  (one usage limit with box)",
+		"account  b@example.com\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}

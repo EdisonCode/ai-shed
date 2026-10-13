@@ -74,6 +74,9 @@ type MachineReport struct {
 	// workers that are not one of them, as "session:window". They share
 	// the machine's account and CPU with the workers.
 	Unsupervised []string `json:"unsupervised,omitempty"`
+	// sharedWith names, for the terminal, the machines that share this
+	// one's account.
+	sharedWith string
 	// Now is when the report was made, by the watcher's clock. The age of
 	// what waits on the owner is counted from it.
 	Now time.Time `json:"now"`
@@ -625,7 +628,7 @@ func unsupervised(m config.Machine, windows []probe.Window) []string {
 		if !tools[win.Command] && !versionRE.MatchString(win.Command) {
 			continue
 		}
-		if win.Session == workerSession && (workers[win.Name] || strings.HasPrefix(win.Name, "preflight-")) {
+		if win.Session == workerSession && (workers[win.Name] || strings.HasPrefix(win.Name, "preflight-") || strings.HasPrefix(win.Name, "login-")) {
 			continue
 		}
 		names = append(names, win.Session+":"+win.Name)
