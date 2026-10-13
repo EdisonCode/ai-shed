@@ -797,6 +797,11 @@ It is not something shed asks of you, but it spends the same account limit
 and CPU as the workers. An agent tool is any tool the machine's workers run,
 or a process titled with a version number, as Claude Code titles its own.
 
+`shed tidy -sessions <machine>` lists those sessions with how long each has
+been idle. With `-apply` it closes the ones idle longer than `-idle` (three
+days by default), each by its exact session and window name. Nothing else on
+the machine is touched.
+
 ### Waiting on you: comment signals
 
 A worker cannot ask you a question, so it writes one in its issue, in its
