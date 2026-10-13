@@ -1,6 +1,7 @@
 package backlog
 
 import (
+	"strings"
 	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
@@ -55,4 +56,57 @@ func effect(issue Issue, signals []config.Signal, a Ask, now time.Time) string {
 		return EffectReturns
 	}
 	return EffectRead
+}
+
+// DefaultOutcome is what came of the safe defaults one hand-back recorded:
+// they held, or the owner overruled them before the next hand-back. A
+// ruling cannot say which of several entries it overrules, so the
+// hand-back is the unit.
+type DefaultOutcome struct {
+	Entries   []string `json:"entries"`
+	Overruled bool     `json:"overruled"`
+	// Ruling is the owner's words after the answering phrase.
+	Ruling string `json:"ruling,omitempty"`
+}
+
+// DefaultOutcomes reads the safe defaults of each of the issue's hand-backs
+// and whether the owner overruled them. An acceptance holds them, and so
+// does silence: a default nobody looked at shipped as the worker chose it.
+func DefaultOutcomes(issue Issue, signals []config.Signal) []DefaultOutcome {
+	var s config.Signal
+	for _, sig := range signals {
+		if sig.Decided != "" {
+			s = sig
+		}
+	}
+	if s.Decided == "" {
+		return nil
+	}
+	var out []DefaultOutcome
+	open := -1 // the outcome the next ruling applies to
+	for _, c := range issue.Comments {
+		body := strings.ToLower(c.Body)
+		if s.HandBack == "" || strings.Contains(body, strings.ToLower(s.HandBack)) {
+			open = -1
+			if entries := decidedIn(c.Body, s); len(entries) > 0 {
+				out = append(out, DefaultOutcome{Entries: entries})
+				open = len(out) - 1
+			}
+			continue
+		}
+		if open >= 0 && s.AnsweredBy != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) {
+			if !accepts(c.Body, s) {
+				value, _ := afterPhrase(body, strings.ToLower(s.AnsweredBy))
+				out[open].Overruled = true
+				out[open].Ruling = firstLine(strings.TrimLeft(c.Body[len(c.Body)-len(value):], ": \t*_"))
+			}
+			open = -1
+		}
+	}
+	return out
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(line)
 }

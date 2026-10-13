@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -104,5 +105,94 @@ func renderEscapes(w io.Writer, outcomes []TierOutcome) {
 	slices.Sort(escapes)
 	for _, e := range escapes {
 		fmt.Fprintf(w, "  escaped: %s\n", e)
+	}
+}
+
+// DefaultGroup is how the safe defaults of one area went, over the issues
+// closed in a window: an area is the issue's overlap label, or its
+// repository when it has none.
+type DefaultGroup struct {
+	Area      string   `json:"area"`
+	Held      int      `json:"held"`
+	Overruled int      `json:"overruled"`
+	Examples  []string `json:"examples,omitempty"`
+}
+
+// collectDefaults counts, by area, the hand-backs whose safe defaults held
+// and the ones the owner overruled: a worker that took a choice that was
+// the owner's. A high rate in one area is the evidence to name it in risky.
+func (c Collector) collectDefaults(ctx context.Context, cfg *config.Config, d *Digest) {
+	if c.Closed == nil {
+		return
+	}
+	seen := map[string]bool{}
+	byArea := map[string]*DefaultGroup{}
+	var order []string
+	listed := map[string]bool{}
+	for _, m := range cfg.Machines {
+		for _, src := range m.AllSources() {
+			key := fmt.Sprint(src.Repo, src.Label, src.Assignee, src.Query)
+			if listed[key] {
+				continue
+			}
+			listed[key] = true
+			issues, err := c.Closed.ClosedSince(ctx, src, d.Since)
+			if err != nil {
+				continue // collectEscapes reports a failed read
+			}
+			for _, i := range issues {
+				ik := issueKey(i.Repo, i.Number)
+				if seen[ik] {
+					continue
+				}
+				seen[ik] = true
+				area := i.Repo
+				if prefix := cfg.Supervisor.OverlapLabels; prefix != "" {
+					for _, l := range i.LabelNames() {
+						if strings.HasPrefix(l, prefix) {
+							area = l
+							break
+						}
+					}
+				}
+				for _, o := range backlog.DefaultOutcomes(i, cfg.Signals) {
+					g := byArea[area]
+					if g == nil {
+						g = &DefaultGroup{Area: area}
+						byArea[area] = g
+						order = append(order, area)
+					}
+					if o.Overruled {
+						g.Overruled++
+						g.Examples = append(g.Examples, fmt.Sprintf("%s  %s — %s", ik, o.Entries[0], o.Ruling))
+					} else {
+						g.Held++
+					}
+				}
+			}
+		}
+	}
+	slices.Sort(order)
+	for _, area := range order {
+		d.Defaults = append(d.Defaults, *byArea[area])
+	}
+}
+
+// renderDefaults writes how each area's safe defaults went.
+func renderDefaults(w io.Writer, groups []DefaultGroup) {
+	if len(groups) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\nSafe defaults on the issues closed in this window:")
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	var examples []string
+	for _, g := range groups {
+		total := g.Held + g.Overruled
+		fmt.Fprintf(tw, "  %s\t%d held\t%d overruled (%.0f%%)\n", g.Area, g.Held, g.Overruled, 100*float64(g.Overruled)/float64(total))
+		examples = append(examples, g.Examples...)
+	}
+	tw.Flush()
+	for _, e := range examples {
+		fmt.Fprintf(w, "  overruled: %s\n", e)
 	}
 }

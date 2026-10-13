@@ -311,7 +311,23 @@ signals:
   one. Your ruling un-parks it, ahead of new work.
 
 A worker that stops on a choice outside your `risky` list is told by the
-reviewer that it is a safe default, to take it and to record it. The words
+reviewer that it is a safe default, to take it and to record it.
+
+`shed digest` counts, over the issues closed in its window, the hand-backs
+whose safe defaults held and the ones you overruled with an `Owner ruling`
+that is not an acceptance, before the next hand-back. Silence counts as
+held: a default nobody looked at shipped as the worker chose it. The count
+is by the issue's `overlap_labels` label, or by repository:
+
+```
+Safe defaults on the issues closed in this window:
+  area:billing  8 held  3 overruled (27%)
+  my-org/my-app 4 held  0 overruled (0%)
+  overruled: my-org/my-app#124  Kept the old column. — drop it
+```
+
+A high rate in one area is a line of yours that workers keep crossing: the
+evidence to name that area in `risky`. The digest changes nothing itself. The words
 of `risky` are in each worker's brief and in front of the reviewer, so write
 them for both.
 
