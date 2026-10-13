@@ -1641,12 +1641,13 @@ func TestSystemLoadCanBeRead(t *testing.T) {
 
 // fakeLooks serves one report for every repository.
 type fakeLooks struct {
-	looks []looks.Look
-	err   error
+	looks   []looks.Look
+	staging string
+	err     error
 }
 
 func (f *fakeLooks) Read(context.Context, config.Repo, []config.IssueSource, []backlog.Issue, []config.Signal) (looks.Report, error) {
-	return looks.Report{Repo: "org/app", Looks: f.looks}, f.err
+	return looks.Report{Repo: "org/app", Staging: f.staging, Looks: f.looks}, f.err
 }
 
 func look(number, pr int, state string) looks.Look {

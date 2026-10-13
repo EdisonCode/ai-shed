@@ -310,6 +310,13 @@ func renderMachine(w io.Writer, r MachineReport) {
 		}
 	}
 	renderGates(w, tw, r)
+	if r.Probe != nil && len(r.Probe.Deploys) > 0 {
+		fmt.Fprintln(w, "  staging deploys")
+		for _, d := range LastDeploys(r.Probe.Deploys) {
+			fmt.Fprintf(tw, "    %s\t%s\t%s ago\n", d.Repo, deployWords(d), Short(r.Probe.Now.Sub(d.Start)))
+		}
+		tw.Flush()
+	}
 	if len(r.Tasks) > 0 {
 		fmt.Fprintln(w, "  tasks")
 		for _, t := range r.Tasks {

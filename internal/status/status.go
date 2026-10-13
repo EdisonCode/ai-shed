@@ -375,6 +375,11 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		agentUp := assessAgent(m, *res, attend)
 		assessTasks(m, *res, agentUp, &report, attend)
 		assessWorkers(m, *res, &report, attend)
+		for _, d := range LastDeploys(res.Deploys) {
+			if d.Result == runlog.DeployFailed || d.Result == runlog.DeployNotServed {
+				attend("the staging deploy of %s %s %s ago; it is tried again once looks have waited long enough again", d.Repo, deployWords(d), Short(res.Now.Sub(d.End)))
+			}
+		}
 		assessOneOff(*res, &report)
 		report.Unsupervised = Unsupervised(m, res.Windows)
 	}
@@ -747,4 +752,36 @@ func NeedsOwner(reports []MachineReport, repos []RepoReport) bool {
 		}
 	}
 	return false
+}
+
+// LastDeploys returns the last deploy record of each repository, in the
+// order the repositories were first deployed.
+func LastDeploys(records []runlog.Deploy) []runlog.Deploy {
+	var order []string
+	last := map[string]runlog.Deploy{}
+	for _, d := range records {
+		if _, ok := last[d.Repo]; !ok {
+			order = append(order, d.Repo)
+		}
+		last[d.Repo] = d
+	}
+	out := make([]runlog.Deploy, len(order))
+	for i, repo := range order {
+		out[i] = last[repo]
+	}
+	return out
+}
+
+// deployWords says what became of a staging deploy.
+func deployWords(d runlog.Deploy) string {
+	switch d.Result {
+	case runlog.DeployStarted:
+		return fmt.Sprintf("started, waiting for staging to serve a commit after %s", d.Before[:min(len(d.Before), 7)])
+	case runlog.DeployServed:
+		return fmt.Sprintf("served %s", d.After[:min(len(d.After), 7)])
+	case runlog.DeployFailed:
+		return fmt.Sprintf("failed (exit %d)", d.ExitCode)
+	default:
+		return "was not served within the hour"
+	}
 }

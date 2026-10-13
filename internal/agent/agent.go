@@ -31,7 +31,10 @@ const (
 	superviseEvery = 30 * time.Second
 	// gatesEvery is how often open pull requests are looked at for a commit
 	// to gate. A run in progress delays the next look.
-	gatesEvery    = time.Minute
+	gatesEvery = time.Minute
+	// deployTimeout bounds a staging deploy command. It starts the deploy;
+	// the supervisor then waits for staging to serve the new commit.
+	deployTimeout = 10 * time.Minute
 	notifyTimeout = 30 * time.Second
 	// outputTail is how much of a task's output a run record keeps.
 	outputTail = 2000
@@ -218,16 +221,19 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		StandingOrders: cfg.Defaults.StandingOrders,
 		Terminal:       supervisor.Tmux{},
 		Shells:         supervisor.Tmux{},
-		Reviewer:       supervisor.CommandReviewer{Command: m.Command(cfg.Supervisor.CommandOrDefault()), Dir: a.StateDir, UsageDir: a.StateDir},
-		Lister:         backlog.GH{},
-		Claimer:        backlog.GH{},
-		Cost:           backlog.GH{},
-		Prices:         cfg.Prices(),
-		QueueLabels:    cfg.QueueLabels(),
-		StateDir:       a.StateDir,
-		Now:            time.Now,
-		Sleep:          time.Sleep,
-		Logf:           a.Logf,
+		RunDeploy: func(ctx context.Context, command string) (string, int) {
+			return execute(ctx, m.Command(command), deployTimeout)
+		},
+		Reviewer:    supervisor.CommandReviewer{Command: m.Command(cfg.Supervisor.CommandOrDefault()), Dir: a.StateDir, UsageDir: a.StateDir},
+		Lister:      backlog.GH{},
+		Claimer:     backlog.GH{},
+		Cost:        backlog.GH{},
+		Prices:      cfg.Prices(),
+		QueueLabels: cfg.QueueLabels(),
+		StateDir:    a.StateDir,
+		Now:         time.Now,
+		Sleep:       time.Sleep,
+		Logf:        a.Logf,
 	}
 }
 

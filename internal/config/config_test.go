@@ -484,3 +484,24 @@ func TestAWorkerEnvNeedsVariableNames(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestAStagingDeployNeedsAMachineThatDeploys(t *testing.T) {
+	for _, tc := range []struct{ staging, want string }{
+		{"{commit: echo x, deploy: make deploy}", "needs staging.deploy_from"},
+		{"{commit: echo x, deploy_from: box}", "need staging.deploy"},
+		{"{commit: echo x, deploy: make deploy, deploy_from: elsewhere}", `deploy_from "elsewhere" is not a machine`},
+		{"{commit: echo x, deploy: make deploy, deploy_from: box, deploy_when: {or_after: soon}}", "or_after"},
+	} {
+		_, err := Parse([]byte(minimal + "repos: [{repo: org/app, staging: " + tc.staging + "}]\n"))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.staging, err, tc.want)
+		}
+	}
+	cfg, err := Parse([]byte(minimal + "repos: [{repo: org/app, staging: {commit: echo x, deploy: make deploy, deploy_from: box}}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := cfg.Repos[0].Staging.DeployWhen; w.WaitingLooksOrDefault() != 5 || w.OrAfterOrDefault() != 4*time.Hour {
+		t.Fatalf("deploy_when defaults = %d, %s", w.WaitingLooksOrDefault(), w.OrAfterOrDefault())
+	}
+}
