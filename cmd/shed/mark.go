@@ -54,6 +54,12 @@ func cmdMark(args []string) int {
 			fmt.Fprintf(os.Stderr, "shed mark: usage: %v\n", err)
 		}
 	}
+	if hook.AgentTranscriptPath != "" {
+		// SubagentStop: the sub-agent's calls are in its own transcript.
+		if err := runlog.RecordAgentTranscript(state, worker, hook.AgentTranscriptPath, hook.SessionID, hook.AgentType); err != nil {
+			fmt.Fprintf(os.Stderr, "shed mark: usage: %v\n", err)
+		}
+	}
 	if args[0] == "usage" {
 		return exitOK
 	}

@@ -35,6 +35,11 @@ type Usage struct {
 	// CacheWrite1h is the part of CacheWrite written for an hour, which is
 	// billed higher than a five-minute write.
 	CacheWrite1h int `json:"cache_write_1h,omitempty"`
+	// Agent is the type of the sub-agent that made the call, such as
+	// "Explore"; "" for the worker's own session.
+	Agent string `json:"agent,omitempty"`
+	// Dispatches counts the sub-agents the call started.
+	Dispatches int `json:"dispatches,omitempty"`
 }
 
 // Tokens are the call's tokens, as pricing reads them.
@@ -49,6 +54,10 @@ type Hook struct {
 	Message        string
 	SessionID      string
 	TranscriptPath string
+	// AgentTranscriptPath and AgentType are set when the hook is about a
+	// sub-agent: its own transcript, and its type.
+	AgentTranscriptPath string
+	AgentType           string
 }
 
 // ParseHook reads the JSON an agent tool passes a hook. A body that is not
@@ -58,11 +67,14 @@ func ParseHook(input io.Reader) Hook {
 		Message        string `json:"message"`
 		SessionID      string `json:"session_id"`
 		TranscriptPath string `json:"transcript_path"`
+		AgentPath      string `json:"agent_transcript_path"`
+		AgentType      string `json:"agent_type"`
 	}
 	if err := json.NewDecoder(io.LimitReader(input, maxHookInput)).Decode(&raw); err != nil {
 		return Hook{}
 	}
-	return Hook{Message: raw.Message, SessionID: raw.SessionID, TranscriptPath: raw.TranscriptPath}
+	return Hook{Message: raw.Message, SessionID: raw.SessionID, TranscriptPath: raw.TranscriptPath,
+		AgentTranscriptPath: raw.AgentPath, AgentType: raw.AgentType}
 }
 
 // RecordTranscript remembers the transcript and adds any calls in it that
@@ -72,10 +84,49 @@ func RecordTranscript(dir, worker, path, session string) error {
 	if path == "" {
 		return nil
 	}
-	if err := noteTranscript(dir, worker, path); err != nil {
+	t := transcript{path: path}
+	if err := noteTranscript(dir, worker, t); err != nil {
 		return err
 	}
-	return scrapeTranscript(dir, worker, path, session)
+	return scrapeTranscript(dir, worker, t, session)
+}
+
+// RecordAgentTranscript is RecordTranscript for a sub-agent's own
+// transcript. Its calls are tagged with the agent's type: the one given,
+// else the one in the transcript's meta file, else "sub-agent".
+func RecordAgentTranscript(dir, worker, path, session, agentType string) error {
+	if path == "" {
+		return nil
+	}
+	if agentType == "" {
+		agentType = metaAgentType(path)
+	}
+	t := transcript{path: path, agent: agentType}
+	if err := noteTranscript(dir, worker, t); err != nil {
+		return err
+	}
+	return scrapeTranscript(dir, worker, t, session)
+}
+
+// metaAgentType reads the agent type Claude Code keeps beside a sub-agent's
+// transcript; "sub-agent" when it says none.
+func metaAgentType(path string) string {
+	data, err := os.ReadFile(strings.TrimSuffix(path, ".jsonl") + ".meta.json")
+	if err == nil {
+		var meta struct {
+			AgentType string `json:"agentType"`
+		}
+		if json.Unmarshal(data, &meta) == nil && strings.TrimSpace(meta.AgentType) != "" {
+			return strings.TrimSpace(meta.AgentType)
+		}
+	}
+	return "sub-agent"
+}
+
+// transcript is a recorded transcript file. agent is set for a
+// sub-agent's own transcript, whose rows are all sidechains.
+type transcript struct {
+	path, agent string
 }
 
 // RefreshUsage re-reads the transcripts already recorded for the worker, so
@@ -87,8 +138,8 @@ func RefreshUsage(dir, worker string) error {
 		return err
 	}
 	var first error
-	for _, path := range paths {
-		if err := scrapeTranscript(dir, worker, path, ""); err != nil && first == nil {
+	for _, t := range paths {
+		if err := scrapeTranscript(dir, worker, t, ""); err != nil && first == nil {
 			first = err
 		}
 	}
@@ -140,13 +191,13 @@ func transcriptsFile(dir, worker string) string {
 	return filepath.Join(dir, UsageDir, worker+".transcripts")
 }
 
-func noteTranscript(dir, worker, path string) error {
+func noteTranscript(dir, worker string, t transcript) error {
 	paths, err := transcriptPaths(dir, worker)
 	if err != nil {
 		return err
 	}
 	for _, have := range paths {
-		if have == path {
+		if have.path == t.path {
 			return nil
 		}
 	}
@@ -157,7 +208,11 @@ func noteTranscript(dir, worker, path string) error {
 	if err != nil {
 		return fmt.Errorf("record transcript: %w", err)
 	}
-	_, err = fmt.Fprintln(f, path)
+	line := t.path
+	if t.agent != "" {
+		line += "\t" + t.agent
+	}
+	_, err = fmt.Fprintln(f, line)
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
@@ -167,7 +222,9 @@ func noteTranscript(dir, worker, path string) error {
 	return nil
 }
 
-func transcriptPaths(dir, worker string) ([]string, error) {
+// transcriptPaths reads the recorded transcripts: one per line, a path, and
+// for a sub-agent's a tab and its type.
+func transcriptPaths(dir, worker string) ([]transcript, error) {
 	data, err := os.ReadFile(transcriptsFile(dir, worker))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -175,15 +232,15 @@ func transcriptPaths(dir, worker string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read transcripts: %w", err)
 	}
-	var paths []string
+	var paths []transcript
 	seen := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || seen[line] {
+		path, agent, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		if path == "" || seen[path] {
 			continue
 		}
-		seen[line] = true
-		paths = append(paths, line)
+		seen[path] = true
+		paths = append(paths, transcript{path: path, agent: agent})
 	}
 	return paths, nil
 }
@@ -193,8 +250,8 @@ func transcriptPaths(dir, worker string) ([]string, error) {
 // can be far larger than the usage that billed it.
 const maxTranscriptLine = 16 << 20
 
-func scrapeTranscript(dir, worker, path, session string) error {
-	f, err := os.Open(path)
+func scrapeTranscript(dir, worker string, t transcript, session string) error {
+	f, err := os.Open(t.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -203,16 +260,29 @@ func scrapeTranscript(dir, worker, path, session string) error {
 	}
 	defer f.Close()
 	found := map[string]Usage{}
+	// A message is written one content block per line, each with the same
+	// usage: its dispatches are the sum over its lines.
+	dispatched := map[string]map[string]bool{}
 	if err := scanLines(f, maxTranscriptLine, func(line []byte) {
-		u, ok := usageFromLine(line, session)
+		u, tools, ok := usageFromLine(line, session, t.agent)
 		if !ok {
 			return
+		}
+		if dispatched[u.ID] == nil {
+			dispatched[u.ID] = map[string]bool{}
+		}
+		for _, id := range tools {
+			dispatched[u.ID][id] = true
 		}
 		if prev, seen := found[u.ID]; !seen || u.billed() > prev.billed() {
 			found[u.ID] = u
 		}
 	}); err != nil {
 		return fmt.Errorf("read transcript: %w", err)
+	}
+	for id, u := range found {
+		u.Dispatches = len(dispatched[id])
+		found[id] = u
 	}
 	return appendUsage(dir, worker, found)
 }
@@ -311,18 +381,25 @@ func parseUsage(line string) (Usage, error) {
 	return u, nil
 }
 
-// usageFromLine reads one transcript line. ok is false for a line that is
-// not a billed model call: a person, a side chain (its own transcript is
-// recorded separately), an error with no tokens, or a call with no id.
-func usageFromLine(line []byte, session string) (Usage, bool) {
+// usageFromLine reads one transcript line, and the ids of the sub-agents it
+// starts. ok is false for a line that is not a billed model call: a person,
+// an error with no tokens, a call with no id, or, in the worker's own
+// transcript, a side chain (a sub-agent's transcript is recorded apart, with
+// agent set).
+func usageFromLine(line []byte, session, agent string) (u Usage, dispatches []string, ok bool) {
 	var row struct {
 		Type        string `json:"type"`
 		UUID        string `json:"uuid"`
 		Timestamp   string `json:"timestamp"`
 		IsSidechain bool   `json:"isSidechain"`
 		Message     struct {
-			ID    string `json:"id"`
-			Model string `json:"model"`
+			ID      string `json:"id"`
+			Model   string `json:"model"`
+			Content []struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"content"`
 			Usage struct {
 				InputTokens              int `json:"input_tokens"`
 				OutputTokens             int `json:"output_tokens"`
@@ -334,19 +411,25 @@ func usageFromLine(line []byte, session string) (Usage, bool) {
 			} `json:"usage"`
 		} `json:"message"`
 	}
-	if err := json.Unmarshal(line, &row); err != nil || row.Type != "assistant" || row.IsSidechain {
-		return Usage{}, false
+	if err := json.Unmarshal(line, &row); err != nil || row.Type != "assistant" || (row.IsSidechain && agent == "") {
+		return Usage{}, nil, false
 	}
 	tokens := row.Message.Usage
 	if tokens.InputTokens+tokens.OutputTokens+tokens.CacheCreationInputTokens+tokens.CacheReadInputTokens == 0 {
-		return Usage{}, false
+		return Usage{}, nil, false
 	}
 	id := row.Message.ID
 	if id == "" {
 		id = row.UUID
 	}
 	if id == "" {
-		return Usage{}, false
+		return Usage{}, nil, false
+	}
+	for _, c := range row.Message.Content {
+		// The tool was named Task before Claude Code 2.1.63.
+		if c.Type == "tool_use" && (c.Name == "Agent" || c.Name == "Task") && c.ID != "" {
+			dispatches = append(dispatches, c.ID)
+		}
 	}
 	when := time.Now()
 	if t, err := time.Parse(time.RFC3339Nano, row.Timestamp); err == nil {
@@ -359,5 +442,6 @@ func usageFromLine(line []byte, session string) (Usage, bool) {
 		Input: tokens.InputTokens, Output: tokens.OutputTokens,
 		CacheWrite: tokens.CacheCreationInputTokens, CacheRead: tokens.CacheReadInputTokens,
 		CacheWrite1h: min(tokens.CacheCreation.OneHour, tokens.CacheCreationInputTokens),
-	}, true
+		Agent:        agent,
+	}, dispatches, true
 }

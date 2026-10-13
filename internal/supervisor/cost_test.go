@@ -83,6 +83,32 @@ func TestCostCommentPricesEachModelAtTheAPIRates(t *testing.T) {
 	}
 }
 
+func TestCostCommentSplitsTheWorkerSessionFromItsSubAgents(t *testing.T) {
+	checkins := []runlog.Checkin{{Time: t0, Worker: "app", Sent: true, Issue: 12, Verdict: runlog.VerdictNudge}}
+	usage := []runlog.Usage{
+		{ID: "a", Time: t0.Add(time.Minute), Model: "claude-opus-5-5", Output: 100_000, Dispatches: 2},
+		{ID: "b", Time: t0.Add(2 * time.Minute), Model: "claude-sonnet-5-5", Output: 100_000, Agent: "implementer"},
+		{ID: "c", Time: t0.Add(3 * time.Minute), Model: "claude-opus-5-5", Output: 50_000, Agent: "implementer"},
+		{ID: "d", Time: t0.Add(4 * time.Minute), Model: "claude-haiku-5-5", Output: 1_000_000, Agent: "Explore"},
+	}
+	body, _ := formatCost(12, checkins, "app", usage, pricing.Default())
+	if want := "By agent: worker session $2.00 (opus-5-5); implementer $2.00 (opus-5-5, sonnet-5-5); Explore $0.50 (haiku-5-5)"; !strings.Contains(body, want) {
+		t.Fatalf("body lacks %q:\n%s", want, body)
+	}
+	if strings.Contains(body, "partial") {
+		t.Fatalf("sub-agent tokens were recorded, yet the count is called partial:\n%s", body)
+	}
+}
+
+func TestCostCommentSaysWhenSubAgentsRanAndWereNotCounted(t *testing.T) {
+	checkins := []runlog.Checkin{{Time: t0, Worker: "app", Sent: true, Issue: 12, Verdict: runlog.VerdictNudge}}
+	usage := []runlog.Usage{{ID: "a", Time: t0.Add(time.Minute), Model: "claude-opus-5-5", Output: 1000, Dispatches: 3}}
+	body, _ := formatCost(12, checkins, "app", usage, nil)
+	if want := "3 sub-agent(s) ran and none of their tokens were recorded: this count is partial."; !strings.Contains(body, want) {
+		t.Fatalf("body lacks %q:\n%s", want, body)
+	}
+}
+
 type fakeCost struct {
 	repos  []string
 	prs    []int

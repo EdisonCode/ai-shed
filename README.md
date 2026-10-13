@@ -738,6 +738,12 @@ those tokens are left out:
 
 `shed mark usage` records tokens and does not change the worker's state, so
 it can run while the parent turn is still going.
+It reads the sub-agent's own transcript, which the hook names, and tags each
+of its calls with the sub-agent's type. The comment then splits the cost:
+`By agent: worker session $2.00 (opus-5-5); implementer $2.00 (opus-5-5,
+sonnet-5-5); Explore $0.50 (haiku-5-5)`, so you can see whether the work ran
+on the model its label named. When the worker started sub-agents and none of
+their tokens were recorded, the comment says the count is partial.
 `shed preflight`, and so `shed deploy`, reads the Claude Code settings each
 worker's session loads (`~/.claude/settings.json` and the worker directory's
 `.claude/settings.json` and `settings.local.json`). When the state hooks are
