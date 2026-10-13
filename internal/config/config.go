@@ -59,9 +59,20 @@ type Account struct {
 	// HoldAllBut is how many workers of a machine may still take new work
 	// when the account is far ahead of its pace. Nil is 1.
 	HoldAllBut *int `yaml:"hold_all_but"`
+	// Overflow is a label. A worker of the account that reaches its weekly
+	// limit, or is stuck, with work that lives outside its session, moves
+	// its issue onto it, and a machine that lists the label as a backfill
+	// source takes it up.
+	Overflow string `yaml:"overflow"`
 }
 
 const resetLayout = "Mon 15:04"
+
+// Paced reports whether the account is paced through its week: it has a
+// weekly budget.
+func (a Account) Paced() bool {
+	return a.WeeklyBudget > 0
+}
 
 // Share is a machine's part of the weekly budget: each machine's agent sees
 // only its own spend, so each is paced to an equal share.
@@ -753,12 +764,50 @@ func Parse(data []byte) (*Config, error) {
 	if err := cfg.validateVerify(); err != nil {
 		return nil, err
 	}
+	if err := cfg.validateOverflow(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }
 
 // validateVerify checks that verification can happen where it is asked for:
 // a repository that verifies needs a worker that verifies and takes its
 // issues, or its reviews would wait for a verifier forever.
+// validateOverflow checks that a released issue can be taken: some machine
+// lists the overflow label as a backfill source, and no machine has it as
+// its own queue.
+func (c *Config) validateOverflow() error {
+	var errs []error
+	for _, a := range c.Accounts {
+		if a.Overflow == "" {
+			continue
+		}
+		taken := false
+		for _, m := range c.Machines {
+			for _, src := range append(append([]IssueSource{}, m.Issues...), workerSources(m)...) {
+				switch {
+				case src.Label == a.Overflow && src.Backfill:
+					taken = true
+				case src.Label == a.Overflow:
+					errs = append(errs, fmt.Errorf("accounts: %s: overflow %q is the queue of machine %q; list it with backfill: true", a.Name, a.Overflow, m.Name))
+				}
+			}
+		}
+		if !taken {
+			errs = append(errs, fmt.Errorf("accounts: %s: no machine lists overflow %q as a backfill source, so nothing would take a released issue", a.Name, a.Overflow))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func workerSources(m Machine) []IssueSource {
+	var all []IssueSource
+	for _, w := range m.Workers {
+		all = append(all, w.Issues...)
+	}
+	return all
+}
+
 func (c *Config) validateVerify() error {
 	var errs []error
 	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
@@ -960,10 +1009,14 @@ func (c *Config) validate() error {
 		if a.Name == "" {
 			fail("accounts: every account needs a name")
 		}
-		if a.WeeklyBudget <= 0 {
+		paced := a.WeeklyBudget != 0 || a.Resets != ""
+		if !paced && a.Overflow == "" {
+			fail("accounts: %s: give it weekly_budget and resets to pace it, or overflow to share its work", a.Name)
+		}
+		if paced && a.WeeklyBudget <= 0 {
 			fail("accounts: %s: weekly_budget must be a positive amount in dollars at API rates", a.Name)
 		}
-		if _, err := time.Parse(resetLayout, a.Resets); err != nil {
+		if _, err := time.Parse(resetLayout, a.Resets); paced && err != nil {
 			fail("accounts: %s: resets %q must be a day and a time, such as \"Wed 18:00\"", a.Name, a.Resets)
 		}
 		if a.HoldAllBut != nil && *a.HoldAllBut < 0 {

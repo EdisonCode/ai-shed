@@ -102,6 +102,10 @@ const (
 	// backfillTold goes with the hand-over of an issue from a backfill
 	// source. Nobody prepared it for a worker.
 	backfillTold = " #%d is from the backlog: it is yours even where your brief does not cover it. Check first that it is ready, as the Queue section of " + BriefFile + " says."
+	// releasedTold goes with the hand-over of an issue another machine gave
+	// up. Its work is started: the plan in the issue, the branch, the pull
+	// request.
+	releasedTold = " #%d was released by %s, which could not go on: it is yours even where your brief does not cover it. Read its plan and progress in the issue, and its branch and pull request, and go on from where it stopped."
 )
 
 // retryBackoff is how long a worker whose tool stopped on an API error waits
@@ -138,6 +142,9 @@ type Supervisor struct {
 	Terminal       Terminal
 	Reviewer       Reviewer
 	Lister         backlog.Lister
+	// Releaser moves the issue of a spent worker onto the account's overflow
+	// label. Nil releases nothing.
+	Releaser Releaser
 	// Claimer puts a worker's queue label on a backfill issue it takes, and
 	// QueueLabels are the labels that put an issue in a queue anywhere in
 	// the fleet. Claimer may be nil: then no backfill issue is taken.
@@ -201,7 +208,9 @@ type Supervisor struct {
 
 // Claimer marks an issue as taken by putting a label on it.
 type Claimer interface {
-	Claim(ctx context.Context, repo string, number int, label string) error
+	// Claim puts the label on the issue, and takes off remove, the label of
+	// the pool it was taken from, when there is one.
+	Claim(ctx context.Context, repo string, number int, label, remove string) error
 }
 
 // CostPoster writes the token-cost comment on a pull request, creating it
@@ -268,6 +277,9 @@ type workerState struct {
 	verify bool
 	// repo is the repository of that issue; "" when the log does not say.
 	repo string
+	// releaseAfter holds back another try to release the issue after one
+	// could not be made.
+	releaseAfter time.Time
 	// task is the one-off task it was handed and has not finished; "" for
 	// none. worked is set once the session has been handed any work.
 	task   string
@@ -517,6 +529,12 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 			}
 			return nil
 		}
+	}
+
+	// A worker that cannot go on for days gives its issue to the fleet,
+	// whatever else holds it.
+	if s.maybeRelease(ctx, w, st, now, toolState) {
+		return nil
 	}
 
 	if !st.retryAt.IsZero() {
@@ -815,7 +833,7 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	if newIssue && item.Backfill {
 		// The label comes first: an issue that was handed over and not
 		// marked could be taken by another machine too.
-		if err := s.Claimer.Claim(ctx, item.Repo, item.Number, item.claim); err != nil {
+		if err := s.Claimer.Claim(ctx, item.Repo, item.Number, item.claim, item.unclaim); err != nil {
 			return err
 		}
 		c.Backfill = true
@@ -882,7 +900,10 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	if newIssue && item.Bumped {
 		c.Message += fmt.Sprintf(bumpTold, verdict.Issue)
 	}
-	if c.Backfill {
+	switch {
+	case c.Backfill && item.ReleasedBy != "":
+		c.Message += fmt.Sprintf(releasedTold, verdict.Issue, item.ReleasedBy)
+	case c.Backfill:
 		c.Message += fmt.Sprintf(backfillTold, verdict.Issue)
 	}
 	if err := s.Terminal.Send(w.Name, c.Message); err != nil {
@@ -1085,7 +1106,7 @@ const paceEvery = 5 * time.Minute
 // the account's weekly budget, and keeps it for `shed status`. ok is false
 // when the machine is in no account or the ledgers cannot be read.
 func (s *Supervisor) readPace() (runlog.Pace, bool) {
-	if s.Account == nil {
+	if s.Account == nil || !s.Account.Paced() {
 		return runlog.Pace{}, false
 	}
 	now := s.Now()
@@ -1269,6 +1290,8 @@ func (s *Supervisor) recover(worker string) *workerState {
 		case c.Verdict == runlog.VerdictRecycled:
 			st.issue, st.look, st.verify, st.model, st.limitedUntil = 0, false, false, "", time.Time{}
 			st.task, st.worked = "", false
+		case c.Verdict == runlog.VerdictReleased:
+			st.issue, st.look, st.verify, st.repo = 0, false, false, ""
 		case c.Kind == KindBrief:
 			st.briefStale = !c.Sent
 		case c.Kind == KindHook:
@@ -1387,7 +1410,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	if items, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
 	}
-	s.applyHolds(w, items, open, checkins)
+	s.applyHolds(w, items, open, s.inFlightElsewhere(ctx, w), checkins)
 	s.applyPace(w, items, checkins)
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
@@ -1505,6 +1528,8 @@ func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []
 				continue
 			}
 			item.Backfill, item.claim = true, s.Machine.ClaimLabel(w, i.Repo)
+			// A labelled backfill source is a pool: what is taken leaves it.
+			item.unclaim, item.ReleasedBy = src.Label, backlog.ReleasedBy(i)
 			items = append(items, item)
 		}
 	}

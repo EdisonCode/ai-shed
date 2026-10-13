@@ -194,8 +194,14 @@ func withSearch(args []string, query string) []string {
 
 // Claim puts the label on an issue, which puts it in the queue the label
 // selects. shed changes nothing else on GitHub.
-func (GH) Claim(ctx context.Context, repo string, number int, label string) error {
-	cmd := exec.CommandContext(ctx, "gh", "issue", "edit", strconv.Itoa(number), "--repo", repo, "--add-label", label)
+// Claim puts a queue label on an issue, and takes off the label of the pool
+// it came from, if any.
+func (GH) Claim(ctx context.Context, repo string, number int, add, remove string) error {
+	args := []string{"issue", "edit", strconv.Itoa(number), "--repo", repo, "--add-label", add}
+	if remove != "" {
+		args = append(args, "--remove-label", remove)
+	}
+	cmd := exec.CommandContext(ctx, "gh", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -732,4 +738,44 @@ func noteAfter(body, phrase string) (string, bool) {
 	rest := strings.TrimLeft(body[min(at+len(phrase), len(body)):], ": \t\r\n*_`\"'")
 	line, _, _ := strings.Cut(rest, "\n")
 	return strings.TrimSpace(line), true
+}
+
+// Release moves an issue off a machine's queue onto the fleet's overflow
+// label, and says so in a comment.
+func (GH) Release(ctx context.Context, repo string, number int, remove []string, add, comment string) error {
+	args := []string{"issue", "edit", strconv.Itoa(number), "--repo", repo, "--add-label", add}
+	for _, l := range remove {
+		args = append(args, "--remove-label", l)
+	}
+	for _, step := range [][]string{args, {"issue", "comment", strconv.Itoa(number), "--repo", repo, "--body", comment}} {
+		cmd := exec.CommandContext(ctx, "gh", step...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("gh %s %s#%d: %w: %s", step[1], repo, number, err, strings.TrimSpace(stderr.String()))
+		}
+	}
+	return nil
+}
+
+// ReleasedPhrase starts the comment of a worker's machine that released an
+// issue to the fleet.
+const ReleasedPhrase = "Released:"
+
+// ReleasedBy names who released the issue, as in "mini/app", when its last
+// release was not followed by a hand-back; "" otherwise.
+func ReleasedBy(issue Issue) string {
+	by := ""
+	for _, c := range issue.Comments {
+		body := strings.TrimSpace(c.Body)
+		switch {
+		case strings.HasPrefix(body, ReleasedPhrase):
+			who := strings.TrimSpace(strings.TrimPrefix(body, ReleasedPhrase))
+			who, _, _ = strings.Cut(who, ",")
+			by = strings.TrimSpace(who)
+		case strings.Contains(strings.ToLower(body), strings.ToLower(config.DefaultHandBack)):
+			by = ""
+		}
+	}
+	return by
 }

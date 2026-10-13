@@ -196,3 +196,59 @@ func renderDefaults(w io.Writer, groups []DefaultGroup) {
 		fmt.Fprintf(w, "  overruled: %s\n", e)
 	}
 }
+
+// collectReleases counts, on the issues closed in the window, the releases
+// to the fleet, by the machine and worker that released: work that another
+// machine finished because this one could not.
+func (c Collector) collectReleases(ctx context.Context, cfg *config.Config, d *Digest) {
+	if c.Closed == nil || !slices.ContainsFunc(cfg.Accounts, func(a config.Account) bool { return a.Overflow != "" }) {
+		return
+	}
+	seen := map[string]bool{}
+	listed := map[string]bool{}
+	for _, m := range cfg.Machines {
+		for _, src := range m.AllSources() {
+			key := fmt.Sprint(src.Repo, src.Label, src.Assignee, src.Query)
+			if listed[key] {
+				continue
+			}
+			listed[key] = true
+			issues, err := c.Closed.ClosedSince(ctx, src, d.Since)
+			if err != nil {
+				continue
+			}
+			for _, i := range issues {
+				if seen[issueKey(i.Repo, i.Number)] {
+					continue
+				}
+				seen[issueKey(i.Repo, i.Number)] = true
+				for _, cm := range i.Comments {
+					body := strings.TrimSpace(cm.Body)
+					if !strings.HasPrefix(body, backlog.ReleasedPhrase) {
+						continue
+					}
+					who, _, _ := strings.Cut(strings.TrimSpace(strings.TrimPrefix(body, backlog.ReleasedPhrase)), ",")
+					if d.Releases == nil {
+						d.Releases = map[string]int{}
+					}
+					d.Releases[strings.TrimSpace(who)]++
+				}
+			}
+		}
+	}
+}
+
+// renderReleases writes how much work moved between machines.
+func renderReleases(w io.Writer, releases map[string]int) {
+	if len(releases) == 0 {
+		return
+	}
+	var words []string
+	total := 0
+	for who, n := range releases {
+		words = append(words, fmt.Sprintf("%s %d", who, n))
+		total += n
+	}
+	slices.Sort(words)
+	fmt.Fprintf(w, "\nReleased to the fleet and finished elsewhere: %d (%s)\n", total, strings.Join(words, ", "))
+}

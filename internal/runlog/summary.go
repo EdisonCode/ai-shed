@@ -170,7 +170,7 @@ func itemSpans(checkins []Checkin, worker string) []itemSpan {
 			continue
 		}
 		switch {
-		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled || c.Verdict == VerdictDone:
+		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled || c.Verdict == VerdictDone || c.Verdict == VerdictReleased:
 			end(c.Time)
 		case c.Sent && c.Task != "":
 			end(c.Time)

@@ -91,6 +91,9 @@ type QueueItem struct {
 	StackOn  string
 	StackDep int
 	StackPR  int
+	// ReleasedBy names the machine and worker that released the issue to
+	// the fleet, when it was taken from a pool after a release.
+	ReleasedBy string
 	// Verify is set when the item is a pull request for this worker to
 	// verify before the owner reviews it, with VerifyPR and Tier.
 	Verify   string
@@ -102,6 +105,9 @@ type QueueItem struct {
 	// PR is the pull request the issue's latest hand-back named; 0 for none.
 	PR    int
 	claim string
+	// unclaim is the label of the pool the item was taken from, which the
+	// claim takes off; "" for none.
+	unclaim string
 	// rank is the issue's place in its source's priority order.
 	rank int
 }

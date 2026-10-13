@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/edisoncode/ai-shed/internal/config"
 )
 
 // Dep is an issue that must close before another one is worked.
@@ -249,4 +251,27 @@ func parseDeps(data []byte, repos []string) (map[int][]Dep, map[string]bool, err
 		}
 	}
 	return native, state, nil
+}
+
+// InFlight reports whether work on the issue has started and not been
+// handed back: a comment names its paths, as a worker's plan does, and no
+// hand-back came after it. It is how a machine sees what another machine
+// builds, from the issue alone.
+func InFlight(issue Issue, signals []config.Signal) bool {
+	handBack := config.DefaultHandBack
+	for _, s := range signals {
+		if s.HandBack != "" {
+			handBack = s.HandBack
+		}
+	}
+	plan, back := -1, -1
+	for n, c := range issue.Comments {
+		if pathsRE.MatchString(c.Body) {
+			plan = n
+		}
+		if strings.Contains(strings.ToLower(c.Body), strings.ToLower(handBack)) {
+			back = n
+		}
+	}
+	return plan >= 0 && plan > back
 }

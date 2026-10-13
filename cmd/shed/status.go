@@ -45,6 +45,7 @@ func cmdStatus(args []string) int {
 				fmt.Print(clearScreen)
 				fmt.Printf("shed  %s  (every %s, ctrl-c to stop)\n\n", time.Now().Format("Mon 15:04:05"), *watch)
 			}
+			status.RenderReleased(os.Stdout, report.Released, time.Now())
 			status.Render(os.Stdout, reports, repos)
 		}
 		if *watch <= 0 {
