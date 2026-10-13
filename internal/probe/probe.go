@@ -29,6 +29,8 @@ type Result struct {
 	Checkins []runlog.Checkin `json:"-"`
 	// Gates are the agent's recent gate runs, oldest first.
 	Gates []runlog.Gate `json:"-"`
+	// Deploys are the staging deploys the agent started, oldest first.
+	Deploys []runlog.Deploy `json:"-"`
 	// Recycle names the workers whose session the owner asked to replace.
 	Recycle []string `json:"-"`
 	// Marks is what each worker's tool last reported about itself, by worker.
@@ -87,6 +89,7 @@ s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.RunsFile + `" ] && tail -n 200 "$s/` + runlog.RunsFile + `" | sed 's/^/@@run /'
 [ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 500 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
 [ -f "$s/` + runlog.GatesFile + `" ] && tail -n 100 "$s/` + runlog.GatesFile + `" | sed 's/^/@@gate /'
+[ -f "$s/` + runlog.DeploysFile + `" ] && tail -n 50 "$s/` + runlog.DeploysFile + `" | sed 's/^/@@deploy /'
 [ -d "$s/` + runlog.RecycleDir + `" ] && ls "$s/` + runlog.RecycleDir + `" | sed 's/^/@@recycle /'
 for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(basename "$(dirname "$f")") $(basename "$f" .md)"; done
 [ -f "$s/` + runlog.PauseFile + `" ] && echo "@@pause $(cat "$s/` + runlog.PauseFile + `")"
@@ -175,6 +178,10 @@ func Parse(out string, checks []config.Check) (Result, error) {
 		case "@@gate":
 			if g, err := runlog.ParseGate(rest); err == nil {
 				res.Gates = append(res.Gates, g)
+			}
+		case "@@deploy":
+			if d, err := runlog.ParseDeploy(rest); err == nil {
+				res.Deploys = append(res.Deploys, d)
 			}
 		case "@@recycle":
 			res.Recycle = append(res.Recycle, strings.TrimSpace(rest))

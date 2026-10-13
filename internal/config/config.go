@@ -159,6 +159,35 @@ type Environment struct {
 	// hand-back names none, as "<width>x<height>" in CSS pixels. shed cannot
 	// resize a browser: the worker is told the size and says what it had.
 	Viewport string `yaml:"viewport"`
+	// Deploy is a command that deploys the default branch to staging. With
+	// it, the agent of DeployFrom deploys when looks pile up, as DeployWhen
+	// says, and never while a look is in progress there.
+	Deploy     string     `yaml:"deploy"`
+	DeployFrom string     `yaml:"deploy_from"`
+	DeployWhen DeployWhen `yaml:"deploy_when"`
+}
+
+// DeployWhen says when looks have waited long enough for a staging deploy:
+// when this many wait, or when the oldest has waited this long.
+type DeployWhen struct {
+	WaitingLooks int    `yaml:"waiting_looks"`
+	OrAfter      string `yaml:"or_after"`
+}
+
+const (
+	DefaultWaitingLooks = 5
+	DefaultDeployAfter  = 4 * time.Hour
+)
+
+func (d DeployWhen) WaitingLooksOrDefault() int {
+	if d.WaitingLooks <= 0 {
+		return DefaultWaitingLooks
+	}
+	return d.WaitingLooks
+}
+
+func (d DeployWhen) OrAfterOrDefault() time.Duration {
+	return durationOr(d.OrAfter, DefaultDeployAfter)
 }
 
 // DefaultLookBack is how far back merged work is looked for.
@@ -916,8 +945,23 @@ func (c *Config) validate() error {
 		if r.Staging.Viewport != "" && !viewportRE.MatchString(r.Staging.Viewport) {
 			fail("%s: staging.viewport %q is not a size such as 1440x900", where, r.Staging.Viewport)
 		}
-		if r.Production.URL != "" || r.Production.Orders != "" || r.Production.Viewport != "" {
+		if r.Production.URL != "" || r.Production.Orders != "" || r.Production.Viewport != "" || r.Production.Deploy != "" || r.Production.DeployFrom != "" || r.Production.DeployWhen != (DeployWhen{}) {
 			fail("%s: production takes only commit; no worker goes there", where)
+		}
+		switch st := r.Staging; {
+		case st.Deploy != "" && st.DeployFrom == "":
+			fail("%s: staging.deploy needs staging.deploy_from: the machine whose agent deploys", where)
+		case st.Deploy == "" && (st.DeployFrom != "" || st.DeployWhen != (DeployWhen{})):
+			fail("%s: staging.deploy_from and staging.deploy_when need staging.deploy", where)
+		case st.DeployFrom != "":
+			if _, ok := c.Machine(st.DeployFrom); !ok {
+				fail("%s: staging.deploy_from %q is not a machine in the fleet file", where, st.DeployFrom)
+			}
+		}
+		if after := r.Staging.DeployWhen.OrAfter; after != "" {
+			if d, err := time.ParseDuration(after); err != nil || d <= 0 {
+				fail("%s: staging.deploy_when.or_after %q is not a positive duration such as 4h", where, after)
+			}
 		}
 		if r.LookBack != "" {
 			if d, err := time.ParseDuration(r.LookBack); err != nil || d <= 0 {

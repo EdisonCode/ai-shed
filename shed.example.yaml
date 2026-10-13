@@ -123,6 +123,11 @@ machines:
 #       # Optional. The browser size to look at when a hand-back names none.
 #       # The worker's comment always says the size it really had.
 #       viewport: 1440x900
+#       # Optional. The agent of deploy_from deploys staging when looks pile
+#       # up, never while one of its workers is in the middle of a look.
+#       deploy: "gh workflow run deploy.yml --ref main -f environment=staging"
+#       deploy_from: mac-mini
+#       deploy_when: { waiting_looks: 5, or_after: 4h }
 #     # Optional. Merged work is looked for since this commit.
 #     production:
 #       commit: "curl -fsS https://app.example.com/healthz | jq -r .commit"

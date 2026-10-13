@@ -451,6 +451,39 @@ The commit commands run on the watcher for `shed status` and on the worker's
 machine for the queue, after its `init` line, so both must reach the
 environments. `shed status -json` carries the release state under `repos`.
 
+#### Deploying staging when looks pile up
+
+A look waits until staging serves the merged work. When staging deploys
+only when you start it, looks pile up in `waits for staging` while the
+workers that do them have nothing. Let the agent of one machine start it:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    staging:
+      commit: "curl -fsS https://staging.example.com/healthz | jq -r .commit"
+      deploy: "gh workflow run deploy.yml --ref main -f environment=staging"
+      deploy_from: mac-mini          # the machine whose agent deploys
+      deploy_when:
+        waiting_looks: 5             # the default
+        or_after: 4h                 # the default: since the oldest waiting look was asked for
+```
+
+- **When.** As soon as that many looks wait for staging, or the oldest has
+  waited that long, and only while no worker of `deploy_from` has a look in
+  hand that it has not posted. A deploy restarts the app under a look.
+- **During it** no look of the repository is handed out. The agent reads
+  `staging.commit` until staging serves a new commit, then hands them out
+  again. An agent restarted in the middle goes on waiting for that deploy.
+- **A failure** (the command fails, or staging still serves the old commit
+  an hour later) goes to your `notify` command once, puts a `!` line in
+  `shed status`, and is not tried again before `or_after` has passed.
+- `shed status` shows each repository's last deploy under `staging deploys`.
+- **It never touches production**: `production` takes only `commit`.
+- The agent sees the looks of its own machine only. Keep the workers with
+  `eye_checks` on `deploy_from`, or a look on another machine may be under
+  way when staging restarts.
+
 ### One-off tasks
 
 An issue is all a worker has to go on. Some work has a brief that is on no

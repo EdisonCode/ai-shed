@@ -30,6 +30,7 @@ const linuxOutput = `Welcome banner from the init line
 @@run {"task":"nigh
 @@checkin {"time":"2026-09-21T03:10:00Z","worker":"app","kind":"idle","verdict":"nudge","reason":"it stopped","message":"Take #12.","sent":true}
 @@gate {"repo":"org/app","pr":41,"commit":"aaa1111","worker":"app","start":"2026-09-21T03:20:00Z","end":"2026-09-21T03:22:00Z","exit_code":1}
+@@deploy {"repo":"org/app","start":"2026-09-21T03:30:00Z","before":"aaa1111","result":"started","exit_code":0}
 @@recycle app
 @@end
 `
@@ -220,5 +221,15 @@ func TestParseReadsTheGateRuns(t *testing.T) {
 	}
 	if len(res.Gates) != 1 || res.Gates[0].PR != 41 || res.Gates[0].Passed() {
 		t.Fatalf("gates = %+v", res.Gates)
+	}
+}
+
+func TestParseReadsTheStagingDeploys(t *testing.T) {
+	res, err := Parse(linuxOutput, twoChecks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Deploys) != 1 || res.Deploys[0].Result != runlog.DeployStarted {
+		t.Fatalf("deploys = %+v", res.Deploys)
 	}
 }

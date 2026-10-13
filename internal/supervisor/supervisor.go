@@ -164,6 +164,9 @@ type Supervisor struct {
 	// Shells lists the shells a worker's tool started that still run, so a
 	// wait on a hung one shows. Nil lists none.
 	Shells ShellLister
+	// RunDeploy runs a repository's staging deploy command on this machine
+	// and returns its output and exit code. Nil deploys nothing.
+	RunDeploy func(ctx context.Context, command string) (string, int)
 	// Sleep waits for the worker's terminal to take a command.
 	Sleep func(time.Duration)
 	Logf  func(format string, args ...any)
@@ -180,6 +183,8 @@ type Supervisor struct {
 	// pace is the last reading of the weekly pace, made at paceAt.
 	pace   runlog.Pace
 	paceAt time.Time
+	// deploys holds where each repository's staging deploy stands.
+	deploys map[string]*deployState
 	// wasPaused is whether the last tick found the machine paused, so that
 	// a pause is logged when it starts and when it ends.
 	wasPaused bool
@@ -1551,6 +1556,7 @@ func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []Que
 			failure = err.Error()
 			continue
 		}
+		deploying := s.stagingDeploy(ctx, repo, report)
 		choice := slices.ContainsFunc(s.Machine.Workers, func(other config.Worker) bool {
 			return other.Name != w.Name && other.EyeChecks && slices.ContainsFunc(s.Machine.SourcesFor(other), inQueue(repo.Name))
 		})
@@ -1558,7 +1564,7 @@ func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []Que
 			if look.State == looks.Blocked {
 				s.tellBlocked(look)
 			}
-			if look.State != looks.Due || taken[look.Number] || (choice && runlog.Builder(checkins, look.Number) == w.Name) {
+			if look.State != looks.Due || taken[look.Number] || deploying || (choice && runlog.Builder(checkins, look.Number) == w.Name) {
 				continue
 			}
 			items = slices.DeleteFunc(items, func(q QueueItem) bool { return q.Repo == look.Repo && q.Number == look.Number })

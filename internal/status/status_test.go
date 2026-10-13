@@ -1121,3 +1121,21 @@ func TestDigestSplitsTheSpendByKindAndFlagsALargeCacheRatio(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusShowsTheLastStagingDeployAndAFailureNeedsTheOwner(t *testing.T) {
+	res := healthy()
+	res.Deploys = []runlog.Deploy{
+		{Repo: "org/app", Start: now.Add(-5 * time.Hour), Before: "aaa1111", Result: runlog.DeployStarted},
+		{Repo: "org/app", Start: now.Add(-5 * time.Hour), End: now.Add(-4 * time.Hour), Before: "aaa1111", After: "bbb2222", Result: runlog.DeployServed},
+		{Repo: "org/api", Start: now.Add(-time.Hour), End: now.Add(-time.Hour), ExitCode: 1, Result: runlog.DeployFailed},
+	}
+	r := Assess(config.Machine{Name: "box"}, signals, now, res, nil)
+	wantAttention(t, r, "the staging deploy of org/api failed (exit 1) 1h ago")
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	for _, want := range []string{"  staging deploys\n", "org/app  served bbb2222   5h ago", "org/api  failed (exit 1)  1h ago"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status lacks %q:\n%s", want, out.String())
+		}
+	}
+}
