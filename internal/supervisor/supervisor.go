@@ -613,7 +613,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 	if w.Ask {
 		prompt = askPrompt
 	}
-	command := w.CommandOrDefault() + " " + shellQuote(prompt)
+	command := envPrefix(w.Env) + w.CommandOrDefault() + " " + shellQuote(prompt)
 	if err := s.Terminal.Send(w.Name, command); err != nil {
 		return err
 	}
@@ -1562,8 +1562,14 @@ func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []Que
 				continue
 			}
 			items = slices.DeleteFunc(items, func(q QueueItem) bool { return q.Repo == look.Repo && q.Number == look.Number })
-			items = append(items, QueueItem{Repo: look.Repo, Number: look.Number, Title: look.Title,
-				Look: fmt.Sprintf("pull request #%d is on staging", look.PR), Model: s.Settings.Models.For(nil)})
+			item := QueueItem{Repo: look.Repo, Number: look.Number, Title: look.Title,
+				Look: fmt.Sprintf("pull request #%d is on staging", look.PR), Model: s.Settings.Models.For(nil)}
+			if m := s.Settings.Models.EyeChecks; m != "" {
+				// A look runs its session on its own model, whatever the
+				// rest of the fleet is told.
+				item.Model, item.Apply = m, config.ModelSwitch
+			}
+			items = append(items, item)
 		}
 	}
 	if failure != s.lookError {
@@ -1858,6 +1864,7 @@ production, and that is you. It is not work to build.
 			}
 			b.WriteString(".\n")
 			if orders := strings.TrimSpace(repo.Staging.Orders); orders != "" {
+				orders = strings.ReplaceAll(orders, config.WorkerPlaceholder, w.Name)
 				fmt.Fprintf(b, "  What you may do there: %s\n", strings.ReplaceAll(orders, "\n", "\n  "))
 			}
 			if repo.Staging.Viewport != "" {
@@ -1980,4 +1987,19 @@ func within(times []time.Time, now time.Time) []time.Time {
 		}
 	}
 	return kept
+}
+
+// envPrefix sets the worker's own variables on its session's command line,
+// in name order.
+func envPrefix(env map[string]string) string {
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var b strings.Builder
+	for _, name := range names {
+		b.WriteString(name + "=" + shellQuote(env[name]) + " ")
+	}
+	return b.String()
 }

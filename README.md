@@ -387,6 +387,30 @@ machines:
 - **What the worker may do.** Its brief gets the staging address and your
   `orders`. An act the orders do not name is not allowed. Name the writes a
   check needs and the ones that must never happen.
+- **One identity per worker.** Workers on one machine that sign in as the
+  same test user move each other's state: one ends the other's session,
+  closes its drawer, empties its cart. Each then blames the other's
+  leftovers, and both checks are wrong. Give each worker its own user:
+  `{worker}` in `orders` is replaced with the name of the worker that reads
+  them, and a worker's `env` is set in its session.
+
+  ```yaml
+  repos:
+    - repo: my-org/my-app
+      staging:
+        orders: |
+          Sign in as qa-{worker}@example.com with the password in $QA_PASSWORD.
+          Never sign in as another worker's user.
+  machines:
+    - name: mac-mini
+      workers:
+        - name: app
+          eye_checks: true
+          env: { QA_PASSWORD: "..." }
+  ```
+
+  The users themselves are your repository's business: a fixture script on
+  staging that creates one per worker.
 - **The viewport.** shed cannot resize a browser. The worker looks at the
   size the hand-back names, or at `viewport` when it names none, and its
   comment always says the size the browser really had, as in
@@ -666,6 +690,24 @@ supervisor:
     apply_labels: { "model:sonnet": switch }   # the session switches to sonnet
     session: opus                               # and back to opus for a told issue
 ```
+
+An eye check is a browser look: read the hand-back, sign in, click,
+compare. It rarely needs the model the hardest issues do. Give it one:
+
+```yaml
+supervisor:
+  models:
+    default: opus
+    eye_checks: sonnet
+```
+
+When the agent hands over an eye check it switches the session to that
+model, clearing the context as any switch does, and the next issue switches
+back to its own. Every worker with `eye_checks: true` stays eligible, so a
+pile of looks spreads across the machine without workers set aside for
+them. With `apply: tell` the look still switches, and `session` is the
+model the session goes back to; in switch mode that is the next issue's
+model, so `default` is needed.
 
 `session` is needed whenever some labels switch and others are told. The
 cost comment names any sub-agent that ran on another model than the issue's

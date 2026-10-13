@@ -462,3 +462,25 @@ func TestARepoNeedsStagingOrGatesAndAGatesTimeoutIsADuration(t *testing.T) {
 		}
 	}
 }
+
+func TestAnEyeCheckModelNeedsAModelToGoBackTo(t *testing.T) {
+	for _, tc := range []struct{ models, want string }{
+		{"{eye_checks: haiku}", "models.eye_checks needs models.default"},
+		{"{eye_checks: haiku, default: opus, apply: tell}", "models.eye_checks needs models.session"},
+	} {
+		_, err := Parse([]byte(minimal + "supervisor: {models: " + tc.models + "}\n"))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.models, err, tc.want)
+		}
+	}
+	if _, err := Parse([]byte(minimal + "supervisor: {models: {eye_checks: haiku, default: opus}}\n")); err != nil {
+		t.Fatalf("eye_checks with a default: %v", err)
+	}
+}
+
+func TestAWorkerEnvNeedsVariableNames(t *testing.T) {
+	_, err := Parse([]byte(minimal + "    workers: [{name: w, dir: /tmp, brief: b, env: {\"BAD NAME\": x}}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "env") {
+		t.Fatalf("err = %v", err)
+	}
+}
