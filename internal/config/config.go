@@ -14,6 +14,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
+
+	"github.com/edisoncode/ai-shed/internal/pricing"
 )
 
 // LocalHost is the host value for a machine that is reached without SSH.
@@ -35,6 +37,15 @@ type Config struct {
 	// Repos says, per repository, how to see what is deployed. With it a
 	// worker can do the eye checks of merged work on staging.
 	Repos []Repo `yaml:"repos"`
+	// Pricing sets the rate of a model, in US dollars per million tokens,
+	// in place of the published one, or adds a model shed has no price for.
+	// The rates weigh the tokens in cost comments and the digest.
+	Pricing map[string]pricing.Rate `yaml:"pricing"`
+}
+
+// Prices is the published price table with the fleet file's rates in it.
+func (c *Config) Prices() pricing.Table {
+	return pricing.Default().With(c.Pricing)
 }
 
 // Repo is what shed knows about a repository's deploys.
