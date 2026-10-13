@@ -143,6 +143,8 @@ type Checkin struct {
 	// Verify is set when the issue was handed over to verify its pull
 	// request, not to build it.
 	Verify bool `json:"verify,omitempty"`
+	// Repo is the repository of the issue handed over.
+	Repo string `json:"repo,omitempty"`
 	// Backfill is set when the issue was taken from a backfill source: the
 	// queue had nothing else the worker could act on.
 	Backfill bool `json:"backfill,omitempty"`

@@ -971,6 +971,12 @@ with the tokens the worker's session spent on the issue: uncached input,
 cache write, cache read and output, by model. A later pass, such as rework,
 updates the same comment with this pass and the total.
 
+Work that ends with no pull request gets its cost too, when the worker
+moves on from it: an eye check, a verification, or a pass whose hand-back
+names none (`**PR:** none`, a plan) is costed in a comment on its issue,
+one per worker, so the builder's cost and the looker's stand side by side.
+A one-off task's report ends with `## Cost (from shed)`.
+
 Each model's line ends with what its tokens would cost at Anthropic's
 published API rates, and the comment totals them: `At API rates: $2.26`.
 A subscription does not pay that price. The rates are the weights that make

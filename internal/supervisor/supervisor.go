@@ -207,6 +207,9 @@ type Claimer interface {
 // or replacing the one shed posted before.
 type CostPoster interface {
 	PostCost(ctx context.Context, repo string, pr int, body string) error
+	// PostMarked creates a comment on an issue, or replaces the one that
+	// carries the same marker.
+	PostMarked(ctx context.Context, repo string, number int, marker, body string) error
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.
@@ -262,6 +265,8 @@ type workerState struct {
 	// verify when it was handed over to verify its pull request.
 	look   bool
 	verify bool
+	// repo is the repository of that issue; "" when the log does not say.
+	repo string
 	// task is the one-off task it was handed and has not finished; "" for
 	// none. worked is set once the session has been handed any work.
 	task   string
@@ -714,6 +719,9 @@ func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, 
 	// for the worker comes before the issue the reviewer chose.
 	atRest := verdict.Verdict == runlog.VerdictDone || (verdict.Verdict == runlog.VerdictNudge && st.handsOver(verdict.Issue, item))
 	if atRest {
+		// What it had is over: an eye check, a verification, a pass with no
+		// pull request or a task has no cost comment of its own.
+		s.postItemCost(ctx, w, st, queue)
 		st.task = ""
 	}
 	if pending, _ := s.recycleRequested(w.Name); pending {
@@ -816,7 +824,7 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	if newIssue && item.Verify != "" {
 		verdict.Message, c.Verify = fmt.Sprintf(verifyOrder, item.VerifyPR, verdict.Issue, item.Verify, item.Tier, item.Tier), true
 	}
-	c.Message, c.Issue = verdict.Message, verdict.Issue
+	c.Message, c.Issue, c.Repo = verdict.Message, verdict.Issue, item.Repo
 	model := item.Model
 	c.Rework = item.Rework
 	apply := cmp.Or(item.Apply, s.Settings.Models.Apply)
@@ -862,7 +870,7 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 		st.model, c.Model = model, model
 	}
 	if newIssue {
-		st.issue, st.look, st.verify = verdict.Issue, item.Look != "", item.Verify != ""
+		st.issue, st.look, st.verify, st.repo = verdict.Issue, item.Look != "", item.Verify != "", item.Repo
 		st.task, st.worked = "", true
 	}
 	if tellOnly && item.Model != "" {
@@ -1304,7 +1312,7 @@ func (s *Supervisor) recover(worker string) *workerState {
 			if c.Issue != 0 && (c.Issue != st.issue || c.Look != st.look || c.Verify != st.verify) {
 				// A hand-over: the count starts again, as in deliver.
 				st.nudges, st.waits = nil, 0
-				st.issue, st.look, st.verify = c.Issue, c.Look, c.Verify
+				st.issue, st.look, st.verify, st.repo = c.Issue, c.Look, c.Verify, c.Repo
 				st.task, st.worked = "", true
 			}
 			if c.Task != "" {
