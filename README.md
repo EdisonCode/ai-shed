@@ -898,6 +898,36 @@ every machine, and the reviewer judges scope against it. Use it for the rules
 that do not change from task to task: your architecture principles, your
 definition of done, what a worker must never do.
 
+### One home per rule
+
+A worker reads several sources before its first item: the repository's
+instructions (`CLAUDE.md`, `AGENTS.md`), your global ones, a memory index,
+the standing orders and its brief. Each is read again on every turn of a
+long session, so a rule written twice costs twice, and two copies drift
+until they disagree and the worker guesses. Give each rule one home:
+
+- **Standing orders:** how the fleet works. Hand-backs, choices, what a
+  worker never does unattended. Nothing about the code.
+- **The repository's instructions:** how the work in that repository is
+  done. Its architecture, its tests, its tools.
+- **Memory:** lessons, each with the reason it holds.
+
+Workers do not write any of them. A worker that learned something the next
+one should know writes it in its hand-back after `**Lessons:**`, and
+`shed digest` lists the lessons that wait for you, once each however many
+workers wrote them:
+
+```
+Lessons to promote: 2 (promote, reject or fold each, then comment "Lessons promoted" or "Lesson rejected" on its issue)
+  30h  my-org/my-app#6             Staging logs are in /var/log/app.
+  3h   my-org/my-app#5, my-org/my-app#6  The suite needs `make db-reset` first.
+```
+
+You put each one where it belongs, or drop it, and say so on its issue:
+`Lessons promoted`, `Lessons folded` or `Lesson rejected` settles the
+lessons written before it. shed never writes the memory itself, so there is
+one source of truth and it is yours.
+
 ### State from the tool's own hooks
 
 The supervisor reads a worker's screen to learn what it is doing. An agent

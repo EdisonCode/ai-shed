@@ -1207,3 +1207,34 @@ func TestDigestGivesTheEscapeRateOfEachVerificationTier(t *testing.T) {
 		}
 	}
 }
+
+func TestDigestListsTheLessonsToPromoteOncePerLesson(t *testing.T) {
+	handBack := func(n int, lessons string, ago time.Duration) backlog.Issue {
+		i := issue(n)
+		i.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** none\n**Lessons:**\n" + lessons, CreatedAt: now.Add(-ago)}}
+		return i
+	}
+	settled := handBack(9, "- Old news.", 50*time.Hour)
+	settled.Comments = append(settled.Comments, backlog.Comment{Body: "Lessons promoted."})
+	open := []backlog.Issue{
+		handBack(5, "- The suite needs `make db-reset` first.", 3*time.Hour),
+		handBack(6, "- the suite needs `make db-reset` first\n- Staging logs are in /var/log/app.", 30*time.Hour),
+		settled,
+	}
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: open}, Looks: &fakeLooks{}}
+	d := c.Digest(context.Background(), withRepo(true), &fakeMerged{}, now.Add(-24*time.Hour), now)
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	for _, want := range []string{
+		"Lessons to promote: 2",
+		"30h  org/app#6             Staging logs are in /var/log/app.",
+		"30h  org/app#5, org/app#6  The suite needs `make db-reset` first.",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("digest lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "Old news") {
+		t.Fatalf("a settled lesson is listed:\n%s", out.String())
+	}
+}

@@ -43,6 +43,9 @@ type Digest struct {
 	// Verification is how each risk tier's verifications went, over the
 	// issues closed in the window.
 	Verification []TierOutcome `json:"verification,omitempty"`
+	// Lessons are what workers wrote in their hand-backs for the next
+	// worker to know, that the owner has not settled.
+	Lessons []PendingLesson `json:"lessons,omitempty"`
 	// Problems lists what could not be read.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -99,6 +102,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 	}
 	c.collectStages(ctx, &d)
 	c.collectEscapes(ctx, cfg, &d)
+	c.collectLessons(ctx, cfg, &d)
 	return d
 }
 
@@ -189,6 +193,8 @@ func RenderDigest(w io.Writer, d Digest) {
 		}
 	}
 	slices.SortStableFunc(waiting, func(a, b waitingItem) int { return a.since.Compare(b.since) })
+	renderLessons(w, d)
+
 	fmt.Fprintf(w, "\nWaiting on you: %d\n", len(waiting))
 	tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, item := range waiting {

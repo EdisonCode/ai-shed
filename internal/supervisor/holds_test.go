@@ -107,3 +107,11 @@ func TestBriefAsksForThePathsWithThePlanAndSaysHowToNameADependency(t *testing.T
 		}
 	}
 }
+
+func TestBriefAsksForLessonsAndLeavesTheMemoryToTheOwner(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	brief := f.briefText(f.Machine.Workers[0])
+	if !strings.Contains(brief, "`**Lessons:**`") || !strings.Contains(brief, "Do not edit the repository's instructions or any memory") {
+		t.Fatalf("brief lacks the lessons rule:\n%s", brief)
+	}
+}
