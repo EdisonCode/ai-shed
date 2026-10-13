@@ -53,6 +53,9 @@ type QueueItem struct {
 	Waiting []string
 	// Model is the model this issue should be worked with; empty for any.
 	Model string
+	// Apply is what is done with Model: switch the session to it, or tell
+	// the worker. Empty is the fleet's models.apply.
+	Apply string
 	// Rework says why an issue that was handed back needs a worker again.
 	Rework string
 	// Look says why the item is an eye check on staging and not work to

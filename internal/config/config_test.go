@@ -370,3 +370,27 @@ func TestFleetFileRatesReplaceThePublishedOnes(t *testing.T) {
 		t.Fatalf("opus-5-5 output = %v (%v), want the fleet file's 2", got, ok)
 	}
 }
+
+func TestApplyCanBeSetPerLabel(t *testing.T) {
+	m := Models{Default: "opus", Labels: map[string]string{"model:sonnet": "sonnet"}, Apply: ModelTell,
+		ApplyLabels: map[string]string{"model:sonnet": ModelSwitch}, Session: "opus"}
+	if got := m.ApplyFor([]string{"bug", "model:sonnet"}); got != ModelSwitch {
+		t.Errorf("model:sonnet applies %q, want switch", got)
+	}
+	if got := m.ApplyFor([]string{"bug"}); got != ModelTell {
+		t.Errorf("an unlabelled issue applies %q, want the default tell", got)
+	}
+}
+
+func TestMixedApplyNeedsTheSessionModel(t *testing.T) {
+	base := "machines:\n  - name: box\n    host: local\nsupervisor:\n  models:\n    default: opus\n    apply: tell\n    labels: {model:sonnet: sonnet}\n    apply_labels: {model:sonnet: switch}\n"
+	if _, err := Parse([]byte(base)); err == nil || !strings.Contains(err.Error(), "models.session") {
+		t.Fatalf("err = %v, want models.session to be asked for", err)
+	}
+	if _, err := Parse([]byte(base + "    session: opus\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse([]byte(strings.Replace(base, "{model:sonnet: switch}", "{model:sonnet: maybe}", 1) + "    session: opus\n")); err == nil {
+		t.Fatal("an apply_labels value that is neither switch nor tell was accepted")
+	}
+}

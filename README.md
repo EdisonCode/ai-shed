@@ -605,6 +605,25 @@ an orchestrator and hands work to sub-agents on models it chooses itself, set
 Say in the standing orders what the worker does with that. Set the
 orchestrator's own model in the worker's `command`.
 
+An orchestrator told "sonnet" may still run its implementers on its own
+model. To run a plain implementation issue's whole session on its model and
+tell the rest, set `apply` per label:
+
+```yaml
+supervisor:
+  models:
+    default: opus
+    apply: tell
+    labels: { "model:sonnet": sonnet }
+    apply_labels: { "model:sonnet": switch }   # the session switches to sonnet
+    session: opus                               # and back to opus for a told issue
+```
+
+`session` is needed whenever some labels switch and others are told. The
+cost comment names any sub-agent that ran on another model than the issue's
+(`Ran on another model than the issue's (sonnet): implementer (opus-5-5)`),
+and the digest shows each worker's spend by model.
+
 ### Fresh context per issue
 
 ```yaml

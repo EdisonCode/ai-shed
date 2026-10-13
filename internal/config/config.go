@@ -137,6 +137,14 @@ type Models struct {
 	Labels map[string]string `yaml:"labels"`
 	// Apply says what the agent does with an issue's model.
 	Apply string `yaml:"apply"`
+	// ApplyLabels sets Apply for the issues with a label, as in
+	// {model:sonnet: switch}: a plain implementation issue runs its whole
+	// session on its model, while the rest are told theirs.
+	ApplyLabels map[string]string `yaml:"apply_labels"`
+	// Session is the model a session runs on for an issue it is only told
+	// the model of. It is needed when some issues switch and some are told:
+	// after a switched issue, the session goes back to it.
+	Session string `yaml:"session"`
 }
 
 // Values of Models.Apply.
@@ -151,6 +159,17 @@ const (
 // TellOnly reports whether the worker is told the model and not switched.
 func (m Models) TellOnly() bool {
 	return m.Apply == ModelTell
+}
+
+// ApplyFor is what is done with the model of an issue with these labels:
+// the first of ApplyLabels it has, else Apply.
+func (m Models) ApplyFor(labels []string) string {
+	for _, label := range labels {
+		if a, ok := m.ApplyLabels[label]; ok {
+			return a
+		}
+	}
+	return m.Apply
 }
 
 // For returns the model for an issue with these labels, or "" when no model
@@ -683,6 +702,18 @@ func (c *Config) validate() error {
 	}
 	if a := c.Supervisor.Models.Apply; a != "" && a != ModelSwitch && a != ModelTell {
 		fail("supervisor: models.apply %q must be %s or %s", a, ModelSwitch, ModelTell)
+	}
+	mixed := false
+	for label, a := range c.Supervisor.Models.ApplyLabels {
+		if a != ModelSwitch && a != ModelTell {
+			fail("supervisor: models.apply_labels %s: %q must be %s or %s", label, a, ModelSwitch, ModelTell)
+		}
+		if (a == ModelTell) != c.Supervisor.Models.TellOnly() {
+			mixed = true
+		}
+	}
+	if mixed && c.Supervisor.Models.Session == "" {
+		fail("supervisor: models.apply_labels mixes switch and tell, so models.session must name the model a told session runs on")
 	}
 	for label, model := range c.Supervisor.Models.Labels {
 		if label == "" || model == "" {

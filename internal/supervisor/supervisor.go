@@ -5,6 +5,7 @@
 package supervisor
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -774,8 +775,16 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	c.Message, c.Issue = verdict.Message, verdict.Issue
 	model := item.Model
 	c.Rework = item.Rework
-	tellOnly := s.Settings.Models.TellOnly()
+	apply := cmp.Or(item.Apply, s.Settings.Models.Apply)
+	tellOnly := apply == config.ModelTell
 	switchModel := newIssue && !tellOnly && model != "" && model != st.model
+	// A told issue after a switched one: the session goes back to the
+	// model it orchestrates on.
+	session := s.Settings.Models.Session
+	backToSession := newIssue && tellOnly && session != "" && st.model != "" && st.model != session
+	if backToSession {
+		switchModel, model = true, session
+	}
 	// The first issue of a session lands on a context that is
 	// already empty.
 	fresh := newIssue && w.FreshPerIssue && st.worked
@@ -802,9 +811,9 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 		st.issue, st.look = verdict.Issue, item.Look != ""
 		st.task, st.worked = "", true
 	}
-	if tellOnly && model != "" {
-		c.Model = model
-		c.Message += fmt.Sprintf(modelTold, model)
+	if tellOnly && item.Model != "" {
+		c.Model = item.Model
+		c.Message += fmt.Sprintf(modelTold, item.Model)
 	}
 	if newIssue && item.Bumped {
 		c.Message += fmt.Sprintf(bumpTold, verdict.Issue)
@@ -1230,7 +1239,8 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 // item is the queue item of an open issue from this source.
 func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []runlog.Checkin) QueueItem {
 	item := QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title, Waiting: backlog.Waiting(i, s.Signals),
-		Model: s.Settings.Models.For(i.LabelNames()), PR: backlog.HandedPR(i, s.Signals), rank: src.Rank(i.LabelNames())}
+		Model: s.Settings.Models.For(i.LabelNames()), Apply: s.Settings.Models.ApplyFor(i.LabelNames()),
+		PR: backlog.HandedPR(i, s.Signals), rank: src.Rank(i.LabelNames())}
 	item.Ruled = backlog.Ruled(i, s.Signals)
 	for _, ask := range backlog.Asks(i, s.Signals) {
 		if grace := s.signal(ask.Name).GraceOrDefault(); grace > 0 && !ask.Since.IsZero() {

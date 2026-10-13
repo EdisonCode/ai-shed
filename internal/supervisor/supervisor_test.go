@@ -657,6 +657,22 @@ func TestOrchestratorIsToldTheModelAndNotSwitched(t *testing.T) {
 	}
 }
 
+func TestALabelThatSwitchesRunsTheWholeSessionOnItsModelAndTheNextIssueSwitchesBack(t *testing.T) {
+	mixed := config.Models{Default: "opus", Labels: map[string]string{"model:sonnet": "sonnet"}, Apply: config.ModelTell,
+		ApplyLabels: map[string]string{"model:sonnet": config.ModelSwitch}, Session: "opus"}
+	f := started(t, config.Supervisor{Models: mixed}, assign(12), assign(13))
+	f.lister.issues[0].Labels = append(f.lister.issues[0].Labels, backlog.Label{Name: "model:sonnet"})
+	f.lister.issues = append(f.lister.issues, backlog.Issue{Repo: "org/app", Number: 13, Title: "Design it", Labels: []backlog.Label{{Name: "machine:box"}}})
+	f.tick(2 * time.Minute)
+	if !slices.Equal(f.term.sent[:2], []string{"/clear", "/model sonnet"}) || strings.Contains(f.term.sent[2], "The model for this issue") {
+		t.Fatalf("sent = %q, want the session switched to sonnet and not told", f.term.sent)
+	}
+	sent := f.handOver()
+	if len(sent) != 3 || sent[0] != "/clear" || sent[1] != "/model opus" || !strings.HasSuffix(sent[2], "The model for this issue is opus.") {
+		t.Fatalf("sent = %q, want the session back on opus and told the model", sent)
+	}
+}
+
 // handOver runs the worker through one more issue: it works, goes silent, and
 // the supervisor checks in. It returns what was typed.
 func (f *fixture) handOver() []string {
