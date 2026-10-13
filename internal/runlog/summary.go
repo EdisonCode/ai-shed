@@ -29,13 +29,14 @@ const (
 	KindPR     = "pull request" // an issue whose work a cost comment was posted for
 	KindPlan   = "issue, no pull request"
 	KindLook   = "eye check"
+	KindVerify = "verification"
 	KindTask   = "one-off task"
 	KindNoItem = "no item" // nothing in hand: before the first item, at rest, after a hand-back
 	KindReview = "reviewer"
 )
 
 // KindOrder is the order the kinds are reported in.
-var KindOrder = []string{KindPR, KindPlan, KindLook, KindTask, KindNoItem, KindReview}
+var KindOrder = []string{KindPR, KindPlan, KindVerify, KindLook, KindTask, KindNoItem, KindReview}
 
 // KindSpend is the spend of one kind of work at API rates: one value per
 // item, or a single value for spend that has no item.
@@ -176,8 +177,11 @@ func itemSpans(checkins []Checkin, worker string) []itemSpan {
 			spans = append(spans, itemSpan{kind: KindTask, item: worker + " task " + c.Task, start: c.Time})
 		case c.Sent && c.Issue != 0:
 			kind := KindPlan
-			if c.Look {
+			switch {
+			case c.Look:
 				kind = KindLook
+			case c.Verify:
+				kind = KindVerify
 			}
 			if cur := open(); cur != nil && cur.issue == c.Issue && cur.kind == kind {
 				continue

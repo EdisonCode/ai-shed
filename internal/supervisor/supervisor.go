@@ -77,7 +77,9 @@ const (
 	modelTold        = " The model for this issue is %s."
 	// lookOrder hands over an eye check. It is not left to the reviewer's
 	// words: a worker that took it for work to build would start a branch.
-	lookOrder     = "Do the eye check of #%d on staging: %s. Follow the Eye checks section of " + BriefFile + " and change no code."
+	lookOrder = "Do the eye check of #%d on staging: %s. Follow the Eye checks section of " + BriefFile + " and change no code."
+	// verifyOrder hands over a verification, for the same reason.
+	verifyOrder   = "Verify pull request #%d of #%d at tier %s: follow the Verification section of " + BriefFile + " and change no code. Start your comment on the issue with `Verified (%s):` or `Verification failed (%s):`."
 	clearSettling = 2 * time.Second
 	// unaskedStart hands over an item that the reviewer did not: the code
 	// knows that the worker has nothing else it can act on.
@@ -165,6 +167,9 @@ type Supervisor struct {
 	// Shells lists the shells a worker's tool started that still run, so a
 	// wait on a hung one shows. Nil lists none.
 	Shells ShellLister
+	// Diffs reads what a pull request changes, to rate its risk tier for a
+	// verification. Nil verifies nothing.
+	Diffs DiffReader
 	// RunDeploy runs a repository's staging deploy command on this machine
 	// and returns its output and exit code. Nil deploys nothing.
 	RunDeploy func(ctx context.Context, command string) (string, int)
@@ -184,6 +189,8 @@ type Supervisor struct {
 	// pace is the last reading of the weekly pace, made at paceAt.
 	pace   runlog.Pace
 	paceAt time.Time
+	// diffs keeps the pull request diffs read for a risk tier.
+	diffs map[string]keptDiff
 	// deploys holds where each repository's staging deploy stands.
 	deploys map[string]*deployState
 	// wasPaused is whether the last tick found the machine paused, so that
@@ -251,8 +258,10 @@ type workerState struct {
 	// issue is the issue the worker was last handed; 0 when it has had none
 	// since its session started.
 	issue int
-	// look is set when that issue was handed over for an eye check.
-	look bool
+	// look is set when that issue was handed over for an eye check, and
+	// verify when it was handed over to verify its pull request.
+	look   bool
+	verify bool
 	// task is the one-off task it was handed and has not finished; "" for
 	// none. worked is set once the session has been handed any work.
 	task   string
@@ -319,7 +328,7 @@ func unaskedOrder(inHand int, waits bool, next QueueItem) string {
 // worker new work. A nudge may name the issue the worker is already on. An
 // eye check of work it built earlier and still has in hand is new work.
 func (st *workerState) handsOver(issue int, item QueueItem) bool {
-	return issue != 0 && (issue != st.issue || (item.Look != "") != st.look)
+	return issue != 0 && (issue != st.issue || (item.Look != "") != st.look || (item.Verify != "") != st.verify)
 }
 
 // noted keeps what a check-in says about how long the worker has had no
@@ -626,7 +635,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 		return err
 	}
 	st.starts = append(st.starts, now)
-	st.lastReview, st.model, st.issue, st.look, st.worked = now, "", 0, false, false
+	st.lastReview, st.model, st.issue, st.look, st.verify, st.worked = now, "", 0, false, false, false
 	// The last session's tool said nothing about this one.
 	if err := runlog.RemoveMark(s.StateDir, w.Name); err != nil {
 		return err
@@ -804,6 +813,9 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	if newIssue && item.Look != "" {
 		verdict.Message, c.Look = fmt.Sprintf(lookOrder, verdict.Issue, item.Look), true
 	}
+	if newIssue && item.Verify != "" {
+		verdict.Message, c.Verify = fmt.Sprintf(verifyOrder, item.VerifyPR, verdict.Issue, item.Verify, item.Tier, item.Tier), true
+	}
 	c.Message, c.Issue = verdict.Message, verdict.Issue
 	model := item.Model
 	c.Rework = item.Rework
@@ -819,7 +831,9 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	}
 	// The first issue of a session lands on a context that is
 	// already empty.
-	fresh := newIssue && w.FreshPerIssue && st.worked
+	// A verification starts from nothing: it judges the work on its own
+	// evidence, not on a conversation that built something else.
+	fresh := newIssue && ((w.FreshPerIssue && st.worked) || item.Verify != "")
 	coldClear := c.Cold && s.Settings.ClearWhenCold()
 	big := s.contextOver(w, st, idle)
 	cleared := switchModel || fresh || coldClear || big > 0
@@ -848,7 +862,7 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 		st.model, c.Model = model, model
 	}
 	if newIssue {
-		st.issue, st.look = verdict.Issue, item.Look != ""
+		st.issue, st.look, st.verify = verdict.Issue, item.Look != "", item.Verify != ""
 		st.task, st.worked = "", true
 	}
 	if tellOnly && item.Model != "" {
@@ -966,7 +980,7 @@ func (s *Supervisor) deliverTask(w config.Worker, st *workerState, obs Observati
 		return err
 	}
 	c.Sent = true
-	st.task, st.issue, st.look, st.worked = task.ID, 0, false, true
+	st.task, st.issue, st.look, st.verify, st.worked = task.ID, 0, false, false, true
 	st.nudges, st.waits = []time.Time{now}, 0
 	st.lastReview, st.reviewedActivity = now, obs.LastActivity
 	s.record(st, c)
@@ -1237,13 +1251,13 @@ func (s *Supervisor) recover(worker string) *workerState {
 		case c.Verdict == runlog.VerdictStarted:
 			st.contextSince = c.Time
 			// A new session: nothing in hand, the model its command gave it.
-			st.issue, st.look, st.model, st.briefStale = 0, false, "", false
+			st.issue, st.look, st.verify, st.model, st.briefStale = 0, false, false, "", false
 			st.task, st.worked = "", false
 			st.nudges, st.waits = nil, 0
 			st.starts = append(st.starts, c.Time)
 			st.lastReview = c.Time
 		case c.Verdict == runlog.VerdictRecycled:
-			st.issue, st.look, st.model, st.limitedUntil = 0, false, "", time.Time{}
+			st.issue, st.look, st.verify, st.model, st.limitedUntil = 0, false, false, "", time.Time{}
 			st.task, st.worked = "", false
 		case c.Kind == KindBrief:
 			st.briefStale = !c.Sent
@@ -1287,15 +1301,15 @@ func (s *Supervisor) recover(worker string) *workerState {
 			if !c.Sent {
 				continue
 			}
-			if c.Issue != 0 && (c.Issue != st.issue || c.Look != st.look) {
+			if c.Issue != 0 && (c.Issue != st.issue || c.Look != st.look || c.Verify != st.verify) {
 				// A hand-over: the count starts again, as in deliver.
 				st.nudges, st.waits = nil, 0
-				st.issue, st.look = c.Issue, c.Look
+				st.issue, st.look, st.verify = c.Issue, c.Look, c.Verify
 				st.task, st.worked = "", true
 			}
 			if c.Task != "" {
 				st.nudges, st.waits = nil, 0
-				st.task, st.issue, st.look, st.worked = c.Task, 0, false, true
+				st.task, st.issue, st.look, st.verify, st.worked = c.Task, 0, false, false, true
 			}
 			st.nudges = append(st.nudges, c.Time)
 			st.briefStale = false
@@ -1324,7 +1338,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	taken := map[int]bool{}
 	for _, other := range s.Machine.Workers {
 		if other.Name != w.Name {
-			taken[runlog.IssueInHand(checkins, other.Name)] = true
+			taken[runlog.BuildingInHand(checkins, other.Name)] = true
 		}
 	}
 	bumps, err := s.bumps()
@@ -1337,6 +1351,9 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		issues, err := s.Lister.List(ctx, src)
 		if err != nil {
 			return nil, err
+		}
+		for n := range issues {
+			issues[n].Verify = s.verifies(issues[n].Repo)
 		}
 		open = append(open, issues...)
 		for _, i := range issues {
@@ -1356,6 +1373,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		return nil, err
 	}
 	items = s.withLooks(ctx, w, items, open, checkins)
+	items = s.withVerifies(ctx, w, items, open, checkins)
 	if items, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
 	}
@@ -1375,6 +1393,10 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		case (x.Look != "") != (y.Look != ""):
 			// Merged work that waits for a look holds up a release.
 			return x.Look != ""
+		case (x.Verify != "") != (y.Verify != ""):
+			// A pull request that waits for a verifier holds up the owner's
+			// review.
+			return x.Verify != ""
 		case x.rank != y.rank:
 			return x.rank < y.rank
 		case x.Repo != y.Repo:
@@ -1392,6 +1414,14 @@ func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []ru
 		PR: backlog.HandedPR(i, s.Signals), rank: src.Rank(i.LabelNames())}
 	item.priority = item.rank < len(src.Priority)
 	item.Ruled = backlog.Ruled(i, s.Signals)
+	// Handed back and not yet verified: nothing is left to build until a
+	// verifier has looked.
+	switch v := backlog.Verification(i, s.Signals); v.State {
+	case backlog.VerifyPending:
+		item.Blocked = fmt.Sprintf("pull request #%d waits for its checks, then for a verifier", v.PR)
+	case backlog.VerifyDue:
+		item.Blocked = fmt.Sprintf("pull request #%d waits for a verifier", v.PR)
+	}
 	for _, ask := range backlog.Asks(i, s.Signals) {
 		if grace := s.signal(ask.Name).GraceOrDefault(); grace > 0 && !ask.Since.IsZero() {
 			item.ParksAt = ask.Since.Add(grace)
@@ -1750,6 +1780,7 @@ func (s *Supervisor) briefText(w config.Worker) string {
 		s.remainingBrief(&b)
 	}
 	s.eyeCheckBrief(&b, w)
+	s.verifyBrief(&b, w)
 	fmt.Fprintf(&b, `
 ## One-off tasks
 

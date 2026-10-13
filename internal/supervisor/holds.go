@@ -26,7 +26,7 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open []backl
 	inHand := runlog.IssueInHand(checkins, w.Name)
 	others := map[int]string{}
 	for _, other := range s.Machine.Workers {
-		if n := runlog.IssueInHand(checkins, other.Name); other.Name != w.Name && n != 0 {
+		if n := runlog.BuildingInHand(checkins, other.Name); other.Name != w.Name && n != 0 {
 			others[n] = other.Name
 		}
 	}

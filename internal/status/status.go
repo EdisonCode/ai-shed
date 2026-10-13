@@ -30,14 +30,15 @@ const (
 
 // Issue states.
 const (
-	Working = "working"   // a tmux window is named for the issue
-	Rework  = "rework"    // handed back, but its pull request cannot merge; a worker will be sent back to it
-	Queued  = "queued"    // nobody is on it
-	Waiting = "waiting"   // it waits on the owner
-	Look    = "eye check" // its merged work waits for a worker to look at it on staging
-	Draft   = "draft"     // its pull request is a draft on purpose and says what it waits for
-	Merged  = "merged"    // its pull request merged and its hand-back lists nothing still to do; it is not handed out
-	Held    = "held"      // it waits for an issue it depends on, or for work in flight on the same code
+	Working   = "working"   // a tmux window is named for the issue
+	Rework    = "rework"    // handed back, but its pull request cannot merge; a worker will be sent back to it
+	Queued    = "queued"    // nobody is on it
+	Waiting   = "waiting"   // it waits on the owner
+	Look      = "eye check" // its merged work waits for a worker to look at it on staging
+	Draft     = "draft"     // its pull request is a draft on purpose and says what it waits for
+	Merged    = "merged"    // its pull request merged and its hand-back lists nothing still to do; it is not handed out
+	Held      = "held"      // it waits for an issue it depends on, or for work in flight on the same code
+	Verifying = "verifying" // handed back; its pull request waits for its checks and a verifier before the owner reviews it
 )
 
 // Task states.
@@ -338,6 +339,11 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 		}
 		issues = append(issues, found...)
 	}
+	for n := range issues {
+		if r, ok := cfg.Repo(issues[n].Repo); ok && r.Verify != nil {
+			issues[n].Verify = true
+		}
+	}
 
 	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
 	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels)
@@ -435,6 +441,9 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 			// owner's now, whoever has it in hand.
 			st.State = Rework
 			attend("%s#%d: %s after %d tries by a worker: %s", issue.Repo, issue.Number, st.Rework, runlog.ReworkLimit, issue.Title)
+		case verifyState(issue, signals) != "":
+			// Neither the owner's nor a builder's yet.
+			st.State, st.Worker, st.Held = Verifying, supervised, verifyState(issue, signals)
 		case supervised != "":
 			// Its supervisor watches it; a quiet spell is the supervisor's to judge.
 			working++
@@ -819,4 +828,16 @@ func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels strin
 			}
 		}
 	}
+}
+
+// verifyState says what a handed-back pull request waits for before the
+// owner reviews it, or "" when it waits for nothing of the kind.
+func verifyState(issue backlog.Issue, signals []config.Signal) string {
+	switch v := backlog.Verification(issue, signals); v.State {
+	case backlog.VerifyPending:
+		return fmt.Sprintf("pull request #%d waits for its checks", v.PR)
+	case backlog.VerifyDue:
+		return fmt.Sprintf("pull request #%d waits for a verifier", v.PR)
+	}
+	return ""
 }

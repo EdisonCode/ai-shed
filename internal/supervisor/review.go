@@ -91,6 +91,11 @@ type QueueItem struct {
 	StackOn  string
 	StackDep int
 	StackPR  int
+	// Verify is set when the item is a pull request for this worker to
+	// verify before the owner reviews it, with VerifyPR and Tier.
+	Verify   string
+	VerifyPR int
+	Tier     string
 	// priority is set when the issue has a label of its source's priority
 	// list.
 	priority bool
@@ -104,7 +109,7 @@ type QueueItem struct {
 // Workable reports whether a worker can act on the item: it needs a worker
 // again, it is an eye check, or it does not wait on the owner.
 func (q QueueItem) Workable() bool {
-	return q.Rework != "" || q.Look != "" || (len(q.Waiting) == 0 && q.Paced == "" && q.Blocked == "")
+	return q.Rework != "" || q.Look != "" || q.Verify != "" || (len(q.Waiting) == 0 && q.Paced == "" && q.Blocked == "")
 }
 
 // resumes reports whether the item is started work that came back to a
@@ -171,6 +176,7 @@ Rules for the message of a nudge:
 - One line, plain words, specific. Name the issue number, the file or the command.
 - An item marked rework was handed back with a pull request that cannot merge as it stands. Say what is wrong with the pull request and tell the worker to fix that and nothing else, even if the item also waits on the owner for something.
 - An item marked eye check is merged work that someone must look at on staging before it goes to production. It is not work to build. Hand it over like any other item; the worker's brief says how an eye check is done.
+- An item marked verify is a pull request another worker built, for this worker to check before the owner reviews it. It is not work to build. Hand it over like any other item; the worker's brief says how a verification is done, and the supervisor gives the exact order.
 - A worker that could not do an eye check is blocked: it could not sign in, staging was down, the description was too vague to judge, or the check needs an act its orders forbid. A blocked check has not passed. The worker's brief tells it to record the block in a comment on the issue. The check then leaves its queue and is the owner's to clear; the owner is told. If the terminal does not show that it posted that comment, tell it once to post it. Once it has, hand over the first workable item of the queue, or choose done when there is none. A blocked check is no reason to leave a worker idle beside an item it can act on.
 - A worker that was sent back to an item and says nothing needs to change has not finished until it hands back again. If its terminal does not show a new hand-back, tell it once to post a new hand-back that says so. Do not tell it to look for changes to make.
 - When <in_hand> shows a one-off task from the owner, its brief is the owner's own words for that task. Work it covers is in scope even where the worker's brief does not cover it. Judge the worker against it until the task is done and its report is written. Then hand over the first workable queue item, or choose done.
@@ -217,6 +223,9 @@ func Prompt(in ReviewInput) string {
 		}
 		if q.Look != "" {
 			fmt.Fprintf(&b, " [eye check: %s]", q.Look)
+		}
+		if q.Verify != "" {
+			fmt.Fprintf(&b, " [verify: %s]", q.Verify)
 		}
 		if q.Paced != "" {
 			fmt.Fprintf(&b, " [held: %s]", q.Paced)

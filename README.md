@@ -381,6 +381,60 @@ pull request's own CI can shrink to what the gates do not cover.
 A `repos` entry may have gates alone. The release state and eye checks need
 `staging.commit`, and leave out a repository that has none.
 
+### Verification before your review
+
+A second reader catches work that does not do what its issue asked. A
+strong model told to break every pull request costs as much on a typo as on
+a refund, so the depth of the reading follows the risk of the change.
+Give a repository `verify`, and a worker `verifies: true`:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    verify:
+      areas:                              # changes here are high risk
+        - name: billing
+          paths: [internal/billing/, migrations/]
+        - name: auth
+          paths: [internal/auth/]
+      high_lines: 400                     # the default: a code change this large is high risk
+
+machines:
+  - name: mac-mini
+    workers:
+      - name: rev
+        verifies: true
+
+supervisor:
+  models:
+    default: sonnet
+    verify: { low: haiku, high: opus }    # optional: the model each tier runs on
+```
+
+- **Deterministic first.** A handed-back pull request waits until its checks
+  have finished. One that fails a check, `shed/gates` included, goes back to
+  a worker as rework and no model reads it.
+- **The tier** is rated with no model, from the diff. A pull request is
+  `high` when it touches an area, when it changes more than `high_lines`
+  lines of code, or when its code changed and no test did. Otherwise it is
+  `low`. Documentation alone is never high.
+- **The verifier** is handed the pull request ahead of new work, with an
+  empty context and on the tier's model. It reads the issue and its
+  acceptance, checks the branch out in its own directory, and goes once
+  through a `low` pull request; a `high` one it tries to break. It changes
+  no code.
+- **Its verdict** is a comment on the issue. `Verified (high):` with its
+  evidence passes the work, and only then does the review wait on you.
+  `Verification failed (high):` with its findings sends the pull request
+  back to a worker as rework, as your own ruling would.
+- **A second reader.** Where two workers verify the queue, neither is handed
+  what it built. A verifier alone verifies its own work in a fresh context.
+- While it waits, the issue is `verifying` in `shed status`, not waiting on
+  you, and no worker is handed it to build. The digest counts the spend
+  under `verification`.
+- A repository with `verify` needs a worker that verifies and takes its
+  issues, and the fleet file says so when it has none.
+
 ### Eye checks on staging
 
 A worker tests what it builds, and some work still needs someone to look at

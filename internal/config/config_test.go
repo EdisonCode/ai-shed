@@ -451,7 +451,7 @@ func TestARepoMayBeListedForItsGatesAlone(t *testing.T) {
 
 func TestARepoNeedsStagingOrGatesAndAGatesTimeoutIsADuration(t *testing.T) {
 	for _, tc := range []struct{ repo, want string }{
-		{"{repo: org/app}", "give it staging or gates"},
+		{"{repo: org/app}", "give it staging, gates or verify"},
 		{"{repo: org/app, gates: {command: make, timeout: soon}}", "gates.timeout"},
 		{"{repo: org/app, gates: {timeout: 5m}, staging: {commit: echo x}}", "gates.timeout needs gates.command"},
 		{"{repo: org/app, staging: {url: https://s.example.com}}", "staging.commit is required"},
@@ -503,5 +503,28 @@ func TestAStagingDeployNeedsAMachineThatDeploys(t *testing.T) {
 	}
 	if w := cfg.Repos[0].Staging.DeployWhen; w.WaitingLooksOrDefault() != 5 || w.OrAfterOrDefault() != 4*time.Hour {
 		t.Fatalf("deploy_when defaults = %d, %s", w.WaitingLooksOrDefault(), w.OrAfterOrDefault())
+	}
+}
+
+func TestVerifyNeedsAVerifierThatTakesTheRepository(t *testing.T) {
+	repo := "repos: [{repo: org/app, verify: {areas: [{name: billing, paths: [internal/billing/]}]}}]\n"
+	_, err := Parse([]byte(minimal + "    issues: [{repo: org/app, label: x}]\n    workers: [{name: w, dir: /tmp, brief: b}]\n" + repo))
+	if err == nil || !strings.Contains(err.Error(), "verify needs a worker with verifies: true") {
+		t.Fatalf("err = %v", err)
+	}
+	cfg, err := Parse([]byte(minimal + "    issues: [{repo: org/app, label: x}]\n    workers: [{name: w, dir: /tmp, brief: b, verifies: true}]\n" + repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := cfg.Repo("org/app"); r.Verify == nil || r.Verify.HighLinesOrDefault() != DefaultHighLines {
+		t.Fatalf("repo = %+v", r)
+	}
+	_, err = Parse([]byte(minimal + "    issues: [{repo: org/app, label: x}]\n    workers: [{name: w, dir: /tmp, brief: b, verifies: true}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "no repository of its queue has verify") {
+		t.Fatalf("a verifier with nothing to verify: err = %v", err)
+	}
+	_, err = Parse([]byte(minimal + "supervisor: {models: {verify: {medium: x}, default: opus}}\n"))
+	if err == nil || !strings.Contains(err.Error(), `models.verify "medium"`) {
+		t.Fatalf("a tier that does not exist: err = %v", err)
 	}
 }
