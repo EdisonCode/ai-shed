@@ -1209,6 +1209,11 @@ Merged: 3 pull request(s)
   my-org/my-app#138  6h ago   Paginate the audit log
   my-org/my-app#140  2h ago   Show the total on the order page
 
+Where the time went: 3 merged pull request(s), median and worst
+  build   42m  3h   my-org/my-app#140  first commit to ready for review
+  checks  11m  28m  my-org/my-app#138  the merged head's checks, first started to last finished
+  waits   5h   20h  my-org/my-app#131  checks finished or ready, whichever is later, to merged
+
 Eye checks: my-org/my-app
   1 passed in this window; now 1 not done (1 on staging, 0 wait for a staging deploy), 1 failed
     #123  PR #131  passed  3h ago  Retry the export when the API times out
@@ -1223,6 +1228,22 @@ Waiting on you: 2
 Also needs you: 1
   ! mac-mini: unreachable: me@mac-mini: exit status 255: Operation timed out
 ```
+
+`Where the time went` splits each merged pull request into three stages,
+read from GitHub, and names the pull request that was slowest at each:
+
+- **build**: from the first commit to ready for review, the time the work
+  took to write.
+- **checks**: the checks on the merged head, from the first started to the
+  last finished. GitHub keeps no time for a push; the first check's start
+  is the nearest record.
+- **waits**: from the checks finishing, or the pull request being marked
+  ready if that was later, to the merge. The time it sat in your hands or
+  in a merge queue.
+
+A stage GitHub has no record of, such as checks on a pull request that has
+none, is left out of that stage's median. `-json` carries each pull
+request's stages under `stages`.
 
 `Idle worker-hours` totals the time workers spent not working in the window,
 by cause: no work in the queue, an error of the tool, waiting on you, a usage

@@ -37,6 +37,9 @@ type Digest struct {
 	// Usage is what each machine's workers spent in the window, when the
 	// collector reads usage.
 	Usage []MachineUsage `json:"usage,omitempty"`
+	// Stages is where the time of each pull request merged in the window
+	// went, when the collector reads pull request times.
+	Stages []PullStages `json:"stages,omitempty"`
 	// Problems lists what could not be read.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -91,6 +94,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 		slices.SortFunc(rm.Pulls, func(a, b looks.Pull) int { return a.MergedAt.Compare(b.MergedAt) })
 		d.Merged = append(d.Merged, rm)
 	}
+	c.collectStages(ctx, &d)
 	return d
 }
 
@@ -117,6 +121,8 @@ func RenderDigest(w io.Writer, d Digest) {
 		}
 	}
 	tw.Flush()
+
+	renderStages(w, d.Stages)
 
 	// What the idle time was lost to: each cause has its own remedy.
 	var idle []string

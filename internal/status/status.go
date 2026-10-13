@@ -162,6 +162,9 @@ type Collector struct {
 	// Usage reads what each machine's workers spent. It is needed only for
 	// a digest, and nil leaves usage out.
 	Usage UsageReader
+	// Times reads when each step of a merged pull request happened. It is
+	// needed only for a digest, and nil leaves the stages out.
+	Times PullTimer
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.
