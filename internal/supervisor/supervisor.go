@@ -20,6 +20,7 @@ import (
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/looks"
+	"github.com/edisoncode/ai-shed/internal/pricing"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
@@ -137,7 +138,9 @@ type Supervisor struct {
 	Claimer Claimer
 	// Cost posts the tokens an issue cost onto the pull request its hand-back
 	// named. Nil posts nothing.
-	Cost        CostPoster
+	Cost CostPoster
+	// Prices weighs the tokens in the cost comment. Nil names tokens only.
+	Prices      pricing.Table
 	QueueLabels []string
 	// Repos is what the fleet file says about each repository's deploys, and
 	// Looks reads the eye checks that merged work still owes. Looks may be

@@ -704,6 +704,21 @@ with the tokens the worker's session spent on the issue: uncached input,
 cache write, cache read and output, by model. A later pass, such as rework,
 updates the same comment with this pass and the total.
 
+Each model's line ends with what its tokens would cost at Anthropic's
+published API rates, and the comment totals them: `At API rates: $2.26`.
+A subscription does not pay that price. The rates are the weights that make
+a cache read, a cache write and an output token of different models
+comparable, as a subscription's limits also count them differently. shed
+carries the rates of the pricing page; the fleet file can replace one or add
+a model it has no rate for, in US dollars per million tokens:
+
+```yaml
+pricing:
+  my-local-model: {input: 0, cache_write_5m: 0, cache_write_1h: 0, cache_read: 0, output: 0}
+```
+
+A model with no rate shows `no published rate` and is left out of the total.
+
 The numbers are read from the session transcript the tool's hooks point at.
 They are not the worker's own estimate. A few calls the tool keeps only in
 memory are missing, and the comment says so. The reviewer's own calls are
