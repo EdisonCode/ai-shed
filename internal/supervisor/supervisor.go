@@ -142,6 +142,8 @@ type Supervisor struct {
 	Terminal       Terminal
 	Reviewer       Reviewer
 	Lister         backlog.Lister
+	// Merger queues a pull request for its merge. Nil queues nothing.
+	Merger Merger
 	// Releaser moves the issue of a spent worker onto the account's overflow
 	// label. Nil releases nothing.
 	Releaser Releaser
@@ -197,6 +199,8 @@ type Supervisor struct {
 	// pace is the last reading of the weekly pace, made at paceAt.
 	pace   runlog.Pace
 	paceAt time.Time
+	// mergeQueued holds the pull requests this agent queued for merge.
+	mergeQueued map[string]bool
 	// diffs keeps the pull request diffs read for a risk tier.
 	diffs map[string]keptDiff
 	// deploys holds where each repository's staging deploy stands.
@@ -1407,6 +1411,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	}
 	items = s.withLooks(ctx, w, items, open, checkins)
 	items = s.withVerifies(ctx, w, items, open, checkins)
+	s.queueMerges(ctx, open, checkins)
 	if items, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
 	}

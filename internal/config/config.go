@@ -152,6 +152,22 @@ type Verify struct {
 	Areas []Area `yaml:"areas"`
 	// HighLines is how many changed lines make a pull request high risk.
 	HighLines int `yaml:"high_lines"`
+	// MergeLow moves the owner's approval of a low-risk pull request from
+	// the merge to the promotion: one that a verifier passed at low risk,
+	// with green checks and nothing else waiting on the owner, is queued
+	// for merge by the machine that built it. Off unless set.
+	MergeLow bool `yaml:"merge_low"`
+	// MergeMethod is how such a pull request merges where the repository
+	// has no merge queue: merge, squash or rebase.
+	MergeMethod string `yaml:"merge_method"`
+}
+
+// MergeMethodOrDefault is the merge method of a queued merge.
+func (v Verify) MergeMethodOrDefault() string {
+	if v.MergeMethod == "" {
+		return "merge"
+	}
+	return v.MergeMethod
 }
 
 // Area is a named set of paths whose changes are high risk.
@@ -825,6 +841,9 @@ func (c *Config) validateVerify() error {
 		}
 		if !covered {
 			fail("repos: %s: verify needs a worker with verifies: true whose queue takes %s", r.Name, r.Name)
+		}
+		if m := r.Verify.MergeMethod; m != "" && m != "merge" && m != "squash" && m != "rebase" {
+			fail("repos: %s: verify.merge_method %q must be merge, squash or rebase", r.Name, m)
 		}
 		for _, a := range r.Verify.Areas {
 			if a.Name == "" || len(a.Paths) == 0 {

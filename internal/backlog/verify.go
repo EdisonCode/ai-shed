@@ -2,6 +2,8 @@ package backlog
 
 import (
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,4 +122,51 @@ func VerifyOutcomes(issue Issue, signals []config.Signal) []VerifyOutcome {
 		}
 	}
 	return out
+}
+
+// QueuedPhrase starts shed's comment on an issue whose pull request it put
+// on its way to the merge.
+const QueuedPhrase = "Queued for merge by shed:"
+
+// QueuedByShed reports whether shed queued the pull request for its merge.
+func QueuedByShed(issue Issue, pr int) bool {
+	want := "#" + strconv.Itoa(pr) + ","
+	for _, c := range issue.Comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), QueuedPhrase) && strings.Contains(c.Body, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// HandedPRs returns every pull request the issue's hand-backs named, in the
+// order first named.
+func HandedPRs(issue Issue, signals []config.Signal) []int {
+	var out []int
+	for _, s := range signals {
+		if !s.FollowsPR {
+			continue
+		}
+		for _, c := range issue.Comments {
+			if value, found := asked(strings.ToLower(c.Body), s); found {
+				for _, n := range prNumbers(value) {
+					if !slices.Contains(out, n) {
+						out = append(out, n)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// LastVerified returns the tier and the words of the issue's last passed
+// verification; empty when none passed.
+func LastVerified(issue Issue) (tier, note string) {
+	for _, c := range issue.Comments {
+		if m := verdictRE.FindStringSubmatch(c.Body); m != nil && !strings.EqualFold(m[1], VerificationFailedPhrase) {
+			tier, note = strings.ToLower(m[2]), strings.TrimSpace(strings.Trim(m[3], "*_ "))
+		}
+	}
+	return tier, note
 }

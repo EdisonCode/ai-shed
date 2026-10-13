@@ -50,6 +50,9 @@ type PR struct {
 	Draft bool
 	// Pending is set while a check of its head still runs.
 	Pending bool
+	// AutoMerge is set when the pull request merges by itself once its
+	// checks pass, or waits in a merge queue.
+	AutoMerge bool
 }
 
 type Label struct {
@@ -212,7 +215,7 @@ func (GH) Claim(ctx context.Context, repo string, number int, add, remove string
 
 func openPRs(ctx context.Context, repo string) (map[int]PR, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000",
-		"--json", "number,mergeable,isDraft,statusCheckRollup")
+		"--json", "number,mergeable,isDraft,statusCheckRollup,autoMergeRequest")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -235,17 +238,18 @@ type check struct {
 
 func parsePRs(data []byte) (map[int]PR, error) {
 	var prs []struct {
-		Number    int     `json:"number"`
-		Mergeable string  `json:"mergeable"`
-		Draft     bool    `json:"isDraft"`
-		Checks    []check `json:"statusCheckRollup"`
+		Number    int       `json:"number"`
+		Mergeable string    `json:"mergeable"`
+		Draft     bool      `json:"isDraft"`
+		Checks    []check   `json:"statusCheckRollup"`
+		AutoMerge *struct{} `json:"autoMergeRequest"`
 	}
 	if err := json.Unmarshal(data, &prs); err != nil {
 		return nil, fmt.Errorf("gh pr list: parse output: %w", err)
 	}
 	open := make(map[int]PR, len(prs))
 	for _, pr := range prs {
-		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks), Draft: pr.Draft, Pending: pending(pr.Checks)}
+		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks), Draft: pr.Draft, Pending: pending(pr.Checks), AutoMerge: pr.AutoMerge != nil}
 	}
 	return open, nil
 }
@@ -328,6 +332,10 @@ func (a Ask) What() string {
 func Asks(issue Issue, signals []config.Signal) []Ask {
 	rework := Rework(issue, signals) != ""
 	verifying := unverified(issue, signals)
+	if _, pr := lastHandBack(issue, signals); issue.OpenPRs[pr].AutoMerge {
+		// On its way to the merge: nothing about it waits on the owner.
+		verifying = true
+	}
 	var asks []Ask
 	for _, s := range signals {
 		isOpen, pr, since, line := signalState(issue, s)
@@ -778,4 +786,22 @@ func ReleasedBy(issue Issue) string {
 		}
 	}
 	return by
+}
+
+// QueueMerge puts the pull request on its way to the merge: into the
+// repository's merge queue, or to merge by itself once its required checks
+// pass. Then it says so on the issue.
+func (GH) QueueMerge(ctx context.Context, repo string, issue, pr int, method, comment string) error {
+	for _, step := range [][]string{
+		{"pr", "merge", strconv.Itoa(pr), "--repo", repo, "--auto", "--" + method},
+		{"issue", "comment", strconv.Itoa(issue), "--repo", repo, "--body", comment},
+	} {
+		cmd := exec.CommandContext(ctx, "gh", step...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("gh %s %s %s#%s: %w: %s", step[0], step[1], repo, step[2], err, strings.TrimSpace(stderr.String()))
+		}
+	}
+	return nil
 }

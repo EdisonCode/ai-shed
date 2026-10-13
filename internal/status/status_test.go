@@ -1345,3 +1345,47 @@ func TestStatusListsWhatWasReleasedToTheFleet(t *testing.T) {
 		t.Fatalf("output:\n%s", out.String())
 	}
 }
+
+type fakeStaging struct{ serves map[string]bool }
+
+// Contains answers by "head@commit".
+func (f fakeStaging) Contains(_ context.Context, _, head, commit string) (bool, error) {
+	return f.serves[head+"@"+commit], nil
+}
+
+func TestThePromotionBriefSplitsWhatShedMergedFromWhatTheOwnerDid(t *testing.T) {
+	cfg := withRepo(true)
+	state := looks.Report{Repo: "org/app", Staging: "ccc3333", Production: "aaa1111", Since: now.Add(-48 * time.Hour)}
+	queued := issue(5, "## Hand-back\n**PR:** #41 (ready)", "Verified (low): ran the export tests", backlog.QueuedPhrase+" pull request #41, verified at low risk with green checks.")
+	mine := issue(6, "## Hand-back\n**PR:** #42 (ready)", "Verified (high): tried to break the refund")
+	merged := &fakeMerged{pulls: map[int]looks.Pull{
+		41: {Number: 41, Title: "Retry the export", MergedAt: now.Add(-5 * time.Hour), Commit: "m41"},
+		42: {Number: 42, Title: "Refund a partial order", MergedAt: now.Add(-2 * time.Hour), Commit: "m42"},
+	}}
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{mine}}, Looks: &fakeLooks{report: state}, Closed: fakeClosed{issues: []backlog.Issue{queued}}}
+	merged.pulls[40] = looks.Pull{Number: 40, Title: "Already in production", MergedAt: now.Add(-48 * time.Hour), Commit: "aaa1111"}
+	p, err := c.Promote(context.Background(), cfg, "org/app", merged, fakeStaging{serves: map[string]bool{"ccc3333@m41": true, "aaa1111@aaa1111": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.ByShed) != 1 || p.ByShed[0].PR != 41 || p.ByShed[0].Verified != "ran the export tests" || len(p.ByOwner) != 1 || p.ByOwner[0].Tier != "high" {
+		t.Fatalf("promotion = %+v", p)
+	}
+	if !p.Blocked() {
+		t.Fatal("a pull request staging does not serve did not stop the promotion")
+	}
+	var out bytes.Buffer
+	RenderPromotion(&out, p, now)
+	for _, want := range []string{
+		"org/app: 2 pull request(s) merged since production (production aaa1111, 2d ago; staging ccc3333)",
+		"No go yet",
+		"Queued by shed on the verifier's word, low risk: 1",
+		"#41  #5  on staging  low  Retry the export",
+		"verified: ran the export tests",
+		"#42  #6  NOT ON STAGING  high  Refund a partial order",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("brief lacks %q:\n%s", want, out.String())
+		}
+	}
+}
