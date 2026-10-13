@@ -5,12 +5,14 @@ package status
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"text/tabwriter"
 	"time"
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
@@ -55,6 +57,20 @@ type Report struct {
 	// Repos is the release state of each repository under `repos` in the
 	// fleet file; empty when it has none.
 	Repos []RepoReport `json:"repos"`
+	// Released are the issues a spent machine gave to the fleet that no
+	// machine has taken yet.
+	Released []ReleasedIssue `json:"released,omitempty"`
+}
+
+// ReleasedIssue is an issue on an overflow label, waiting for a machine with
+// room.
+type ReleasedIssue struct {
+	Repo   string    `json:"repo"`
+	Number int       `json:"number"`
+	Title  string    `json:"title"`
+	By     string    `json:"by"`
+	Since  time.Time `json:"since"`
+	Label  string    `json:"label"`
 }
 
 type MachineReport struct {
@@ -307,7 +323,7 @@ func (c Collector) CollectAll(ctx context.Context, cfg *config.Config) Report {
 			}
 		}
 	}
-	return Report{Machines: c.collectMachines(ctx, cfg, workerLooks), Repos: repos}
+	return Report{Machines: c.collectMachines(ctx, cfg, workerLooks), Repos: repos, Released: c.collectReleased(ctx, cfg)}
 }
 
 func issueKey(repo string, number int) string {
@@ -958,4 +974,64 @@ func attendWaiting(waiting []IssueStatus, now time.Time, attend func(string, ...
 		}
 		attend("%d pull request(s) verified at low risk with green checks wait for your merge%s: %s", len(merges), age, strings.Join(merges, " "))
 	}
+}
+
+// collectReleased lists the issues on each account's overflow label: work a
+// spent machine gave up that no machine has taken yet.
+func (c Collector) collectReleased(ctx context.Context, cfg *config.Config) []ReleasedIssue {
+	var out []ReleasedIssue
+	for _, a := range cfg.Accounts {
+		if a.Overflow == "" || c.Lister == nil {
+			continue
+		}
+		var repos []string
+		for _, name := range a.Machines {
+			if m, ok := cfg.Machine(name); ok {
+				for _, src := range m.AllSources() {
+					if !slices.Contains(repos, src.Repo) {
+						repos = append(repos, src.Repo)
+					}
+				}
+			}
+		}
+		for _, repo := range repos {
+			issues, err := c.Lister.List(ctx, config.IssueSource{Repo: repo, Label: a.Overflow})
+			if err != nil {
+				continue
+			}
+			for _, i := range issues {
+				r := ReleasedIssue{Repo: i.Repo, Number: i.Number, Title: i.Title, By: backlog.ReleasedBy(i), Label: a.Overflow}
+				for _, cm := range i.Comments {
+					if strings.HasPrefix(strings.TrimSpace(cm.Body), backlog.ReleasedPhrase) {
+						r.Since = cm.CreatedAt
+					}
+				}
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
+// RenderReleased lists the issues given to the fleet that wait for a
+// machine with room.
+func RenderReleased(w io.Writer, released []ReleasedIssue, now time.Time) {
+	if len(released) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "Released to the fleet, waiting for a machine with room: %d\n", len(released))
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for _, r := range released {
+		age := "-"
+		if !r.Since.IsZero() {
+			age = Short(now.Sub(r.Since))
+		}
+		by := r.By
+		if by == "" {
+			by = "-"
+		}
+		fmt.Fprintf(tw, "  %s\t%s#%d\tfrom %s\t%s\n", age, r.Repo, r.Number, by, r.Title)
+	}
+	tw.Flush()
+	fmt.Fprintln(w)
 }

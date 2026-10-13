@@ -528,3 +528,18 @@ func TestVerifyNeedsAVerifierThatTakesTheRepository(t *testing.T) {
 		t.Fatalf("a tier that does not exist: err = %v", err)
 	}
 }
+
+func TestOverflowNeedsAMachineThatTakesItAsBackfill(t *testing.T) {
+	account := "accounts: [{name: max-1, machines: [box], overflow: \"fleet:ready\"}]\n"
+	_, err := Parse([]byte(minimal + "    issues: [{repo: org/app, label: \"machine:box\"}]\n" + account))
+	if err == nil || !strings.Contains(err.Error(), "nothing would take a released issue") {
+		t.Fatalf("err = %v", err)
+	}
+	_, err = Parse([]byte(minimal + "    issues: [{repo: org/app, label: \"fleet:ready\"}]\n" + account))
+	if err == nil || !strings.Contains(err.Error(), "list it with backfill: true") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := Parse([]byte(minimal + "    issues: [{repo: org/app, label: \"machine:box\"}, {repo: org/app, label: \"fleet:ready\", backfill: true}]\n" + account)); err != nil {
+		t.Fatal(err)
+	}
+}

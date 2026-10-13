@@ -2760,9 +2760,13 @@ type fakeClaimer struct {
 	err     error
 }
 
-func (f *fakeClaimer) Claim(_ context.Context, repo string, number int, label string) error {
+func (f *fakeClaimer) Claim(_ context.Context, repo string, number int, add, remove string) error {
 	if f.err == nil {
-		f.claimed = append(f.claimed, fmt.Sprintf("%s#%d %s", repo, number, label))
+		entry := fmt.Sprintf("%s#%d %s", repo, number, add)
+		if remove != "" {
+			entry = fmt.Sprintf("%s#%d +%s -%s", repo, number, add, remove)
+		}
+		f.claimed = append(f.claimed, entry)
 	}
 	return f.err
 }

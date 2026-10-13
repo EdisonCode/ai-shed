@@ -50,6 +50,9 @@ type Digest struct {
 	// Defaults is how the safe defaults of each area went, over the issues
 	// closed in the window.
 	Defaults []DefaultGroup `json:"defaults,omitempty"`
+	// Releases counts, by machine/worker, the releases to the fleet on the
+	// issues closed in the window.
+	Releases map[string]int `json:"releases,omitempty"`
 	// Problems lists what could not be read.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -108,6 +111,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 	c.collectEscapes(ctx, cfg, &d)
 	c.collectLessons(ctx, cfg, &d)
 	c.collectDefaults(ctx, cfg, &d)
+	c.collectReleases(ctx, cfg, &d)
 	return d
 }
 
@@ -139,6 +143,7 @@ func RenderDigest(w io.Writer, d Digest) {
 	renderStages(w, d.Stages)
 	renderEscapes(w, d.Verification)
 	renderDefaults(w, d.Defaults)
+	renderReleases(w, d.Releases)
 
 	// What the idle time was lost to: each cause has its own remedy.
 	var idle []string

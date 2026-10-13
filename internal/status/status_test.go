@@ -1326,3 +1326,22 @@ func TestDigestCountsTheSafeDefaultsTheOwnerOverruledByArea(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusListsWhatWasReleasedToTheFleet(t *testing.T) {
+	cfg := oneMachine()
+	cfg.Machines[0].Issues = []config.IssueSource{{Repo: "org/app", Label: "machine:box"}}
+	cfg.Accounts = []config.Account{{Name: "max-1", Machines: []string{"box"}, Overflow: "fleet:ready"}}
+	released := issue(12)
+	released.Title = "Paginate the audit log"
+	released.Comments = []backlog.Comment{{Body: "Released: box/app, weekly limit.", CreatedAt: now.Add(-3 * time.Hour)}}
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{released}}, Looks: &fakeLooks{}}
+	got := c.collectReleased(context.Background(), cfg)
+	if len(got) != 1 || got[0].By != "box/app" || got[0].Label != "fleet:ready" {
+		t.Fatalf("released = %+v", got)
+	}
+	var out bytes.Buffer
+	RenderReleased(&out, got, now)
+	if !strings.Contains(out.String(), "3h  org/app#12  from box/app  Paginate the audit log") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}

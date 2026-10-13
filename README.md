@@ -1469,6 +1469,59 @@ Account max-1: $180.00 of $400.00 this week, pace line $200.00 (mac-mini, linux-
 Pick the budget from what a week of your plan has bought: the digest's
 `Usage at API rates` over `-since 168h` for a week that ended at the limit.
 
+### Sharing work across machines
+
+A weekly limit idles every worker on an account for days, while a machine
+on another account has room. The work does not need the session that
+started it: the plan is in the issue and the work is on its branch, which is
+what a cleared context already resumes from. Let a spent machine hand its
+issue on:
+
+```yaml
+accounts:
+  - name: max-1
+    machines: [mac-mini]
+    overflow: "fleet:ready"          # where a spent worker releases its issue
+
+machines:
+  - name: linux-box                  # another account
+    issues:
+      - repo: my-org/my-app
+        label: "machine:linux-box"
+      - repo: my-org/my-app
+        label: "fleet:ready"         # takes released issues when its queue is empty
+        backfill: true
+```
+
+- **The holder releases; nobody takes.** A worker of `max-1` that is at its
+  weekly limit, or stuck, releases the issue in hand when the work lives
+  outside its session (its hand-back names a pull request, or a comment
+  landed after the hand-over) and its tool is not in a turn. A five-hour
+  limit is waited out. A bumped issue, an eye check, a verification and a
+  task are never released. A machine that cannot be reached cannot release,
+  so two workers never build on one branch.
+- **Releasing** takes the machine's queue label off the issue, puts
+  `fleet:ready` on, and comments `Released: mac-mini/app, weekly limit
+  (resets Wed 18:00)`. The worker's context is cleared, so when its limit
+  resets it takes its next issue instead of going on with this one.
+- **Taking.** A machine that lists `fleet:ready` as a backfill source takes
+  a released issue when its own queue has nothing it can act on, puts its
+  own label on and takes `fleet:ready` off. Its worker is told the issue was
+  released and to go on from the plan, the branch and the pull request.
+  Two machines that look at the same moment both see `fleet:ready`; it is
+  the same window backfill has.
+- **Overlap across machines.** With `overflow` set, an issue that carries
+  another machine's queue label, has a `**Paths:**` plan comment and no
+  hand-back after it is work in flight there, and holds an overlapping
+  issue here.
+- `shed status` lists the released issues no machine has taken yet, and
+  `shed digest` counts the releases on the issues it closed. The weekly
+  limit line stays, so switching the account still works when nothing takes
+  the work.
+- An account may have `overflow` without `weekly_budget` and `resets`: it is
+  then not paced. The fleet file asks that some machine take `overflow` as a
+  backfill source, and that no machine has it as its own queue.
+
 ### Switching a machine's account
 
 When a machine's Claude account reaches its weekly limit, it can move to an

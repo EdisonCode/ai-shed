@@ -1,8 +1,10 @@
 package supervisor
 
 import (
+	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
@@ -18,7 +20,7 @@ import (
 //
 // Started work is never held: the worker's own issue in hand, rework and
 // eye checks.
-func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open []backlog.Issue, checkins []runlog.Checkin) {
+func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewhere []backlog.Issue, checkins []runlog.Checkin) {
 	byNumber := map[int]backlog.Issue{}
 	for _, i := range open {
 		byNumber[i.Number] = i
@@ -58,6 +60,17 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open []backl
 				break
 			}
 		}
+		for _, other := range elsewhere {
+			if item.Blocked != "" {
+				break
+			}
+			if other.Repo != issue.Repo || other.Number == issue.Number {
+				continue
+			}
+			if why := backlog.Overlap(issue, other, s.Settings.OverlapLabels); why != "" {
+				item.Blocked = fmt.Sprintf("overlaps #%d, in flight on another machine: %s", other.Number, why)
+			}
+		}
 	}
 }
 
@@ -80,4 +93,48 @@ func (s *Supervisor) stackOnDep(item *QueueItem, deps []backlog.Dep, byNumber ma
 	item.StackOn = fmt.Sprintf("#%d's pull request #%d waits for review", dep.Number, pr)
 	item.StackDep, item.StackPR = dep.Number, pr
 	return true
+}
+
+// inFlightElsewhere lists the issues other machines of the fleet are
+// building, as far as the issues say: they carry another machine's queue
+// label, and their plan is written and not handed back. Only a fleet that
+// shares work across machines (an account with overflow) asks: one search
+// per repository.
+func (s *Supervisor) inFlightElsewhere(ctx context.Context, w config.Worker) []backlog.Issue {
+	if s.Account == nil || s.Account.Overflow == "" {
+		return nil
+	}
+	own := map[string]bool{}
+	for _, src := range s.Machine.AllSources() {
+		own[src.Label] = true
+	}
+	var labels []string
+	for _, l := range s.QueueLabels {
+		if !own[l] && l != s.Account.Overflow {
+			labels = append(labels, fmt.Sprintf("%q", l))
+		}
+	}
+	if len(labels) == 0 {
+		return nil
+	}
+	var repos []string
+	for _, src := range s.Machine.SourcesFor(w) {
+		if !slices.Contains(repos, src.Repo) {
+			repos = append(repos, src.Repo)
+		}
+	}
+	var out []backlog.Issue
+	for _, repo := range repos {
+		issues, err := s.Lister.List(ctx, config.IssueSource{Repo: repo, Query: "label:" + strings.Join(labels, ",")})
+		if err != nil {
+			s.Logf("worker %s: work in flight elsewhere: %v", w.Name, err)
+			continue
+		}
+		for _, i := range issues {
+			if backlog.InFlight(i, s.Signals) {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
 }

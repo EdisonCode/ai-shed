@@ -94,6 +94,7 @@ const (
 	VerdictHeld       = "held"        // its next issue waits for the machine to have room
 	VerdictStarted    = "started"     // the supervisor started its session
 	VerdictRecycled   = "recycled"    // the supervisor ended its session to start a fresh one
+	VerdictReleased   = "released"    // it gave its issue to the fleet: another machine may take it
 	VerdictError      = "error"       // the check-in itself failed
 )
 
@@ -260,7 +261,7 @@ func InHand(checkins []Checkin, worker string) (issue int, look bool) {
 	for _, c := range checkins {
 		switch {
 		case c.Worker != worker:
-		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled:
+		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled || c.Verdict == VerdictReleased:
 			issue, look = 0, false
 		case c.Sent && c.Task != "":
 			// A one-off task took the place of the issue it had.
@@ -332,7 +333,7 @@ func BuildingInHand(checkins []Checkin, worker string) int {
 	for _, c := range checkins {
 		switch {
 		case c.Worker != worker:
-		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled:
+		case c.Verdict == VerdictStarted || c.Verdict == VerdictRecycled || c.Verdict == VerdictReleased:
 			issue = 0
 		case c.Sent && c.Task != "":
 			issue = 0
