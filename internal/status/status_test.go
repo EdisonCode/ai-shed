@@ -1139,3 +1139,27 @@ func TestStatusShowsTheLastStagingDeployAndAFailureNeedsTheOwner(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusShowsWhyAQueuedIssueIsHeld(t *testing.T) {
+	deps := issue(11, "")
+	deps.Deps = []backlog.Dep{{Repo: "org/app", Number: 9, Open: true}}
+	inHand := issue(12, "")
+	inHand.Labels = []backlog.Label{{Name: "area:billing"}}
+	same := issue(13, "")
+	same.Labels = []backlog.Label{{Name: "area:billing"}}
+	free := issue(14, "")
+	issues := []backlog.Issue{deps, inHand, same, free}
+	report := MachineReport{Issues: []IssueStatus{
+		{Repo: "org/app", Number: 11, State: Queued}, {Repo: "org/app", Number: 12, State: Working, Worker: "docs"},
+		{Repo: "org/app", Number: 13, State: Queued}, {Repo: "org/app", Number: 14, State: Queued},
+	}}
+	MarkHeld(&report, issues, "area:")
+	want := []struct{ state, held string }{
+		{Held, "waits for #9 to close"}, {Working, ""}, {Held, "overlaps #12 in hand: both are area:billing"}, {Queued, ""},
+	}
+	for n, w := range want {
+		if got := report.Issues[n]; got.State != w.state || got.Held != w.held {
+			t.Errorf("#%d = %s %q, want %s %q", got.Number, got.State, got.Held, w.state, w.held)
+		}
+	}
+}

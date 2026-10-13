@@ -82,6 +82,15 @@ type QueueItem struct {
 	// Paced says why the item is not handed out while the account is ahead
 	// of its weekly pace; empty when it may be.
 	Paced string
+	// Blocked says why the item waits for other work: an issue it depends
+	// on that is still open, or an issue in another worker's hands that
+	// touches the same code.
+	Blocked string
+	// StackOn says which ready pull request of an issue it depends on the
+	// item is built on, with StackDep and StackPR naming them.
+	StackOn  string
+	StackDep int
+	StackPR  int
 	// priority is set when the issue has a label of its source's priority
 	// list.
 	priority bool
@@ -95,7 +104,7 @@ type QueueItem struct {
 // Workable reports whether a worker can act on the item: it needs a worker
 // again, it is an eye check, or it does not wait on the owner.
 func (q QueueItem) Workable() bool {
-	return q.Rework != "" || q.Look != "" || (len(q.Waiting) == 0 && q.Paced == "")
+	return q.Rework != "" || q.Look != "" || (len(q.Waiting) == 0 && q.Paced == "" && q.Blocked == "")
 }
 
 // resumes reports whether the item is started work that came back to a
@@ -211,6 +220,12 @@ func Prompt(in ReviewInput) string {
 		}
 		if q.Paced != "" {
 			fmt.Fprintf(&b, " [held: %s]", q.Paced)
+		}
+		if q.Blocked != "" {
+			fmt.Fprintf(&b, " [held: %s]", q.Blocked)
+		}
+		if q.StackOn != "" {
+			fmt.Fprintf(&b, " [stack on: %s; build this on a new branch from it]", q.StackOn)
 		}
 		if q.Stack != "" {
 			fmt.Fprintf(&b, " [stack: %s; build what is still to do on a branch from it: %s]", q.Stack, strings.Join(q.Remaining, "; "))

@@ -86,6 +86,7 @@ const (
 	unaskedRework = " Its pull request cannot merge as it stands: %s. Fix that and nothing else."
 	unaskedRuled  = " The owner answered its question: read the answer in the issue and go on from there."
 	unaskedStack  = " %s: build what is still to do (%s) on a new branch from its branch, and open the next pull request against that branch."
+	unaskedOnDep  = " It needs #%d, whose pull request #%d waits for review: build it on a new branch from that pull request's branch, and open its pull request against that branch."
 
 	// TaskDir is where a one-off task's brief is put in the worker's
 	// directory, and where the worker writes its report.
@@ -306,6 +307,8 @@ func unaskedOrder(inHand int, waits bool, next QueueItem) string {
 		order += fmt.Sprintf(unaskedRework, next.Rework)
 	case next.Stack != "":
 		order += fmt.Sprintf(unaskedStack, capitalize(next.Stack), strings.Join(next.Remaining, "; "))
+	case next.StackOn != "":
+		order += fmt.Sprintf(unaskedOnDep, next.StackDep, next.StackPR)
 	case next.Ruled:
 		order += unaskedRuled
 	}
@@ -1356,6 +1359,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	if items, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
 	}
+	s.applyHolds(w, items, open, checkins)
 	s.applyPace(w, items, checkins)
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
@@ -1668,7 +1672,7 @@ func fingerprint(queue []QueueItem) string {
 	h := sha256.New()
 	for _, q := range queue {
 		if q.Workable() {
-			fmt.Fprintf(h, "%s#%d:%s:%s:%t:%s;", q.Repo, q.Number, q.Rework, q.Look, q.Ruled, q.Stack)
+			fmt.Fprintf(h, "%s#%d:%s:%s:%t:%s:%s;", q.Repo, q.Number, q.Rework, q.Look, q.Ruled, q.Stack, q.StackOn)
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
@@ -1742,7 +1746,7 @@ func (s *Supervisor) briefText(w config.Worker) string {
 			b.WriteString("\n")
 		}
 		s.backfillBrief(&b, w)
-		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nThe owner may put an issue first in your queue, or move one to you from another worker's queue. The supervisor says so when it hands it over. Such an issue is yours even where this brief does not cover it; the standing orders still hold.\nBefore you start an issue, check whether an open pull request or an unmerged branch already covers it (`gh pr list --search <number>`, `git fetch` and `git branch -r`). If one does and the supervisor did not send you back to that pull request, do not start it: another worker has it. Report what you found in the issue as a decision for the owner, say so here, and stop.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\nWhen you are sent back to an issue you already handed back, do what the message says and hand back again, even when nothing needed to change: post a new hand-back comment that names the pull request, as your first one did, and say what you changed or that nothing changed. The new hand-back is what tells the supervisor you are done with it.\n")
+		b.WriteString("\nWork one issue at a time. The supervisor names your first issue and each next one; wait for it.\nStart each issue on a new branch from the current default branch.\nWhen you write your plan in the issue, end it with a line `**Paths:**` and the files and directories you expect to change, such as `**Paths:** internal/billing/, docs/billing.md`. The supervisor holds back other work on the same code while you have it.\nIf you find that the issue cannot be done before another issue is, write `Depends on #<number>` in a comment, report it in your hand-back, and stop: the issue waits until that one is closed.\nThe owner may put an issue first in your queue, or move one to you from another worker's queue. The supervisor says so when it hands it over. Such an issue is yours even where this brief does not cover it; the standing orders still hold.\nBefore you start an issue, check whether an open pull request or an unmerged branch already covers it (`gh pr list --search <number>`, `git fetch` and `git branch -r`). If one does and the supervisor did not send you back to that pull request, do not start it: another worker has it. Report what you found in the issue as a decision for the owner, say so here, and stop.\nWhen you finish an issue, or cannot go further on it, report in the issue, say so here, and stop.\nWhen you are sent back to an issue you already handed back, do what the message says and hand back again, even when nothing needed to change: post a new hand-back comment that names the pull request, as your first one did, and say what you changed or that nothing changed. The new hand-back is what tells the supervisor you are done with it.\n")
 		s.remainingBrief(&b)
 	}
 	s.eyeCheckBrief(&b, w)

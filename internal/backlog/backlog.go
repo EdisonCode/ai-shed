@@ -21,6 +21,7 @@ type Issue struct {
 	Repo      string    `json:"repo"`
 	Number    int       `json:"number"`
 	Title     string    `json:"title"`
+	Body      string    `json:"body"`
 	URL       string    `json:"url"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	Comments  []Comment `json:"comments"`
@@ -31,6 +32,10 @@ type Issue struct {
 	// MergedPRs holds the numbers of the repo's recently merged pull
 	// requests. It is nil when the lister did not look them up.
 	MergedPRs map[int]bool `json:"-"`
+	// Deps are the issues this one waits for, with their state: the ones
+	// its text names and the ones GitHub's blocked-by relation names. Nil
+	// when the lister did not look them up.
+	Deps []Dep `json:"-"`
 }
 
 // PR is the state of an open pull request.
@@ -101,6 +106,9 @@ func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 	for i := range issues {
 		issues[i].OpenPRs, issues[i].MergedPRs = openPRs, merged
 	}
+	if err := resolveDeps(ctx, src.Repo, issues); err != nil {
+		return nil, err
+	}
 	return issues, nil
 }
 
@@ -140,7 +148,7 @@ func (GH) Closed(ctx context.Context, src config.IssueSource, since time.Time) (
 
 func issueList(ctx context.Context, src config.IssueSource, filter ...string) ([]Issue, error) {
 	args := append([]string{"issue", "list", "--repo", src.Repo, "--limit", "200",
-		"--json", "number,title,url,updatedAt,comments,labels"}, filter...)
+		"--json", "number,title,body,url,updatedAt,comments,labels"}, filter...)
 	if src.Label != "" {
 		args = append(args, "--label", src.Label)
 	}

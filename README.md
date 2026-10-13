@@ -186,6 +186,45 @@ to look, before it starts an issue, for an open pull request or an unmerged
 branch that already covers it. If it finds one that it was not sent back to,
 it does not start: it reports the overlap in the issue as a decision for you.
 
+### Work that waits for other work
+
+Two workers that build on the same code at once make work for each other:
+the second pull request goes stale when the first merges, and costs a
+rebase, a full run of the checks, and sometimes a conflict resolved wrong.
+An issue that needs another issue's change first cannot be built at all.
+The supervisor holds both kinds back, and hands out what can go ahead.
+
+- **Dependencies.** An issue whose body or comments say `Depends on #12`
+  (or `Blocked by #12, org/api#7`), or that GitHub's blocked-by relation
+  links to an open issue, is not handed out until those issues are closed.
+  A worker that finds a dependency writes the line itself and hands back.
+- **With `stack: true`**, an issue with one open dependency whose pull
+  request is ready and waits for review goes ahead: the worker builds it on
+  a new branch from that pull request's branch and opens its pull request
+  against it.
+- **Overlap.** A worker ends its plan with `**Paths:**` and the files and
+  directories it expects to change. An issue whose `Paths:` line, in its
+  body or a comment, overlaps the paths of an issue another worker of the
+  machine has in hand is held until that worker hands it back. So is an
+  issue that shares a label with it when the label starts with
+  `overlap_labels`:
+
+  ```yaml
+  supervisor:
+    overlap_labels: "area:"   # area:billing and area:billing overlap; area:auth does not
+  ```
+
+  Labels suit code with clear boundaries: a module, a service, a bounded
+  context. Paths catch the rest.
+- **Started work is never held**: the issue a worker has in hand, rework,
+  stacked work and eye checks.
+- The reviewer sees `[held: waits for #12 to close]` or `[held: overlaps
+  #12, which docs has in hand: both are area:billing]`, and `shed status`
+  shows the issue as `held` with the same reason.
+- Overlap is checked against the issues held by the workers of the same
+  machine, as far as that machine's queues list them. Work in flight on
+  another machine is not seen.
+
 ### A queue that cannot run dry
 
 A queue is what somebody labelled. When each of those issues waits on you,
@@ -922,6 +961,7 @@ supervisor:
   no_work_after: 30m                  # optional: notify when a worker has had no work this long
   low_queue: 3                        # optional: notify when a queue has fewer workable issues
   stack: true                         # optional: go on with an issue on a branch from its pull request while it waits for review
+  overlap_labels: "area:"             # optional: issues sharing a label with this prefix are not worked at once
   own_wait_max: 45m                   # optional: how long an idle worker may wait on its own work before it is told to check it; "0" for no bound
 ```
 

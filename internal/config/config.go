@@ -255,6 +255,10 @@ type Supervisor struct {
 	// then told to check that work, and the second time in one issue it is
 	// stuck. "0" turns the bound off.
 	OwnWaitMax string `yaml:"own_wait_max"`
+	// OverlapLabels is a label prefix, such as "area:". Two issues with the
+	// same label of that prefix touch the same code: one is held while a
+	// worker has the other in hand, as for issues whose Paths overlap.
+	OverlapLabels string `yaml:"overlap_labels"`
 }
 
 // NoWorkAfterOrZero is how long a worker may have no work before the owner
