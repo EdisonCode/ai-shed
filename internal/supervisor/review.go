@@ -142,6 +142,9 @@ type ReviewInput struct {
 	LimitOver string
 	Recent    []runlog.Checkin
 	Terminal  string
+	// Shells are the shells the worker's tool started that still run, one
+	// line each; empty when there are none or they cannot be listed.
+	Shells []string
 }
 
 const instructions = `You supervise an unattended AI coding worker. Its owner is away for hours and cannot answer. Your job is to keep the worker productive and inside its brief. You see its terminal. You cannot run anything yourself; do not try.
@@ -172,6 +175,7 @@ Rules for the message of a nudge:
 - Never tell the worker to skip or weaken a test, bypass a hook, merge, or deploy.
 - A worker's context may be cleared before it continues, including when it resumes after a usage limit or an API error once the prompt cache has expired. The plan belongs in the issue when the approach is chosen, and the progress when a step lands. If it stopped partway through an item and its terminal does not show that it wrote them, tell it to do that first. Do not ask twice.
 - A worker that refused an item because another branch or pull request already covers it did right. Do not hand it that item again; give it the next workable item.
+- A worker that waits on a command it started is on_track only while that command makes progress. <shells> lists the shells its tool started, with how long each has run and its CPU time. A shell that has run far longer than its job would take, or whose CPU time has not moved, is likely hung: tell the worker to check it (its output file, its process) and to end it and go on if it is stuck. A shell left running after the worker handed back its work holds nothing it needs.
 - If an earlier message of yours is in the terminal or in the recent check-ins and it did not help, do not send it again. Choose needs_owner.
 
 Reading the terminal:
@@ -262,7 +266,11 @@ func Prompt(in ReviewInput) string {
 		}
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "</recent_checkins>\n\n<terminal>\n%s\n</terminal>\n", in.Terminal)
+	b.WriteString("</recent_checkins>\n\n")
+	if len(in.Shells) > 0 {
+		fmt.Fprintf(&b, "<shells>\n%s\n</shells>\n\n", strings.Join(in.Shells, "\n"))
+	}
+	fmt.Fprintf(&b, "<terminal>\n%s\n</terminal>\n", in.Terminal)
 	return b.String()
 }
 

@@ -126,6 +126,8 @@ Guards against a worker that rests beside work:
 
 - One wrong answer of the reviewer does not hold a worker. A worker that has rested 10 minutes after an `on_track` or a `done`, with nothing in hand that it can act on and an item in its queue that it can, is handed that item by the agent itself. No reviewer is asked: the agent already knows both facts. Nothing in hand means no issue yet, an issue that left the queue, or one that waits on you with no grace period left. `shed status` shows the hand-over with "handed over without the reviewer".
 - A worker with an issue in hand that it can act on is never handed another this way. If it rests there after an `on_track`, it may wait on something it started, so it is reviewed again every `scope_every`, like a busy worker. With `no_work_after` set, your `notify` command hears of it once when the rest has lasted that long.
+- A wait on its own work has a bound. A hung background command looks on the screen like a healthy one, so a worker found `on_track` while idle that then prints nothing for `own_wait_max` (default `45m`) is told by the agent to check what it waits on: its output file, its process, and to end it if it is stuck. The second time in one issue it is `stuck` instead, and nothing more is typed. A new issue or a new session starts the count again. `own_wait_max: "0"` turns the bound off.
+- The reviewer sees the shells the worker's tool started, each with how long it has run and its CPU time, marked `unchanged since 45m ago` when that time has not moved. A shell that should have finished long ago, or that does nothing, shows as what it is. The message of the bound lists them too.
 - A worker that needs you, is at a limit, sits at an API error or was found stuck is left as that verdict says.
 
 ### The queue
@@ -799,6 +801,7 @@ supervisor:
   no_work_after: 30m                  # optional: notify when a worker has had no work this long
   low_queue: 3                        # optional: notify when a queue has fewer workable issues
   stack: true                         # optional: go on with an issue on a branch from its pull request while it waits for review
+  own_wait_max: 45m                   # optional: how long an idle worker may wait on its own work before it is told to check it; "0" for no bound
 ```
 
 For another agent tool, set the worker's `command`, the reviewer's `command`,

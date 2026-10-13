@@ -209,3 +209,20 @@ func workerOf(location string) string {
 	}
 	return window
 }
+
+// Shells lists the shells the tool in the window's pane started.
+func (t Tmux) Shells(window string) ([]Shell, error) {
+	out, err := t.run("display-message", "-p", "-t", target(window), "#{pane_pid}")
+	if err != nil {
+		return nil, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return nil, fmt.Errorf("window %s: pane pid %q: %w", window, strings.TrimSpace(out), err)
+	}
+	ps, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,etime=,time=,command=").Output()
+	if err != nil {
+		return nil, fmt.Errorf("ps: %w", err)
+	}
+	return parseShells(string(ps), pid, time.Now()), nil
+}

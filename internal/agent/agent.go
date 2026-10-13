@@ -203,6 +203,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		Signals:        cfg.Signals,
 		StandingOrders: cfg.Defaults.StandingOrders,
 		Terminal:       supervisor.Tmux{},
+		Shells:         supervisor.Tmux{},
 		Reviewer:       supervisor.CommandReviewer{Command: m.Command(cfg.Supervisor.CommandOrDefault()), Dir: a.StateDir, UsageDir: a.StateDir},
 		Lister:         backlog.GH{},
 		Claimer:        backlog.GH{},

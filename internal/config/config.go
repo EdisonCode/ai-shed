@@ -194,6 +194,11 @@ type Supervisor struct {
 	// context. Every turn re-reads that context, so it is most of the spend
 	// of a long issue. 0 never clears for size.
 	RecycleContext int `yaml:"recycle_context"`
+	// OwnWaitMax bounds how long an idle worker that was found waiting on
+	// work of its own (a background command, a timer) is left alone. It is
+	// then told to check that work, and the second time in one issue it is
+	// stuck. "0" turns the bound off.
+	OwnWaitMax string `yaml:"own_wait_max"`
 }
 
 // NoWorkAfterOrZero is how long a worker may have no work before the owner
@@ -267,6 +272,7 @@ const (
 	DefaultReviewCommand = "claude -p --model sonnet --output-format json"
 	DefaultCacheTTL      = 5 * time.Minute
 	DefaultScopeEvery    = 30 * time.Minute
+	DefaultOwnWaitMax    = 45 * time.Minute
 	DefaultWorkerCommand = "claude"
 	DefaultClearCommand  = "/clear"
 	DefaultModelCommand  = "/model {model}"
@@ -760,7 +766,7 @@ func (c *Config) validate() error {
 	if c.Supervisor.LowQueue < 0 {
 		fail("supervisor: low_queue must not be negative")
 	}
-	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery, "no_work_after": c.Supervisor.NoWorkAfter} {
+	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery, "no_work_after": c.Supervisor.NoWorkAfter, "own_wait_max": c.Supervisor.OwnWaitMax} {
 		if value == "" {
 			continue
 		}
@@ -1021,6 +1027,15 @@ func (s Supervisor) CacheTTLOrDefault() time.Duration {
 
 func (s Supervisor) ScopeEveryOrDefault() time.Duration {
 	return durationOr(s.ScopeEvery, DefaultScopeEvery)
+}
+
+// OwnWaitMaxOrDefault is how long an idle worker may wait on work of its
+// own before it is told to check it; 0 for no bound.
+func (s Supervisor) OwnWaitMaxOrDefault() time.Duration {
+	if s.OwnWaitMax == "0" {
+		return 0
+	}
+	return durationOr(s.OwnWaitMax, DefaultOwnWaitMax)
 }
 
 // ClearWhenCold reports whether a nudge to a cold worker clears its context.
