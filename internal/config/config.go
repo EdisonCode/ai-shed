@@ -160,6 +160,11 @@ type Verify struct {
 	// MergeMethod is how such a pull request merges where the repository
 	// has no merge queue: merge, squash or rebase.
 	MergeMethod string `yaml:"merge_method"`
+	// MergeTrain is for a repository that cannot have a merge queue: shed
+	// merges what it queues one pull request at a time, each brought up to
+	// date with the base branch and merged only when its checks pass on
+	// that head. Off unless set; it needs merge_low.
+	MergeTrain bool `yaml:"merge_train"`
 }
 
 // MergeMethodOrDefault is the merge method of a queued merge.
@@ -844,6 +849,9 @@ func (c *Config) validateVerify() error {
 		}
 		if m := r.Verify.MergeMethod; m != "" && m != "merge" && m != "squash" && m != "rebase" {
 			fail("repos: %s: verify.merge_method %q must be merge, squash or rebase", r.Name, m)
+		}
+		if r.Verify.MergeTrain && !r.Verify.MergeLow {
+			fail("repos: %s: verify.merge_train merges what merge_low queues: turn on merge_low too", r.Name)
 		}
 		for _, a := range r.Verify.Areas {
 			if a.Name == "" || len(a.Paths) == 0 {

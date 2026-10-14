@@ -24,31 +24,24 @@ type Merger interface {
 // worker of the fleet does waits for nothing: it can only happen after the
 // merge, and a failed one reopens the issue for the owner. Only the machine whose log
 // shows it built the work does it, so two machines do not act on one pull
-// request. The owner approves what reaches production, with shed promote.
+// request. Where the repository runs a merge train, the pull request waits
+// for it instead. The owner approves what reaches production, with shed
+// promote.
 func (s *Supervisor) queueMerges(ctx context.Context, open []backlog.Issue, checkins []runlog.Checkin) {
-	if s.Merger == nil {
-		return
-	}
+	trains := map[string][]boardable{}
 	for _, i := range open {
-		repo, ok := s.repoConfig(i.Repo)
-		if !ok || repo.Verify == nil || !repo.Verify.MergeLow || !i.Verify {
+		repo, v, ok := s.mergeReady(i, checkins)
+		if !ok {
 			continue
 		}
-		v := backlog.Verification(i, s.Signals)
-		pr := i.OpenPRs[v.PR]
+		if repo.Verify.MergeTrain {
+			trains[i.Repo] = append(trains[i.Repo], boardable{issue: i, v: v})
+			continue
+		}
+		if s.Merger == nil {
+			continue
+		}
 		key := fmt.Sprintf("%s#%d", i.Repo, v.PR)
-		if v.State != backlog.VerifyPassed || v.Tier != "low" || pr.Draft || pr.Pending || pr.Problem != "" || pr.AutoMerge || s.mergeQueued[key] {
-			continue
-		}
-		lookAfter := slices.Contains(s.EyeCheckRepos, i.Repo)
-		if slices.ContainsFunc(backlog.Effects(i, s.Signals, s.Now()), func(a backlog.Ask) bool {
-			return a.Effect != backlog.EffectMerge && !(lookAfter && a.Name == config.EyesSignal)
-		}) {
-			continue // something else on the issue waits on the owner
-		}
-		if runlog.Builder(checkins, i.Number) == "" {
-			continue // another machine built it
-		}
 		comment := fmt.Sprintf("%s pull request #%d, verified at low risk with green checks. The verifier said: %s\n\nThe merge is no longer yours on this repository: shed promote lists it with what reaches production.", backlog.QueuedPhrase, v.PR, v.Note)
 		if err := s.Merger.QueueMerge(ctx, i.Repo, i.Number, v.PR, repo.Verify.MergeMethodOrDefault(), comment); err != nil {
 			s.Logf("queue %s for merge: %v", key, err)
@@ -60,6 +53,42 @@ func (s *Supervisor) queueMerges(ctx context.Context, open []backlog.Issue, chec
 		s.mergeQueued[key] = true
 		s.Logf("queued %s for merge: verified at low risk", key)
 	}
+	if s.Train == nil {
+		return
+	}
+	for _, repo := range s.Repos {
+		if repo.Verify != nil && repo.Verify.MergeLow && repo.Verify.MergeTrain {
+			s.runTrain(ctx, repo, trains[repo.Name], checkins)
+		}
+	}
+}
+
+// mergeReady reports whether the issue's pull request may be queued for
+// merge, with its repository and its verification.
+func (s *Supervisor) mergeReady(i backlog.Issue, checkins []runlog.Checkin) (config.Repo, backlog.VerificationState, bool) {
+	repo, ok := s.repoConfig(i.Repo)
+	if !ok || repo.Verify == nil || !repo.Verify.MergeLow || !i.Verify {
+		return repo, backlog.VerificationState{}, false
+	}
+	v := backlog.Verification(i, s.Signals)
+	pr := i.OpenPRs[v.PR]
+	key := fmt.Sprintf("%s#%d", i.Repo, v.PR)
+	if v.State != backlog.VerifyPassed || v.Tier != "low" || pr.Draft || pr.Pending || pr.Problem != "" || pr.AutoMerge || s.mergeQueued[key] {
+		return repo, v, false
+	}
+	if on, _ := backlog.Boarded(i, s.Signals); on != 0 || backlog.TakenOff(i, s.Signals) {
+		return repo, v, false // on the train, or taken off it until a new hand-back
+	}
+	lookAfter := slices.Contains(s.EyeCheckRepos, i.Repo)
+	if slices.ContainsFunc(backlog.Effects(i, s.Signals, s.Now()), func(a backlog.Ask) bool {
+		return a.Effect != backlog.EffectMerge && !(lookAfter && a.Name == config.EyesSignal)
+	}) {
+		return repo, v, false // something else on the issue waits on the owner
+	}
+	if runlog.Builder(checkins, i.Number) == "" {
+		return repo, v, false // another machine built it
+	}
+	return repo, v, true
 }
 
 // repoConfig is what the fleet file says about a repository.

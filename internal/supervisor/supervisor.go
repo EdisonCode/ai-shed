@@ -144,6 +144,9 @@ type Supervisor struct {
 	Lister         backlog.Lister
 	// Merger queues a pull request for its merge. Nil queues nothing.
 	Merger Merger
+	// Train runs the merge train of a repository with merge_train. Nil runs
+	// none.
+	Train Trainer
 	// Releaser moves the issue of a spent worker onto the account's overflow
 	// label. Nil releases nothing.
 	Releaser Releaser
@@ -204,6 +207,8 @@ type Supervisor struct {
 	paceAt time.Time
 	// mergeQueued holds the pull requests this agent queued for merge.
 	mergeQueued map[string]bool
+	// trains holds where each repository's merge train stands.
+	trains map[string]*train
 	// diffs keeps the pull request diffs read for a risk tier.
 	diffs map[string]keptDiff
 	// deploys holds where each repository's staging deploy stands.
