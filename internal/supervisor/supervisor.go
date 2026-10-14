@@ -164,10 +164,13 @@ type Supervisor struct {
 	// Repos is what the fleet file says about each repository's deploys, and
 	// Looks reads the eye checks that merged work still owes. Looks may be
 	// nil: then no worker is handed one.
-	Repos    []config.Repo
-	Looks    LookReader
-	StateDir string
-	Now      func() time.Time
+	Repos []config.Repo
+	Looks LookReader
+	// EyeCheckRepos are the repositories whose eye checks a worker of the
+	// fleet does on staging, after the merge.
+	EyeCheckRepos []string
+	StateDir      string
+	Now           func() time.Time
 	// Busy says why the machine has no room for new work, or "" when it
 	// has. Nil means it always has room.
 	Busy func(ctx context.Context) string

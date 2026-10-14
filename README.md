@@ -502,7 +502,11 @@ repos:
   the pull request goes into the merge queue, or merges by itself once its
   required checks pass. It comments `Queued for merge by shed:` on the
   issue with the verifier's words. A high-risk pull request waits for you,
-  as before.
+  as before. A `Needs eyes:` ask does not hold it back when a worker with
+  `eye_checks` looks at the repository on staging: that look can only
+  happen after the merge, it shows under `eye checks:`, and a failed one
+  reopens the issue for you. Where nobody looks for you, the ask waits on
+  you as before.
 - **It leaves your list.** A pull request on its way to the merge is not in
   `waits on you`. It reaches staging, and the eye checks run there as
   before.

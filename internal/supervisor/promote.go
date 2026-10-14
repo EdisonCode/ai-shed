@@ -20,7 +20,9 @@ type Merger interface {
 // queueMerges moves the owner's approval of low-risk work from the merge to
 // the promotion, where the repository says so: a pull request a verifier
 // passed at low risk, with green checks, nothing else waiting on the owner
-// and not yet on its way, is queued for merge. Only the machine whose log
+// and not yet on its way, is queued for merge. A look on staging that a
+// worker of the fleet does waits for nothing: it can only happen after the
+// merge, and a failed one reopens the issue for the owner. Only the machine whose log
 // shows it built the work does it, so two machines do not act on one pull
 // request. The owner approves what reaches production, with shed promote.
 func (s *Supervisor) queueMerges(ctx context.Context, open []backlog.Issue, checkins []runlog.Checkin) {
@@ -38,7 +40,10 @@ func (s *Supervisor) queueMerges(ctx context.Context, open []backlog.Issue, chec
 		if v.State != backlog.VerifyPassed || v.Tier != "low" || pr.Draft || pr.Pending || pr.Problem != "" || pr.AutoMerge || s.mergeQueued[key] {
 			continue
 		}
-		if slices.ContainsFunc(backlog.Effects(i, s.Signals, s.Now()), func(a backlog.Ask) bool { return a.Effect != backlog.EffectMerge }) {
+		lookAfter := slices.Contains(s.EyeCheckRepos, i.Repo)
+		if slices.ContainsFunc(backlog.Effects(i, s.Signals, s.Now()), func(a backlog.Ask) bool {
+			return a.Effect != backlog.EffectMerge && !(lookAfter && a.Name == config.EyesSignal)
+		}) {
 			continue // something else on the issue waits on the owner
 		}
 		if runlog.Builder(checkins, i.Number) == "" {

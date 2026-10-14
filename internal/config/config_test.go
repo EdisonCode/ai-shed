@@ -252,6 +252,24 @@ repos:
 	}
 }
 
+func TestEyeCheckReposAreTheDeployedReposAWorkerLooksAt(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + `    issues: [{repo: org/app, label: x}, {repo: org/api, label: x}, {repo: org/web, label: x}]
+    workers:
+      - {name: looker, dir: /tmp, brief: b, eye_checks: true, issues: [{repo: org/app, label: x}, {repo: org/api, label: x}]}
+      - {name: builder, dir: /tmp, brief: b, issues: [{repo: org/web, label: x}]}
+repos:
+  - {repo: org/app, staging: {commit: "echo abc1234"}}
+  - {repo: org/api, gates: {command: make test}}
+  - {repo: org/web, staging: {commit: "echo abc1234"}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.EyeCheckRepos(); !slices.Equal(got, []string{"org/app"}) {
+		t.Fatalf("eye check repos = %v, want org/app: org/api is not on staging, and nobody looks at org/web", got)
+	}
+}
+
 func TestEyesSignalOfAnOlderFleetFileGetsThePhrasesForABlockedLook(t *testing.T) {
 	cfg, err := Parse([]byte(minimal + "signals: [{name: eyes, ask: \"Needs eyes:\", answered_by: Eyes checked, failed_by: Eyes failed, unblocked_by: Try again}, {name: decision, ask: \"Decisions needed:\"}]\n"))
 	if err != nil {

@@ -1256,6 +1256,26 @@ func (m Machine) AllSources() []IssueSource {
 
 // QueueLabels returns the labels that put an issue in a queue of the fleet.
 // An issue with one of them is taken, whatever a backfill source lists.
+// EyeCheckRepos lists the repositories whose eye checks a worker does on
+// staging, after the merge: each is deployed to staging, and a worker with
+// eye_checks on some machine of the fleet takes its issues.
+func (c *Config) EyeCheckRepos() []string {
+	var repos []string
+	for _, m := range c.Machines {
+		for _, w := range m.Workers {
+			if !w.EyeChecks {
+				continue
+			}
+			for _, src := range m.SourcesFor(w) {
+				if r, ok := c.Repo(src.Repo); ok && r.Deployed() && !slices.Contains(repos, r.Name) {
+					repos = append(repos, r.Name)
+				}
+			}
+		}
+	}
+	return repos
+}
+
 func (c *Config) QueueLabels() []string {
 	var labels []string
 	for _, m := range c.Machines {
