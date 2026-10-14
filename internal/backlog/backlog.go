@@ -332,7 +332,7 @@ func (a Ask) What() string {
 func Asks(issue Issue, signals []config.Signal) []Ask {
 	rework := Rework(issue, signals) != ""
 	verifying := unverified(issue, signals)
-	if _, pr := lastHandBack(issue, signals); issue.OpenPRs[pr].AutoMerge {
+	if _, pr := lastHandBack(issue, signals); issue.OpenPRs[pr].AutoMerge || boarded(issue, signals) {
 		// On its way to the merge: nothing about it waits on the owner.
 		verifying = true
 	}

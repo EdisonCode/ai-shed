@@ -495,6 +495,7 @@ repos:
     verify:
       merge_low: true
       merge_method: squash      # where the repository has no merge queue; the default is merge
+      merge_train: true         # optional, where it cannot have a merge queue: see below
 ```
 
 - **What is queued.** A pull request a verifier passed at low risk, with
@@ -508,6 +509,12 @@ repos:
   happen after the merge, it shows under `eye checks:`, and a failed one
   reopens the issue for you. Where nobody looks for you, the ask waits on
   you as before.
+- **Without a merge queue.** With `merge_train: true`, shed does not turn
+  on auto-merge. It merges one pull request at a time: it brings the branch
+  up to date with the base, waits for its checks on that head and merges at
+  that head. One whose checks fail there is taken off with a comment
+  `Off the merge train by shed:` and goes back to a worker. See
+  [the repository recipe](docs/REPO-RECIPE.md#a-merge-train-where-there-is-no-merge-queue).
 - **It leaves your list.** A pull request on its way to the merge is not in
   `waits on you`. It reaches staging, and the eye checks run there as
   before.

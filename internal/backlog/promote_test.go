@@ -15,6 +15,14 @@ func TestAReviewQueuedForMergeIsNotTheOwners(t *testing.T) {
 	}
 }
 
+func TestAReviewOnTheMergeTrainIsNotTheOwners(t *testing.T) {
+	i := Issue{Repo: "org/app", Number: 12, Verify: true, OpenPRs: map[int]PR{41: {}},
+		Comments: []Comment{{Body: "## Hand-back\n**PR:** #41 (ready)"}, {Body: "Verified (low): ran the tests"}, {Body: QueuedPhrase + " pull request #41, verified at low risk."}}}
+	if w := Waiting(i, config.DefaultSignals()); slices.Contains(w, "review") {
+		t.Fatalf("waiting = %v: the pull request is on the merge train", w)
+	}
+}
+
 func TestThePullRequestsAnIssueHandedBackAreRead(t *testing.T) {
 	i := Issue{Comments: []Comment{
 		{Body: "## Hand-back\n**PR:** #41 (backend, merged) and #42 (frontend, ready)"},

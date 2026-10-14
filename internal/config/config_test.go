@@ -547,6 +547,21 @@ func TestVerifyNeedsAVerifierThatTakesTheRepository(t *testing.T) {
 	}
 }
 
+func TestAMergeTrainNeedsMergeLow(t *testing.T) {
+	queue := minimal + "    issues: [{repo: org/app, label: x}]\n    workers: [{name: w, dir: /tmp, brief: b, verifies: true}]\n"
+	_, err := Parse([]byte(queue + "repos: [{repo: org/app, verify: {merge_train: true}}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "turn on merge_low too") {
+		t.Fatalf("err = %v", err)
+	}
+	cfg, err := Parse([]byte(queue + "repos: [{repo: org/app, verify: {merge_low: true, merge_train: true}}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := cfg.Repo("org/app"); !r.Verify.MergeTrain {
+		t.Fatalf("repo = %+v", r)
+	}
+}
+
 func TestOverflowNeedsAMachineThatTakesItAsBackfill(t *testing.T) {
 	account := "accounts: [{name: max-1, machines: [box], overflow: \"fleet:ready\"}]\n"
 	_, err := Parse([]byte(minimal + "    issues: [{repo: org/app, label: \"machine:box\"}]\n" + account))

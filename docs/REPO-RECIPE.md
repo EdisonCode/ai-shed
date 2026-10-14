@@ -74,3 +74,32 @@ queued before it. Run the full suite there, and only there:
 
 The gates catch most failures before the queue; the queue catches the rest
 on the real combination, where no worker can post a status for it.
+
+## A merge train, where there is no merge queue
+
+GitHub offers a merge queue for public repositories and for private ones on
+Enterprise Cloud. Without one, two pull requests that each pass against the
+main they last saw can break main together. Where shed merges for you
+(`merge_low`), it can run a train in place of the queue:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    verify:
+      merge_low: true
+      merge_train: true
+```
+
+shed then merges one queued pull request at a time per repository. It
+brings the branch up to date with the base (a rebase when `merge_method` is
+`rebase`, a merge of the base otherwise), waits for the checks on that new
+head, and merges only at that head. If a check fails there, it takes the
+pull request off the train with a comment that names the check, the
+pull request goes back to a worker as rework, and the next one boards. A
+pull request taken off boards again only after its next hand-back is
+verified.
+
+It costs one CI run per merge, and merges wait their turn. That is slower
+than a merge queue, which batches, but main stays green. A repository with
+no checks on its pull requests never merges on the train: there is nothing
+to wait for, so there is nothing that passed.
