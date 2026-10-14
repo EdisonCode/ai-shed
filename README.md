@@ -1319,8 +1319,10 @@ without a number opens a review that no merge can close; `shed status` and
 `shed digest` show it as `review (no pull request named)`.
 
 An ask counts only in a hand-back comment. The same words in a plan, a brief
-or a discussion on the issue ask you nothing and hold nothing back. Your
-answers (`Owner ruling`, `Eyes checked`) count in any comment.
+or a discussion on the issue ask you nothing and hold nothing back. In a
+hand-back, the ask counts only where it begins a line (after a list mark,
+a quote or emphasis at most): "the others were not ready: #12" in a sentence
+asks nothing. Your answers (`Owner ruling`, `Eyes checked`) count in any comment.
 
 An issue with an open signal is not handed to a worker.
 
