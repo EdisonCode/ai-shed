@@ -220,6 +220,8 @@ func TestAskCountsOnlyInAHandBack(t *testing.T) {
 	}{
 		{"the phrases in instructions ask the owner nothing", []string{scoping}, nil},
 		{"the phrases in a discussion ask the owner nothing", []string{"Should this go under Decisions needed: or is it obvious?"}, nil},
+		{"the phrase inside a sentence of a hand-back asks nothing", []string{"## Hand-back\n**PR:** #41 (ready)\nThe others were not ready: #6236, #6233 wait on their checks.\nI said needs eyes: no, and decisions needed: none either."}, []string{"review"}},
+		{"the phrase at the start of a list item counts", []string{"## Hand-back\n**PR:** #41 (ready)\n- Not ready: the issue names no acceptance"}, []string{"review", "ready"}},
 		{"a real hand-back after the instructions counts", []string{scoping, handBackAsking}, []string{"decision", "review"}},
 		{"instructions after a hand-back do not reopen or clear it", []string{handBackClean, scoping}, []string{"review"}},
 	}

@@ -587,7 +587,7 @@ func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Ti
 		}
 		if value, found := asked(body, s); found {
 			open, pr, since = !isClear(value, s.Clear), openPR(issue, value), c.CreatedAt
-			line, _ = noteAfter(c.Body, s.Ask)
+			line = askLine(c.Body, s.Ask)
 		}
 		// A check that was done and failed is not asked for any more. It is
 		// tested last: the comment that reports it may repeat the ask.
@@ -650,12 +650,40 @@ func openPR(issue Issue, value string) int {
 
 // asked returns what follows the signal's ask in a comment. The ask counts
 // only in a hand-back comment: the same words in a plan, a brief or a
-// discussion ask the owner nothing. body is lower case.
+// discussion ask the owner nothing. It counts only where it begins a line:
+// "the others were not ready: #12" in a sentence asks nothing. body is lower
+// case.
 func asked(body string, s config.Signal) (string, bool) {
 	if s.HandBack != "" && !strings.Contains(body, strings.ToLower(s.HandBack)) {
 		return "", false
 	}
-	return afterPhrase(body, strings.ToLower(s.Ask))
+	phrase := strings.ToLower(s.Ask)
+	at := askAt(body, phrase)
+	if at < 0 {
+		return "", false
+	}
+	return strings.TrimLeft(body[at+len(phrase):], " \t\r\n*_`\"'"), true
+}
+
+// askAt returns where the phrase first begins a line of the body, after
+// nothing but space and markdown (a list mark, a quote, emphasis); -1 for
+// nowhere. body and phrase are lower case.
+func askAt(body, phrase string) int {
+	if phrase == "" {
+		return -1
+	}
+	for from := 0; ; {
+		i := strings.Index(body[from:], phrase)
+		if i < 0 {
+			return -1
+		}
+		at := from + i
+		lineStart := strings.LastIndexByte(body[:at], '\n') + 1
+		if strings.Trim(body[lineStart:at], " \t*_`>#-+.)0123456789") == "" {
+			return at
+		}
+		from = at + 1
+	}
 }
 
 // afterPhrase returns the text that follows the phrase, without leading
@@ -734,6 +762,17 @@ func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since
 		note = ""
 	}
 	return state, pr, since, note
+}
+
+// askLine returns the line that follows the ask where it begins a line, in
+// the comment's own case.
+func askLine(body, ask string) string {
+	at := askAt(strings.ToLower(body), strings.ToLower(ask))
+	if at < 0 {
+		return ""
+	}
+	line, _ := noteAfter(body[at:], ask)
+	return line
 }
 
 // noteAfter returns the first line that follows the phrase in a comment, in
