@@ -60,9 +60,14 @@ func (r RepoReport) notDone() string {
 // renderRepo writes what is merged and not yet in production, and how much
 // of it nobody has looked at: the go or no-go for a production deploy.
 func renderRepo(w io.Writer, r RepoReport) {
-	if r.Error != "" {
+	switch {
+	case r.Error != "":
 		fmt.Fprintf(w, "%s\n", r.Repo)
-	} else {
+	case r.Staging == "":
+		// No deploys to tell of: only its merge train.
+		fmt.Fprintf(w, "%s\n", r.Repo)
+		renderTrain(w, r.Train, r.Now)
+	default:
 		fmt.Fprintf(w, "%s  staging %s", r.Repo, clip(r.Staging, 7))
 		if r.Production != "" {
 			fmt.Fprintf(w, "  production %s", clip(r.Production, 7))
@@ -83,6 +88,9 @@ func renderRepo(w io.Writer, r RepoReport) {
 			fmt.Fprintf(tw, "    #%d\tPR #%d\t%s\t%s\t%s\n", l.Number, l.PR, lookWords[l.State], Short(r.Now.Sub(l.Since)), l.Title)
 		}
 		tw.Flush()
+		if r.Train != nil {
+			renderTrain(w, r.Train, r.Now)
+		}
 	}
 	for _, a := range r.Attention() {
 		fmt.Fprintf(w, "  ! %s\n", a)

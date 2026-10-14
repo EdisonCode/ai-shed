@@ -62,6 +62,29 @@ func train(issue Issue, signals []config.Signal) (pr int, on bool, at time.Time,
 	return pr, on, at, off
 }
 
+// MergeReady reports whether shed may queue the issue's pull request for
+// merge, with its verification: a verifier passed it at low risk, its checks
+// are green, it is not a draft, not on its way to the merge already, not
+// taken off a merge train since its hand-back, and nothing else on the issue
+// waits on the owner. A look on staging waits for nothing when lookAfter is
+// set: a worker does it after the merge.
+func MergeReady(issue Issue, signals []config.Signal, now time.Time, lookAfter bool) (VerificationState, bool) {
+	v := Verification(issue, signals)
+	pr := issue.OpenPRs[v.PR]
+	if v.State != VerifyPassed || v.Tier != config.TierLow || pr.Draft || pr.Pending || pr.Problem != "" || pr.AutoMerge {
+		return v, false
+	}
+	if on, _ := Boarded(issue, signals); on != 0 || TakenOff(issue, signals) {
+		return v, false
+	}
+	for _, a := range Effects(issue, signals, now) {
+		if a.Effect != EffectMerge && !(lookAfter && a.Name == config.EyesSignal) {
+			return v, false
+		}
+	}
+	return v, true
+}
+
 // Head is a pull request as it stands at its head commit: what a merge train
 // needs to know before it merges.
 type Head struct {

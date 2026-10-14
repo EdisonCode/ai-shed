@@ -57,7 +57,7 @@ func (s *Supervisor) queueMerges(ctx context.Context, open []backlog.Issue, chec
 		return
 	}
 	for _, repo := range s.Repos {
-		if repo.Verify != nil && repo.Verify.MergeLow && repo.Verify.MergeTrain {
+		if repo.Trains() {
 			s.runTrain(ctx, repo, trains[repo.Name], checkins)
 		}
 	}
@@ -70,20 +70,9 @@ func (s *Supervisor) mergeReady(i backlog.Issue, checkins []runlog.Checkin) (con
 	if !ok || repo.Verify == nil || !repo.Verify.MergeLow || !i.Verify {
 		return repo, backlog.VerificationState{}, false
 	}
-	v := backlog.Verification(i, s.Signals)
-	pr := i.OpenPRs[v.PR]
-	key := fmt.Sprintf("%s#%d", i.Repo, v.PR)
-	if v.State != backlog.VerifyPassed || v.Tier != "low" || pr.Draft || pr.Pending || pr.Problem != "" || pr.AutoMerge || s.mergeQueued[key] {
+	v, ready := backlog.MergeReady(i, s.Signals, s.Now(), slices.Contains(s.EyeCheckRepos, i.Repo))
+	if !ready || s.mergeQueued[fmt.Sprintf("%s#%d", i.Repo, v.PR)] {
 		return repo, v, false
-	}
-	if on, _ := backlog.Boarded(i, s.Signals); on != 0 || backlog.TakenOff(i, s.Signals) {
-		return repo, v, false // on the train, or taken off it until a new hand-back
-	}
-	lookAfter := slices.Contains(s.EyeCheckRepos, i.Repo)
-	if slices.ContainsFunc(backlog.Effects(i, s.Signals, s.Now()), func(a backlog.Ask) bool {
-		return a.Effect != backlog.EffectMerge && !(lookAfter && a.Name == config.EyesSignal)
-	}) {
-		return repo, v, false // something else on the issue waits on the owner
 	}
 	if runlog.Builder(checkins, i.Number) == "" {
 		return repo, v, false // another machine built it

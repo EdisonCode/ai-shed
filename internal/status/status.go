@@ -211,13 +211,16 @@ type RepoReport struct {
 	Lookers int `json:"lookers"`
 	// Now is when the report was made, by the watcher's clock.
 	Now time.Time `json:"now"`
+	// Train is where the merge train stands; nil where the repository runs
+	// none.
+	Train *Train `json:"train,omitempty"`
 }
 
 // CollectRepos reports on every repository under `repos` in the fleet file.
 func (c Collector) CollectRepos(ctx context.Context, cfg *config.Config) []RepoReport {
 	var reports []RepoReport
 	for _, repo := range cfg.Repos {
-		if repo.Deployed() {
+		if repo.Deployed() || repo.Trains() {
 			reports = append(reports, c.collectRepo(ctx, cfg, repo))
 		}
 	}
@@ -253,6 +256,12 @@ func (c Collector) collectRepo(parent context.Context, cfg *config.Config, repo 
 			}
 			open = append(open, issues...)
 		}
+	}
+	if repo.Trains() {
+		report.Train = readTrain(open, cfg.Signals, report.Now, report.Lookers > 0)
+	}
+	if !repo.Deployed() {
+		return report
 	}
 	lookCtx, cancelLooks := context.WithTimeout(parent, probeTimeout)
 	defer cancelLooks()

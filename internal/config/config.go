@@ -268,6 +268,11 @@ func (r Repo) Deployed() bool {
 	return r.Staging.Commit != ""
 }
 
+// Trains reports whether shed runs a merge train for the repository.
+func (r Repo) Trains() bool {
+	return r.Verify != nil && r.Verify.MergeLow && r.Verify.MergeTrain
+}
+
 func (r Repo) LookBackOrDefault() time.Duration {
 	return durationOr(r.LookBack, DefaultLookBack)
 }
