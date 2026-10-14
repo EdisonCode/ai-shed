@@ -2,6 +2,7 @@ package backlog
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -68,5 +69,49 @@ func TestParseDepsReadsTheBlockedByRelationAndTheStateOfEachReference(t *testing
 	}
 	if state["org/app#12"] || !state["org/api#7"] {
 		t.Fatalf("state = %v", state)
+	}
+}
+
+func TestADependencyOnAPullRequestOrAMissingNumberHoldsOnlyTheIssueThatNamesIt(t *testing.T) {
+	// GitHub answers with the fields it found, and an error for the number
+	// that names nothing.
+	data := `{"data":{"r0":{
+		"i20":{"blockedBy":{"nodes":[]}},"i21":{"blockedBy":{"nodes":[]}},"i22":{"blockedBy":{"nodes":[]}},
+		"d60":{"state":"MERGED"},"d6300":null}},
+		"errors":[{"type":"NOT_FOUND","path":["r0","d6300"],"message":"Could not resolve to an issue or pull request with the number of 6300."}]}`
+	native, state, err := parseDeps([]byte(data), []string{"org/app"})
+	if err != nil {
+		t.Fatalf("one number that names nothing failed the whole read: %v", err)
+	}
+	issues := []Issue{
+		{Repo: "org/app", Number: 20, Body: "Depends on #60"},
+		{Repo: "org/app", Number: 21, Body: "Depends on #6300"},
+		{Repo: "org/app", Number: 22, Body: "Nothing to wait for."},
+	}
+	applyDeps(issues, native, state)
+	want := map[int]string{20: "", 21: "depends on #6300, which is not an issue or pull request", 22: ""}
+	for _, i := range issues {
+		if got := DepHold(i); got != want[i.Number] {
+			t.Errorf("#%d hold = %q, want %q", i.Number, got, want[i.Number])
+		}
+	}
+}
+
+func TestADependencyOnAnOpenPullRequestHoldsTheIssue(t *testing.T) {
+	native, state, err := parseDeps([]byte(`{"data":{"r0":{"i20":{"blockedBy":{"nodes":[]}},"d60":{"state":"OPEN"}}}}`), []string{"org/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := []Issue{{Repo: "org/app", Number: 20, Body: "Depends on #60"}}
+	applyDeps(issues, native, state)
+	if got := DepHold(issues[0]); got != "waits for #60 to close" {
+		t.Fatalf("hold = %q", got)
+	}
+}
+
+func TestAnErrorOtherThanNotFoundFailsTheDependencyRead(t *testing.T) {
+	data := `{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}`
+	if _, _, err := parseDeps([]byte(data), []string{"org/app"}); err == nil || !strings.Contains(err.Error(), "rate limit") {
+		t.Fatalf("err = %v, want the rate limit", err)
 	}
 }

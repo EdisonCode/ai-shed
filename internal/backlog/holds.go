@@ -14,12 +14,17 @@ import (
 	"github.com/edisoncode/ai-shed/internal/config"
 )
 
-// Dep is an issue that must close before another one is worked.
+// Dep is an issue, or a pull request, that must close before another issue
+// is worked.
 type Dep struct {
 	Repo   string
 	Number int
-	// Open is set while the issue is open, as the lister read it.
+	// Open is set while the issue or pull request is open, as the lister
+	// read it.
 	Open bool
+	// Missing is set when the number is neither an issue nor a pull request.
+	// It holds the issue that names it until the line is fixed.
+	Missing bool
 }
 
 func (d Dep) key() string { return d.Repo + "#" + strconv.Itoa(d.Number) }
@@ -64,6 +69,30 @@ func OpenDeps(i Issue) []Dep {
 		}
 	}
 	return open
+}
+
+// MissingDeps returns the issue's dependencies that name no issue or pull
+// request.
+func MissingDeps(i Issue) []Dep {
+	var missing []Dep
+	for _, d := range i.Deps {
+		if d.Missing {
+			missing = append(missing, d)
+		}
+	}
+	return missing
+}
+
+// DepHold says why the issue's dependencies hold it back, or "" when they
+// do not: a number that names nothing, or a dependency still open.
+func DepHold(i Issue) string {
+	if missing := MissingDeps(i); len(missing) > 0 {
+		return fmt.Sprintf("depends on %s, which is not an issue or pull request", DepWords(missing, i.Repo))
+	}
+	if open := OpenDeps(i); len(open) > 0 {
+		return fmt.Sprintf("waits for %s to close", DepWords(open, i.Repo))
+	}
+	return ""
 }
 
 // DepWords names dependencies: #12 in the issue's own repository, and
@@ -143,8 +172,9 @@ func shorter(p, q string) string {
 }
 
 // resolveDeps fills in each issue's dependencies with one GraphQL call: the
-// blocked-by relation of every listed issue, and the state of every issue
-// their text names.
+// blocked-by relation of every listed issue, and the state of every issue or
+// pull request their text names. A number that names neither does not fail
+// the call: it holds only the issue that names it.
 func resolveDeps(ctx context.Context, repo string, issues []Issue) error {
 	if len(issues) == 0 {
 		return nil
@@ -172,7 +202,7 @@ func resolveDeps(ctx context.Context, repo string, issues []Issue) error {
 			}
 		}
 		for _, number := range refs[r] {
-			fmt.Fprintf(&q, "d%d: issue(number: %d) { state }\n", number, number)
+			fmt.Fprintf(&q, "d%d: issueOrPullRequest(number: %d) { ... on Issue { state } ... on PullRequest { state } }\n", number, number)
 		}
 		q.WriteString("}\n")
 	}
@@ -180,18 +210,28 @@ func resolveDeps(ctx context.Context, repo string, issues []Issue) error {
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql", "-f", "query="+q.String())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("gh api graphql %s dependencies: %w: %s", repo, err, strings.TrimSpace(stderr.String()))
-	}
+	// gh exits non-zero when any field could not be resolved, and still
+	// prints the answer: parseDeps decides whether it can be used.
+	out, runErr := cmd.Output()
 	native, state, err := parseDeps(out, repos)
 	if err != nil {
+		if runErr != nil {
+			return fmt.Errorf("gh api graphql %s dependencies: %w: %s", repo, runErr, strings.TrimSpace(stderr.String()))
+		}
 		return fmt.Errorf("%s dependencies: %w", repo, err)
 	}
+	applyDeps(issues, native, state)
+	return nil
+}
+
+// applyDeps sets each issue's dependencies from what parseDeps read. A
+// number named in the text that has no state names nothing.
+func applyDeps(issues []Issue, native map[int][]Dep, state map[string]bool) {
 	for n := range issues {
 		deps := slices.Clone(native[issues[n].Number])
 		for _, d := range DependencyRefs(issues[n]) {
-			d.Open = state[d.key()]
+			open, found := state[d.key()]
+			d.Open, d.Missing = open, !found
 			if !slices.ContainsFunc(deps, func(x Dep) bool { return x.key() == d.key() }) {
 				deps = append(deps, d)
 			}
@@ -201,15 +241,19 @@ func resolveDeps(ctx context.Context, repo string, issues []Issue) error {
 			issues[n].Deps = []Dep{}
 		}
 	}
-	return nil
 }
 
 // parseDeps reads the answer to resolveDeps' query: the blocked-by issues of
 // each listed issue of the first repository, by number, and whether each
-// named issue is open, by repo#number. An issue GitHub could not return is
-// left out, and counts as closed.
+// named issue or pull request is open, by repo#number. A pull request is
+// open until it is merged or closed. A number GitHub could not find is left
+// out of the states. Any other error in the answer fails it.
 func parseDeps(data []byte, repos []string) (map[int][]Dep, map[string]bool, error) {
 	var answer struct {
+		Errors []struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"errors"`
 		Data map[string]map[string]*struct {
 			State     string `json:"state"`
 			BlockedBy struct {
@@ -225,6 +269,14 @@ func parseDeps(data []byte, repos []string) (map[int][]Dep, map[string]bool, err
 	}
 	if err := json.Unmarshal(data, &answer); err != nil {
 		return nil, nil, fmt.Errorf("parse output: %w", err)
+	}
+	for _, e := range answer.Errors {
+		if e.Type != "NOT_FOUND" {
+			return nil, nil, fmt.Errorf("%s", e.Message)
+		}
+	}
+	if answer.Data == nil {
+		return nil, nil, fmt.Errorf("no data in the answer")
 	}
 	native, state := map[int][]Dep{}, map[string]bool{}
 	for alias, fields := range answer.Data {

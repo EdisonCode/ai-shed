@@ -43,11 +43,11 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 		if !ok || item.Look != "" || item.Rework != "" || item.Stack != "" || item.Number == inHand {
 			continue
 		}
-		if deps := backlog.OpenDeps(issue); len(deps) > 0 {
-			if s.stackOnDep(item, deps, byNumber) {
+		if hold := backlog.DepHold(issue); hold != "" {
+			if len(backlog.MissingDeps(issue)) == 0 && s.stackOnDep(item, backlog.OpenDeps(issue), byNumber) {
 				continue
 			}
-			item.Blocked = fmt.Sprintf("waits for %s to close", backlog.DepWords(deps, issue.Repo))
+			item.Blocked = hold
 			continue
 		}
 		for _, number := range inFlight {

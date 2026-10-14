@@ -855,8 +855,8 @@ func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels strin
 		if st.State != Queued || !ok {
 			continue
 		}
-		if deps := backlog.OpenDeps(issue); len(deps) > 0 {
-			st.State, st.Held = Held, fmt.Sprintf("waits for %s to close", backlog.DepWords(deps, issue.Repo))
+		if hold := backlog.DepHold(issue); hold != "" {
+			st.State, st.Held = Held, hold
 			continue
 		}
 		for _, other := range report.Issues {
