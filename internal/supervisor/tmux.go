@@ -33,6 +33,9 @@ type Terminal interface {
 	Open(window, dir string) error
 	// Send types one line of text into the window and presses Enter.
 	Send(window, text string) error
+	// Submit presses Enter as a carriage return, which sends a line that is
+	// left typed in the window's input.
+	Submit(window string) error
 	// Close ends the window and whatever runs in it.
 	Close(window string) error
 }
@@ -179,6 +182,13 @@ func (t Tmux) Send(window, text string) error {
 		time.Sleep(300 * time.Millisecond)
 	}
 	_, err := t.run("send-keys", "-t", target(window), "Enter")
+	return err
+}
+
+// Submit sends C-m. A tool may leave a line typed and unsent after Send's
+// Enter key, and still take a carriage return.
+func (t Tmux) Submit(window string) error {
+	_, err := t.run("send-keys", "-t", target(window), "C-m")
 	return err
 }
 

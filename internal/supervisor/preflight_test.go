@@ -43,6 +43,7 @@ func (p *pfTerminal) Open(window, _ string) error {
 	p.windows[window] = Observation{Exists: true, Command: "zsh", LastActivity: p.now}
 	return nil
 }
+func (p *pfTerminal) Submit(string) error { return nil }
 func (p *pfTerminal) Send(_, text string) error {
 	p.sent = append(p.sent, text)
 	p.started = p.now

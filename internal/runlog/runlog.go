@@ -91,6 +91,7 @@ const (
 	VerdictStuck      = "stuck"       // nudges or restarts did not get it moving
 	VerdictLimited    = "limited"     // at a usage limit; left alone until it resets
 	VerdictToolError  = "tool_error"  // its tool stopped on an API error; it is told to continue after a wait
+	VerdictUnsent     = "unsent"      // a message of the supervisor's sat unsent in its input; Enter was pressed once
 	VerdictHeld       = "held"        // its next issue waits for the machine to have room
 	VerdictStarted    = "started"     // the supervisor started its session
 	VerdictRecycled   = "recycled"    // the supervisor ended its session to start a fresh one
