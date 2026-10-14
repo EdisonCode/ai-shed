@@ -513,7 +513,9 @@ repos:
   on auto-merge. It merges one pull request at a time: it brings the branch
   up to date with the base, waits for its checks on that head and merges at
   that head. One whose checks fail there is taken off with a comment
-  `Off the merge train by shed:` and goes back to a worker. See
+  `Off the merge train by shed:` and goes back to a worker. `shed status`
+  shows the train in the repository's release state:
+  `merge train: PR #41 (#12) in hand 8m, waiting for its checks; next PR #44 (#13)`. See
   [the repository recipe](docs/REPO-RECIPE.md#a-merge-train-where-there-is-no-merge-queue).
 - **It leaves your list.** A pull request on its way to the merge is not in
   `waits on you`. It reaches staging, and the eye checks run there as
