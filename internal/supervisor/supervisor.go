@@ -376,6 +376,20 @@ func (st *workerState) lastVerdict() string {
 	return st.recent[len(st.recent)-1].Verdict
 }
 
+// submittedSinceSent reports whether Enter was already pressed for the last
+// message sent to the worker.
+func (st *workerState) submittedSinceSent() bool {
+	for _, c := range slices.Backward(st.recent) {
+		if c.Verdict == runlog.VerdictUnsent {
+			return true
+		}
+		if c.Sent {
+			return false
+		}
+	}
+	return false
+}
+
 // heldHandOver is a hand-over the reviewer chose that was not delivered
 // because the machine was busy.
 type heldHandOver struct {
@@ -797,6 +811,11 @@ func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, 
 		c.Until, c.Message = st.retryAt, verdict.Message
 		c.Reason = fmt.Sprintf("%s; retry %d of %d in %s", verdict.Reason, st.retries+1, len(retryBackoff), spell(wait))
 	}
+	if verdict.Verdict == runlog.VerdictUnsent {
+		if err := s.submit(w, st, &c); err != nil {
+			return err
+		}
+	}
 	if verdict.Verdict == runlog.VerdictNudge {
 		// A different issue is a hand-over: new work for the machine. It is
 		// held while the machine is busy with something else.
@@ -810,6 +829,23 @@ func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, 
 		}
 	}
 	s.record(st, c)
+	return nil
+}
+
+// submit sends the message that sits unsent in the worker's input, once. The
+// next tick looks at the worker again, to see that its turn started. When
+// Enter was already pressed for that message, the owner is needed.
+func (s *Supervisor) submit(w config.Worker, st *workerState, c *runlog.Checkin) error {
+	if st.submittedSinceSent() {
+		c.Verdict = runlog.VerdictNeedsOwner
+		c.Reason = "its message still sits unsent after one Enter: " + c.Reason
+		return nil
+	}
+	if err := s.Terminal.Submit(w.Name); err != nil {
+		return err
+	}
+	c.Reason += "; Enter was pressed once to send it"
+	st.reviewedActivity = time.Time{}
 	return nil
 }
 

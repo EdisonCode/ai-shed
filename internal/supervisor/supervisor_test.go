@@ -29,6 +29,8 @@ type fakeTerminal struct {
 	opened []string
 	sent   []string
 	closed []string
+	// submitted counts the carriage returns pressed with nothing typed.
+	submitted int
 }
 
 func (f *fakeTerminal) Close(window string) error {
@@ -44,6 +46,7 @@ func (f *fakeTerminal) Open(window, dir string) error {
 	return nil
 }
 func (f *fakeTerminal) Send(window, text string) error { f.sent = append(f.sent, text); return nil }
+func (f *fakeTerminal) Submit(window string) error     { f.submitted++; return nil }
 func (f *fakeTerminal) running(lastActivity time.Time) {
 	f.obs = Observation{Exists: true, Command: "claude", LastActivity: lastActivity}
 }
@@ -481,6 +484,7 @@ func TestParseVerdict(t *testing.T) {
 		{"message becomes one line", `{"verdict":"nudge","message":"Take #12.\nThen #13.","reason":"r"}`, Verdict{Verdict: "nudge", Message: "Take #12. Then #13.", Reason: "r"}, ""},
 		{"message is dropped unless nudging", `{"verdict":"needs_owner","message":"y","reason":"r"}`, Verdict{Verdict: "needs_owner", Reason: "r"}, ""},
 		{"message never starts with a digit", `{"verdict":"nudge","message":"127 is next: start it.","issue":127,"reason":"r"}`, Verdict{Verdict: "nudge", Message: "Next: 127 is next: start it.", Reason: "r", Issue: 127}, ""},
+		{"unsent carries no message", `{"verdict":"unsent","message":"Start #12.","issue":12,"reason":"r"}`, Verdict{Verdict: "unsent", Reason: "r"}, ""},
 		{"nudge without message", `{"verdict":"nudge","message":" ","reason":"r"}`, Verdict{}, "no message"},
 		{"unknown verdict", `{"verdict":"approve","reason":"r"}`, Verdict{}, "unknown verdict"},
 		{"no json", "I think it is fine.", Verdict{}, "no JSON"},
@@ -2971,5 +2975,43 @@ func TestIssueBumpedToAnAskWorkerStaysInItsQueue(t *testing.T) {
 
 	if c := f.lastCheckin(t); c.Issue != 12 || !c.Sent {
 		t.Fatalf("check-in = %+v, want #12 still handed to the worker that builds", c)
+	}
+}
+
+func unsent() Verdict {
+	return Verdict{Verdict: runlog.VerdictUnsent, Reason: "the hand-over text sits unsent in the input box after /clear"}
+}
+
+func TestAMessageLeftUnsentIsSubmittedOnceAndLookedAtAgain(t *testing.T) {
+	f := started(t, config.Supervisor{}, unsent(), onTrack)
+	f.tick(2 * time.Minute)
+	if f.term.submitted != 1 {
+		t.Fatalf("submitted %d times, want one carriage return", f.term.submitted)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictUnsent || !strings.Contains(c.Reason, "Enter was pressed once") {
+		t.Fatalf("check-in = %+v", c)
+	}
+	f.tick(time.Minute) // the screen did not change, and the worker is looked at again
+	if len(f.reviewer.prompts) != 2 {
+		t.Fatalf("%d review(s); the supervisor must check that the turn started", len(f.reviewer.prompts))
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictOnTrack {
+		t.Fatalf("check-in = %+v, want on_track once the turn started", c)
+	}
+}
+
+func TestAMessageStillUnsentAfterOneEnterNeedsTheOwner(t *testing.T) {
+	f := started(t, config.Supervisor{}, unsent())
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+	f.tick(2 * time.Minute)
+	f.tick(time.Minute)
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictNeedsOwner || !strings.Contains(c.Reason, "still sits unsent after one Enter") {
+		t.Fatalf("check-in = %+v, want needs_owner", c)
+	}
+	f.term.running(f.now) // the screen moved, and the reviewer sees the same
+	f.tick(2 * time.Minute)
+	if f.term.submitted != 1 || len(notes) != 1 {
+		t.Fatalf("submitted %d times, notes %q; Enter is pressed once per message", f.term.submitted, notes)
 	}
 }

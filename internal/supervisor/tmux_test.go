@@ -225,3 +225,23 @@ func TestCaptureJoinedReadsAWrappedURLAsOneLine(t *testing.T) {
 		t.Fatalf("Enter alone: %v", err)
 	}
 }
+
+func TestTmuxSubmitSendsALineLeftTyped(t *testing.T) {
+	tm := privateTmux(t)
+	if err := tm.Open("one", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tm.run("send-keys", "-l", "-t", target("one"), "--", "echo submitted $((6*7))"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tm.Submit("one"); err != nil {
+		t.Fatal(err)
+	}
+	var screen string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if screen, _ = tm.Capture("one", 20); strings.Contains(screen, "submitted 42") {
+			return
+		}
+	}
+	t.Fatalf("the typed line was never run:\n%s", screen)
+}
