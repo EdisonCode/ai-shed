@@ -216,6 +216,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		Account:        account,
 		Repos:          cfg.Repos,
 		Looks:          reader,
+		EyeCheckRepos:  cfg.EyeCheckRepos(),
 		Machine:        m,
 		Settings:       cfg.Supervisor,
 		Signals:        cfg.Signals,

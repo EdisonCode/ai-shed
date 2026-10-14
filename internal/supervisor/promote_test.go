@@ -85,6 +85,47 @@ func TestOnlyLowRiskAndOnlyWhenTheOwnerTurnedItOn(t *testing.T) {
 	}
 }
 
+// askingEyes is verifiedLow whose hand-back asks for a look at staging.
+func askingEyes() backlog.Issue {
+	i := verifiedLow("low")
+	i.Comments[0].Body += "\n**Needs eyes:** open /orders and check the total"
+	return i
+}
+
+func TestALookAWorkerDoesAfterTheMergeDoesNotHoldTheMerge(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	merger := withMergeLow(t, f, true)
+	f.EyeCheckRepos = []string{"org/app"}
+	f.lister.issues = []backlog.Issue{askingEyes()}
+	f.tick(2 * time.Minute)
+	if len(merger.queued) != 1 {
+		t.Fatalf("queued = %+v, want #41 queued: the look happens on staging after the merge", merger.queued)
+	}
+}
+
+func TestALookTheOwnerMustDoHoldsTheMerge(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	merger := withMergeLow(t, f, true)
+	f.lister.issues = []backlog.Issue{askingEyes()}
+	f.tick(2 * time.Minute)
+	if len(merger.queued) != 0 {
+		t.Fatalf("queued %+v on a repository where no worker does eye checks", merger.queued)
+	}
+}
+
+func TestWithEyeChecksAQuestionStillHoldsTheMerge(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	merger := withMergeLow(t, f, true)
+	f.EyeCheckRepos = []string{"org/app"}
+	i := askingEyes()
+	i.Comments[0].Body += "\n**Decisions needed:** keep the old flag?"
+	f.lister.issues = []backlog.Issue{i}
+	f.tick(2 * time.Minute)
+	if len(merger.queued) != 0 {
+		t.Fatalf("queued %+v while a question waits on the owner", merger.queued)
+	}
+}
+
 func TestAMachineThatDidNotBuildThePullRequestLeavesIt(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	f.Repos = []config.Repo{{Name: "org/app", Verify: &config.Verify{MergeLow: true}}}
