@@ -208,6 +208,10 @@ The supervisor holds both kinds back, and hands out what can go ahead.
 - **Dependencies.** An issue whose body or comments say `Depends on #12`
   (or `Blocked by #12, org/api#7`), or that GitHub's blocked-by relation
   links to an open issue, is not handed out until those issues are closed.
+  The number may be a pull request, which counts as closed once it is merged
+  or closed. A number that is neither holds only the issue that names it,
+  and `shed status` says so: `depends on #12, which is not an issue or pull
+  request`.
   A worker that finds a dependency writes the line itself and hands back.
 - **With `stack: true`**, an issue with one open dependency whose pull
   request is ready and waits for review goes ahead: the worker builds it on

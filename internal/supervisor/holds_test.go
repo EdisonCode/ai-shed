@@ -30,6 +30,21 @@ func TestAnIssueWaitsForItsDependencyToClose(t *testing.T) {
 	}
 }
 
+func TestADependencyThatNamesNothingHoldsOnlyItsIssue(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	missing := labeled(11)
+	missing.Deps = []backlog.Dep{{Repo: "org/app", Number: 6300, Missing: true}}
+	f.lister.issues = []backlog.Issue{missing, labeled(12)}
+	f.tick(2 * time.Minute)
+	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#11 Issue [held: depends on #6300, which is not an issue or pull request]") {
+		t.Fatalf("prompt does not show the hold:\n%s", prompt)
+	}
+	f.tick(10 * time.Minute)
+	if c := f.lastCheckin(t); c.Issue != 12 {
+		t.Fatalf("check-in = %+v, want #12 handed over", c)
+	}
+}
+
 func TestAClosedDependencyHoldsNothing(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	f.lister.issues = []backlog.Issue{dependsOn(11, 12, false), labeled(13)}
