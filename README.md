@@ -1340,7 +1340,9 @@ An ask counts only in a hand-back comment. The same words in a plan, a brief
 or a discussion on the issue ask you nothing and hold nothing back. In a
 hand-back, the ask counts only where it begins a line (after a list mark,
 a quote or emphasis at most): "the others were not ready: #12" in a sentence
-asks nothing. Your answers (`Owner ruling`, `Eyes checked`) count in any comment.
+asks nothing. Your answers (`Owner ruling`, `Eyes checked`, `Eyes failed`)
+count in any comment, and also only where they begin a line: a ruling that
+tells a worker to "post `Eyes checked` or `Eyes failed`" is no verdict.
 
 An issue with an open signal is not handed to a worker.
 

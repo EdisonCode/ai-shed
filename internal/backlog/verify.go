@@ -114,9 +114,9 @@ func VerifyOutcomes(issue Issue, signals []config.Signal) []VerifyOutcome {
 		body := strings.ToLower(c.Body)
 		for _, s := range signals {
 			switch {
-			case s.FailedBy != "" && strings.Contains(body, strings.ToLower(s.FailedBy)):
+			case failedIn(body, s):
 				out[len(out)-1].Escaped = "an eye check failed"
-			case s.SendsBack && s.AnsweredBy != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) && !accepts(c.Body, s):
+			case s.SendsBack && answeredIn(body, s) && !accepts(c.Body, s):
 				out[len(out)-1].Escaped = "the owner sent it back"
 			}
 		}

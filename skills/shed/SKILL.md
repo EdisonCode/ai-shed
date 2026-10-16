@@ -70,9 +70,11 @@ machine in the fleet file (a label, an assignee, or both).
 Check the result: `shed status` lists each machine's issues.
 
 When you write on an issue yourself (a plan, a scope, instructions for the
-worker), you may use the signal phrases freely: they count only inside a
-worker's hand-back comment. Do not head your own comment with the hand-back
-phrase.
+worker), you may use the signal phrases freely inside a sentence. An ask
+counts only inside a worker's hand-back comment. An answer (`Owner ruling`,
+`Eyes checked`, `Eyes failed`) counts in any comment, but only where it
+begins a line: start a line with one only when you mean it. Do not head your
+own comment with the hand-back phrase.
 
 ## Put an issue first
 
