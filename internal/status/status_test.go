@@ -347,6 +347,18 @@ func TestRenderNamesASupervisedWorkersToolAndIssue(t *testing.T) {
 	}
 }
 
+func TestRenderShowsWhatEachWorkersProcessesUse(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{handedOver(7)}
+	res.Usage = map[string]probe.Usage{"app": {CPU: 325.5, MemKB: 7340032, Top: probe.Process{PID: 102, MemKB: 6291456, Command: "/usr/bin/node /repo/node_modules/.bin/vitest run"}}}
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}, {Name: "web", Dir: "/tmp", Brief: "b"}}}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{Assess(m, signals, now, res, nil)}, nil)
+	if want := "app  #7  cpu 326% 7.0G, most node vitest 6.0G  nudge"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}
+
 func TestAgentSessionsOutsideTheFleetAreMarkedUnsupervised(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{

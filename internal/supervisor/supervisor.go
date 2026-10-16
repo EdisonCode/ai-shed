@@ -681,7 +681,7 @@ func (s *Supervisor) start(w config.Worker, st *workerState, windowExists bool, 
 	if w.Ask {
 		prompt = askPrompt
 	}
-	command := envPrefix(w.Env) + w.CommandOrDefault() + " " + shellQuote(prompt)
+	command := envPrefix(w.Env) + s.Machine.Capacity.NicePrefix() + w.CommandOrDefault() + " " + shellQuote(prompt)
 	if err := s.Terminal.Send(w.Name, command); err != nil {
 		return err
 	}

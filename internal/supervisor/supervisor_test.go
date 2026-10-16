@@ -195,6 +195,18 @@ func TestMissingWorkerIsStartedWithItsBrief(t *testing.T) {
 	}
 }
 
+func TestWorkerStartsAtTheMachinesLowerPriority(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	f.Machine.Capacity.Nice = 10
+	f.Machine.Workers[0].Env = map[string]string{"TZ": "UTC"}
+	f.tick(0)
+
+	want := "TZ='UTC' nice -n 10 claude --permission-mode auto 'You are an unattended worker. Read .shed/BRIEF.md in full and carry it out.'"
+	if !slices.Equal(f.term.sent, []string{want}) {
+		t.Fatalf("sent = %q, want %q", f.term.sent, want)
+	}
+}
+
 func TestExitedSessionIsRestartedInItsWindow(t *testing.T) {
 	f := started(t, config.Supervisor{})
 	f.term.opened = nil

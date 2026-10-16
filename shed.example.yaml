@@ -58,6 +58,9 @@ machines:
       # Exit 0 means busy. Here: two or more CI jobs are running.
       busy_when: '[ "$(pgrep -c -x "Runner\.Worker")" -ge 2 ]'
       max_wait: 20m
+      # Optional. Start each worker's command at a lower CPU priority, so
+      # the CI runners on the machine get the cores first.
+      nice: 10
     workers:
       # A long-running agent session that the machine's agent starts, keeps
       # alive and checks in on. It runs in tmux window shed:app.
