@@ -38,6 +38,9 @@ type Digest struct {
 	// MachineIdle is, by machine, how many worker-hours were idle in the
 	// window, by cause.
 	MachineIdle map[string]map[string]float64 `json:"machine_idle_hours,omitempty"`
+	// Peaks is, by machine, the highest load and swap of the hours in the
+	// window that its agent recorded.
+	Peaks map[string]Peak `json:"peaks,omitempty"`
 	// Imbalance names each machine whose workers idled with no work while
 	// another machine on the same repository held work for room.
 	Imbalance []string `json:"imbalance,omitempty"`
@@ -84,6 +87,12 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 			}
 			d.IdleHours[cause] += idle.Hours()
 		}
+		if p, ok := peak(m.Probe.LoadPeaks, since); ok {
+			if d.Peaks == nil {
+				d.Peaks = map[string]Peak{}
+			}
+			d.Peaks[m.Name] = p
+		}
 		byCause := runlog.IdleByCause(m.Probe.Checkins, since, m.Probe.Now)
 		if idle := byCause[runlog.IdleLimit]; idle > 0 {
 			if d.LimitHours == nil {
@@ -101,7 +110,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 			d.MachineIdle[m.Name][cause] += idle.Hours()
 		}
 	}
-	d.Imbalance = imbalance(cfg, d.MachineIdle)
+	d.Imbalance = imbalance(cfg, d.MachineIdle, d.Peaks)
 	c.collectUsage(ctx, cfg, &d)
 	var repos []string
 	for _, m := range cfg.Machines {
