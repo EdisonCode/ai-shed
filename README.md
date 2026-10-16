@@ -918,8 +918,18 @@ Balance:
 ```
 
 `shed digest` shows each machine's idle worker-hours by cause, `held for
-room` included, and names a machine that idled with no work while another
-held work for room.
+room` included, and its peak load per core and swap in the window. It names
+a machine that idled with no work while another held work for room:
+
+```
+By machine:
+  mini  held for room 4.0h; peak load 3.33 per core, swap 6.0G
+  pc  no work 7.0h; peak load 0.40 per core, swap none
+  pc idled 7.0 worker-hours with no work while mini held work 4.0h for room, peak load 3.33 per core, swap 6.0G
+```
+
+The agent reads the load and swap each minute and keeps the peak of each
+hour, for a week, in `~/.local/state/shed/loads.jsonl`.
 
 #### Sharing the machine with what else runs on it
 

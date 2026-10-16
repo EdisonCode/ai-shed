@@ -62,3 +62,13 @@ func TestShortCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestTheProbeReadsTheHourlyPeaks(t *testing.T) {
+	res, err := Parse("@@now 1790000000\n@@loads {\"hour\":\"2026-10-16T09:00:00Z\",\"load\":9,\"cores\":4,\"swap_kb\":300}\n@@loads {\"hour\n@@end\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.LoadPeaks) != 1 || res.LoadPeaks[0].Load != 9 || res.LoadPeaks[0].SwapKB != 300 {
+		t.Fatalf("peaks = %+v; want the whole line, and the cut one skipped", res.LoadPeaks)
+	}
+}

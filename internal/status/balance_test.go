@@ -82,16 +82,41 @@ func TestDigestNamesAMachineThatIdledWhileAnotherHeldWorkForRoom(t *testing.T) {
 		"pc":   {runlog.IdleNoWork: 7},
 		"mini": {runlog.IdleRoom: 4},
 	}
-	d := Digest{Since: now.Add(-24 * time.Hour), Now: now, MachineIdle: idle, Imbalance: imbalance(cfg, idle)}
+	peaks := map[string]Peak{"mini": {LoadPerCore: 3.33, SwapKB: 6 << 20}}
+	d := Digest{Since: now.Add(-24 * time.Hour), Now: now, MachineIdle: idle, Peaks: peaks, Imbalance: imbalance(cfg, idle, peaks)}
 	var out strings.Builder
 	RenderDigest(&out, d)
 	for _, want := range []string{
-		"  mini  held for room 4.0h\n",
+		"  mini  held for room 4.0h; peak load 3.33 per core, swap 6.0G\n",
 		"  pc  no work 7.0h\n",
-		"  pc idled 7.0 worker-hours with no work while mini held work 4.0h for room\n",
+		"  pc idled 7.0 worker-hours with no work while mini held work 4.0h for room, peak load 3.33 per core, swap 6.0G\n",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("digest lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestTheDigestPeakIsTheHighestOfTheHoursInTheWindow(t *testing.T) {
+	since := now.Add(-24 * time.Hour)
+	hours := []runlog.LoadPeak{
+		{Hour: since.Add(-2 * time.Hour), Load: 80, Cores: 8, SwapKB: 9 << 20}, // before the window
+		{Hour: since.Add(3 * time.Hour), Load: 20, Cores: 8, SwapKB: 1 << 20},
+		{Hour: since.Add(9 * time.Hour), Load: 12, Cores: 8, SwapKB: 3 << 20},
+	}
+	got, ok := peak(hours, since)
+	if !ok || got.LoadPerCore != 2.5 || got.SwapKB != 3<<20 {
+		t.Fatalf("peak = %+v, %v; want 2.5 per core and 3G of swap", got, ok)
+	}
+	if _, ok := peak(hours[:1], since); ok {
+		t.Fatal("an hour before the window counts")
+	}
+}
+
+func TestASingleMachineWithPeaksIsShownByMachine(t *testing.T) {
+	var out strings.Builder
+	RenderDigest(&out, Digest{Since: now.Add(-24 * time.Hour), Now: now, Peaks: map[string]Peak{"box": {LoadPerCore: 0.4}}})
+	if want := "  box  never idle; peak load 0.40 per core, swap none\n"; !strings.Contains(out.String(), want) {
+		t.Fatalf("digest lacks %q:\n%s", want, out.String())
 	}
 }

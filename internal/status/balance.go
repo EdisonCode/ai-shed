@@ -156,7 +156,7 @@ const minImbalance = 0.5
 // imbalance names each machine whose workers idled with no work in the
 // digest's window while another machine on a repository it takes work from
 // held work for room.
-func imbalance(cfg *config.Config, idle map[string]map[string]float64) []string {
+func imbalance(cfg *config.Config, idle map[string]map[string]float64, peaks map[string]Peak) []string {
 	var out []string
 	for _, spare := range cfg.Machines {
 		noWork := idle[spare.Name][runlog.IdleNoWork]
@@ -169,21 +169,61 @@ func imbalance(cfg *config.Config, idle map[string]map[string]float64) []string 
 			if short.Name == spare.Name || held < minImbalance || !slices.ContainsFunc(machineRepos(cfg, short.Name), func(r string) bool { return slices.Contains(repos, r) }) {
 				continue
 			}
-			out = append(out, fmt.Sprintf("%s idled %.1f worker-hours with no work while %s held work %.1fh for room", spare.Name, noWork, short.Name, held))
+			line := fmt.Sprintf("%s idled %.1f worker-hours with no work while %s held work %.1fh for room", spare.Name, noWork, short.Name, held)
+			if p, ok := peaks[short.Name]; ok {
+				line += ", " + p.words()
+			}
+			out = append(out, line)
 		}
 	}
 	return out
 }
 
-// renderMachineIdle writes each machine's idle worker-hours by cause, and
-// the imbalances, when the fleet has more than one machine.
-func renderMachineIdle(w io.Writer, d Digest) {
-	if len(d.MachineIdle) < 2 {
-		return
+// Peak is the highest load and swap a machine's agent recorded in a window.
+type Peak struct {
+	LoadPerCore float64 `json:"load_per_core"`
+	SwapKB      int     `json:"swap_kb"`
+}
+
+func (p Peak) words() string {
+	swap := "none"
+	if p.SwapKB > 0 {
+		swap = memory(p.SwapKB)
 	}
-	names := make([]string, 0, len(d.MachineIdle))
+	return fmt.Sprintf("peak load %.2f per core, swap %s", p.LoadPerCore, swap)
+}
+
+// peak returns the highest load per core and swap of the hours that end
+// after since; false when none does.
+func peak(peaks []runlog.LoadPeak, since time.Time) (Peak, bool) {
+	var p Peak
+	found := false
+	for _, h := range peaks {
+		if !h.Hour.Add(time.Hour).After(since) {
+			continue
+		}
+		found = true
+		p.LoadPerCore = max(p.LoadPerCore, h.PerCore())
+		p.SwapKB = max(p.SwapKB, h.SwapKB)
+	}
+	return p, found
+}
+
+// renderMachineIdle writes each machine's idle worker-hours by cause and its
+// peak load and swap, and the imbalances: for a fleet of more than one
+// machine, or a machine whose peaks are known.
+func renderMachineIdle(w io.Writer, d Digest) {
+	var names []string
 	for name := range d.MachineIdle {
 		names = append(names, name)
+	}
+	for name := range d.Peaks {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	if len(names) < 2 && len(d.Peaks) == 0 {
+		return
 	}
 	slices.Sort(names)
 	fmt.Fprintln(w, "By machine:")
@@ -197,7 +237,11 @@ func renderMachineIdle(w io.Writer, d Digest) {
 		if len(words) == 0 {
 			words = []string{"never idle"}
 		}
-		fmt.Fprintf(w, "  %s  %s\n", name, strings.Join(words, ", "))
+		line := strings.Join(words, ", ")
+		if p, ok := d.Peaks[name]; ok {
+			line += "; " + p.words()
+		}
+		fmt.Fprintf(w, "  %s  %s\n", name, line)
 	}
 	for _, line := range d.Imbalance {
 		fmt.Fprintf(w, "  %s\n", line)

@@ -33,6 +33,9 @@ const (
 	// gatesEvery is how often open pull requests are looked at for a commit
 	// to gate. A run in progress delays the next look.
 	gatesEvery = time.Minute
+	// sampleEvery is how often the load and swap are read, for the peak of
+	// each hour.
+	sampleEvery = time.Minute
 	// deployTimeout bounds a staging deploy command. It starts the deploy;
 	// the supervisor then waits for staging to serve the new commit.
 	deployTimeout = 10 * time.Minute
@@ -60,6 +63,10 @@ func (a Agent) Run(ctx context.Context) error {
 	}
 	current := a.start(ctx, cfg, m)
 	defer func() { current.stop() }()
+	// The peaks outlive a config reload: one sampler for the agent's life.
+	loads := &runlog.LoadSampler{Dir: a.StateDir, Cores: runtime.NumCPU(), Read: supervisor.SystemLoadAndSwap, Logf: a.Logf}
+	stopLoads := every(ctx, sampleEvery, func(context.Context) { loads.Sample(time.Now()) })
+	defer stopLoads()
 
 	ticker := time.NewTicker(heartbeatEvery)
 	defer ticker.Stop()
