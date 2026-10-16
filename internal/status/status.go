@@ -60,6 +60,9 @@ type Report struct {
 	// Released are the issues a spent machine gave to the fleet that no
 	// machine has taken yet.
 	Released []ReleasedIssue `json:"released,omitempty"`
+	// Balance names each machine whose workers are idle while another has
+	// work nobody has started and no room for it.
+	Balance []string `json:"balance,omitempty"`
 }
 
 // ReleasedIssue is an issue on an overflow label, waiting for a machine with
@@ -332,7 +335,8 @@ func (c Collector) CollectAll(ctx context.Context, cfg *config.Config) Report {
 			}
 		}
 	}
-	return Report{Machines: c.collectMachines(ctx, cfg, workerLooks), Repos: repos, Released: c.collectReleased(ctx, cfg)}
+	machines := c.collectMachines(ctx, cfg, workerLooks)
+	return Report{Machines: machines, Repos: repos, Released: c.collectReleased(ctx, cfg), Balance: Balance(cfg, machines)}
 }
 
 func issueKey(repo string, number int) string {

@@ -59,6 +59,9 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"worker issue source without filter", minimal + "    workers:\n      - {name: w, dir: /tmp, brief: b, issues: [{repo: org/app}]}\n", `worker "w": issue source org/app needs a label`},
 		{"negative max_load", minimal + "    capacity: {max_load: -1}\n", "max_load"},
 		{"bad max_wait", minimal + "    capacity: {max_wait: later}\n", "max_wait"},
+		{"bad release_after", minimal + "    capacity: {max_load: 1.5, release_after: soon}\n", "capacity.release_after \"soon\""},
+		{"release_after with no test for busy", minimal + "    capacity: {release_after: 30m}\n", "needs max_load or busy_when"},
+		{"release_after with no overflow", minimal + "    capacity: {max_load: 1.5, release_after: 30m}\n", "needs an account with overflow"},
 		{"nice above 19", minimal + "    capacity: {nice: 20}\n", "capacity.nice 20"},
 		{"negative nice", minimal + "    capacity: {nice: -5}\n", "capacity.nice -5"},
 		{"bad models.apply", minimal + "supervisor: {models: {apply: maybe}}\n", "models.apply"},
@@ -585,5 +588,16 @@ func TestOverflowNeedsAMachineThatTakesItAsBackfill(t *testing.T) {
 	}
 	if _, err := Parse([]byte(minimal + "    issues: [{repo: org/app, label: \"machine:box\"}, {repo: org/app, label: \"fleet:ready\", backfill: true}]\n" + account)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReleaseAfterWithAnOverflowAccountLoads(t *testing.T) {
+	account := "accounts: [{name: max-1, machines: [box], overflow: \"fleet:ready\"}]\n"
+	cfg, err := Parse([]byte(minimal + "    capacity: {max_load: 1.5, release_after: 30m}\n    issues: [{repo: org/app, label: \"machine:box\"}, {repo: org/app, label: \"fleet:ready\", backfill: true}]\n" + account))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Machines[0].Capacity.ReleaseAfterOrZero(); got != 30*time.Minute {
+		t.Fatalf("release_after = %v", got)
 	}
 }

@@ -47,6 +47,7 @@ func cmdStatus(args []string) int {
 			}
 			status.RenderReleased(os.Stdout, report.Released, time.Now())
 			status.Render(os.Stdout, reports, repos)
+			status.RenderBalance(os.Stdout, report.Balance)
 		}
 		if *watch <= 0 {
 			if status.NeedsOwner(reports, repos) {

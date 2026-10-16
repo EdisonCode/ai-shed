@@ -35,6 +35,12 @@ type Digest struct {
 	// LimitHours is, by machine, how many worker-hours were idle at a usage
 	// limit in the window.
 	LimitHours map[string]float64 `json:"limit_hours,omitempty"`
+	// MachineIdle is, by machine, how many worker-hours were idle in the
+	// window, by cause.
+	MachineIdle map[string]map[string]float64 `json:"machine_idle_hours,omitempty"`
+	// Imbalance names each machine whose workers idled with no work while
+	// another machine on the same repository held work for room.
+	Imbalance []string `json:"imbalance,omitempty"`
 	// Usage is what each machine's workers spent in the window, when the
 	// collector reads usage.
 	Usage []MachineUsage `json:"usage,omitempty"`
@@ -78,13 +84,24 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 			}
 			d.IdleHours[cause] += idle.Hours()
 		}
-		if idle := runlog.IdleByCause(m.Probe.Checkins, since, m.Probe.Now)[runlog.IdleLimit]; idle > 0 {
+		byCause := runlog.IdleByCause(m.Probe.Checkins, since, m.Probe.Now)
+		if idle := byCause[runlog.IdleLimit]; idle > 0 {
 			if d.LimitHours == nil {
 				d.LimitHours = map[string]float64{}
 			}
 			d.LimitHours[m.Name] += idle.Hours()
 		}
+		for cause, idle := range byCause {
+			if d.MachineIdle == nil {
+				d.MachineIdle = map[string]map[string]float64{}
+			}
+			if d.MachineIdle[m.Name] == nil {
+				d.MachineIdle[m.Name] = map[string]float64{}
+			}
+			d.MachineIdle[m.Name][cause] += idle.Hours()
+		}
 	}
+	d.Imbalance = imbalance(cfg, d.MachineIdle)
 	c.collectUsage(ctx, cfg, &d)
 	var repos []string
 	for _, m := range cfg.Machines {
@@ -155,6 +172,7 @@ func RenderDigest(w io.Writer, d Digest) {
 	if len(idle) > 0 {
 		fmt.Fprintf(w, "\nIdle worker-hours: %s\n", strings.Join(idle, ", "))
 	}
+	renderMachineIdle(w, d)
 
 	renderUsage(w, d)
 
