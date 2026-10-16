@@ -28,7 +28,7 @@ type Diff struct {
 func Tier(v config.Verify, d Diff) (string, []string) {
 	var reasons []string
 	for _, a := range v.Areas {
-		if touches(d.Files, a.Paths) {
+		if Touches(d.Files, a.Paths) {
 			reasons = append(reasons, "touches "+a.Name)
 		}
 	}
@@ -54,9 +54,9 @@ func Tier(v config.Verify, d Diff) (string, []string) {
 	return config.TierLow, nil
 }
 
-// touches reports whether a file is one of the paths or inside one, at a
+// Touches reports whether a file is one of the paths or inside one, at a
 // path segment.
-func touches(files, paths []string) bool {
+func Touches(files, paths []string) bool {
 	for _, f := range files {
 		for _, p := range paths {
 			p = strings.TrimSuffix(p, "/")

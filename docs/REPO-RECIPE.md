@@ -103,3 +103,47 @@ It costs one CI run per merge, and merges wait their turn. That is slower
 than a merge queue, which batches, but main stays green. A repository with
 no checks on its pull requests never merges on the train: there is nothing
 to wait for, so there is nothing that passed.
+
+### In batches
+
+Where CI is slow and many pull requests wait, one run per merge falls
+behind. A batch train tests several pull requests in one CI run:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    verify:
+      merge_low: true
+      merge_train: batch
+      batch_size: 5                 # the default
+      merge_train_alone:            # optional: a change here is tested by itself
+        - db/migrations
+        - package-lock.json
+```
+
+shed takes up to `batch_size` queued pull requests, the first verified
+first. It makes a branch `shed-train/<machine>/<time>` from the base, merges
+each pull request into it at its verified head, in order, and opens the
+branch as a draft pull request, so your CI runs on the combination. Do not
+merge that draft yourself.
+
+- **Green.** shed merges each pull request of the batch, in order, at the
+  head the batch tested (`--match-head-commit`), without updating its branch.
+  Then it closes the draft and deletes its branch.
+- **Red.** shed closes the draft and tests the first half of the batch, and
+  so on, until a batch of one fails. That pull request comes off the train
+  with a comment that names the failed check and goes back to a worker; the
+  rest merge.
+- **A pull request that changes** while it is in a batch (new commits, a
+  conflict with the ones before it) comes off the train, and the batch is
+  built again without it. A batch whose base moved is built again, so that
+  what merges is what was tested.
+- **`merge_train_alone`** paths, named as in `areas`: a pull request that
+  touches one is tested in a batch of its own.
+
+A batch train merges each pull request as it stands, so the base must not
+require branches to be up to date before merging (the branch protection or
+ruleset option "Require branches to be up to date before merging"). Where it
+does, shed boards nothing and logs why; turn the option off, or use
+`merge_train: true`. One machine's batch runs at a time on a repository; one
+another machine opened in the last hour holds the next back.

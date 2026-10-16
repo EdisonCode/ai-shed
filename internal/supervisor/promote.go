@@ -34,7 +34,7 @@ func (s *Supervisor) queueMerges(ctx context.Context, open []backlog.Issue, chec
 		if !ok {
 			continue
 		}
-		if repo.Verify.MergeTrain {
+		if repo.Trains() {
 			trains[i.Repo] = append(trains[i.Repo], boardable{issue: i, v: v})
 			continue
 		}
@@ -57,7 +57,12 @@ func (s *Supervisor) queueMerges(ctx context.Context, open []backlog.Issue, chec
 		return
 	}
 	for _, repo := range s.Repos {
-		if repo.Trains() {
+		switch {
+		case repo.Batches():
+			if s.Batch != nil {
+				s.runBatch(ctx, repo, trains[repo.Name], checkins)
+			}
+		case repo.Trains():
 			s.runTrain(ctx, repo, trains[repo.Name], checkins)
 		}
 	}

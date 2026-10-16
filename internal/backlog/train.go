@@ -91,6 +91,8 @@ type Head struct {
 	// Open is set while the pull request is open: not merged, not closed.
 	Open bool
 	SHA  string
+	// Base is the branch the pull request merges into.
+	Base string
 	// Behind counts the commits of the base branch the head does not have.
 	Behind int
 	// Checks counts the checks reported on the head. None reported yet is
@@ -144,7 +146,7 @@ func parseHead(data []byte) (Head, string, error) {
 	if pr.SHA == "" || pr.Base == "" {
 		return Head{}, "", fmt.Errorf("no head commit or base branch in %s", data)
 	}
-	return Head{Open: pr.State == "OPEN", SHA: pr.SHA, Checks: len(pr.Checks), Pending: pending(pr.Checks), Problem: prProblem(pr.Mergeable, pr.Checks)}, pr.Base, nil
+	return Head{Open: pr.State == "OPEN", SHA: pr.SHA, Base: pr.Base, Checks: len(pr.Checks), Pending: pending(pr.Checks), Problem: prProblem(pr.Mergeable, pr.Checks)}, pr.Base, nil
 }
 
 // UpdateBranch brings the pull request up to date with its base branch: a

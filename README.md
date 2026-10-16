@@ -495,7 +495,7 @@ repos:
     verify:
       merge_low: true
       merge_method: squash      # where the repository has no merge queue; the default is merge
-      merge_train: true         # optional, where it cannot have a merge queue: see below
+      merge_train: true         # optional, where it cannot have a merge queue: true or batch, see below
 ```
 
 - **What is queued.** A pull request a verifier passed at low risk, with
@@ -515,7 +515,11 @@ repos:
   that head. One whose checks fail there is taken off with a comment
   `Off the merge train by shed:` and goes back to a worker. `shed status`
   shows the train in the repository's release state:
-  `merge train: PR #41 (#12) in hand 8m, waiting for its checks; next PR #44 (#13)`. See
+  `merge train: PR #41 (#12) in hand 8m, waiting for its checks; next PR #44 (#13)`.
+  With `merge_train: batch`, shed tests up to `batch_size` (5) pull requests
+  together on one draft pull request, merges each when its checks pass, and
+  splits a batch that fails until it finds the pull request that fails:
+  `merge train: batch PR #101 of PR #41 (#12), PR #44 (#13) 25m, checks running`. See
   [the repository recipe](docs/REPO-RECIPE.md#a-merge-train-where-there-is-no-merge-queue).
 - **It leaves your list.** A pull request on its way to the merge is not in
   `waits on you`. It reaches staging, and the eye checks run there as

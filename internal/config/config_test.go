@@ -571,8 +571,30 @@ func TestAMergeTrainNeedsMergeLow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := cfg.Repo("org/app"); !r.Verify.MergeTrain {
+	if r, _ := cfg.Repo("org/app"); r.Verify.MergeTrain != TrainOne || r.Batches() {
 		t.Fatalf("repo = %+v", r)
+	}
+}
+
+func TestABatchTrainTakesItsSizeAndThePathsThatGoAlone(t *testing.T) {
+	queue := minimal + "    issues: [{repo: org/app, label: x}]\n    workers: [{name: w, dir: /tmp, brief: b, verifies: true}]\n"
+	cfg, err := Parse([]byte(queue + "repos: [{repo: org/app, verify: {merge_low: true, merge_train: batch, merge_train_alone: [db/migrations]}}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := cfg.Repo("org/app")
+	if !r.Batches() || r.Verify.BatchSizeOrDefault() != DefaultBatchSize || len(r.Verify.MergeTrainAlone) != 1 {
+		t.Fatalf("repo = %+v", r.Verify)
+	}
+	for yaml, want := range map[string]string{
+		"{merge_low: true, merge_train: fast}":                  "must be true, false or batch",
+		"{merge_low: true, merge_train: true, batch_size: 3}":   "are for merge_train: batch",
+		"{merge_low: true, merge_train: batch, batch_size: -1}": "must be 1 or more",
+	} {
+		_, err := Parse([]byte(queue + "repos: [{repo: org/app, verify: " + yaml + "}]\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", yaml, err, want)
+		}
 	}
 }
 

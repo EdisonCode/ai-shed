@@ -145,8 +145,10 @@ type Supervisor struct {
 	// Merger queues a pull request for its merge. Nil queues nothing.
 	Merger Merger
 	// Train runs the merge train of a repository with merge_train. Nil runs
-	// none.
+	// none. Batch builds and closes the batches of a repository with
+	// merge_train: batch; nil runs no batch train.
 	Train Trainer
+	Batch Batcher
 	// Releaser moves the issue of a spent worker onto the account's overflow
 	// label. Nil releases nothing.
 	Releaser Releaser
@@ -212,6 +214,8 @@ type Supervisor struct {
 	mergeQueued map[string]bool
 	// trains holds where each repository's merge train stands.
 	trains map[string]*train
+	// batches holds where each repository's batch train stands.
+	batches map[string]*batchTrain
 	// diffs keeps the pull request diffs read for a risk tier.
 	diffs map[string]keptDiff
 	// deploys holds where each repository's staging deploy stands.
