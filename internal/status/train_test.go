@@ -3,8 +3,10 @@ package status
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
@@ -12,7 +14,7 @@ import (
 
 func withTrain() *config.Config {
 	cfg := withRepo(false)
-	cfg.Repos = []config.Repo{{Name: "org/app", Verify: &config.Verify{MergeLow: true, MergeTrain: true}}}
+	cfg.Repos = []config.Repo{{Name: "org/app", Verify: &config.Verify{MergeLow: true, MergeTrain: config.TrainOne}}}
 	return cfg
 }
 
@@ -52,5 +54,37 @@ func TestARepositoryWithoutATrainShowsNone(t *testing.T) {
 	Render(&out, nil, []RepoReport{{Report: releaseState(), Lookers: 1, Now: now}})
 	if strings.Contains(out.String(), "merge train") {
 		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+type fakeBatches struct {
+	batches []backlog.Batch
+	heads   map[int]backlog.Head
+}
+
+func (f fakeBatches) Batches(context.Context, string) ([]backlog.Batch, error) { return f.batches, nil }
+
+func (f fakeBatches) ReadHead(_ context.Context, _ string, pr int) (backlog.Head, error) {
+	return f.heads[pr], nil
+}
+
+func TestTheReleaseStateShowsABatchWithItsPullRequestsChecksAndAge(t *testing.T) {
+	cfg := withTrain()
+	cfg.Repos[0].Verify.MergeTrain = config.TrainBatch
+	boarded := func(n, pr int) backlog.Issue {
+		i := issue(n, fmt.Sprintf("## Hand-back\n**PR:** #%d (ready)", pr), "Verified (low): ran the tests", fmt.Sprintf("%s pull request #%d, verified at low risk.", backlog.QueuedPhrase, pr))
+		i.OpenPRs = map[int]backlog.PR{pr: {}}
+		return i
+	}
+	batches := fakeBatches{
+		batches: []backlog.Batch{{PR: 101, Created: time.Now().Add(-25 * time.Minute), Cars: []backlog.Car{{Issue: 12, PR: 41}, {Issue: 13, PR: 42}}}},
+		heads:   map[int]backlog.Head{101: {Open: true, Checks: 2, Pending: true}},
+	}
+	c := Collector{Lister: fakeLister{issues: []backlog.Issue{boarded(12, 41), boarded(13, 42), boarded(14, 43)}}, Looks: &fakeLooks{}, Batches: batches}
+	var out bytes.Buffer
+	Render(&out, nil, c.CollectRepos(context.Background(), cfg))
+	want := "merge train: batch PR #101 of PR #41 (#12), PR #42 (#13) 25m, checks running; PR #43 (#14) in hand "
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
 	}
 }

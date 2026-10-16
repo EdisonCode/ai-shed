@@ -28,7 +28,7 @@ func cmdStatus(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	collector := status.Collector{Runner: probe.ShellRunner{}, Lister: backlog.GH{},
+	collector := status.Collector{Runner: probe.ShellRunner{}, Lister: backlog.GH{}, Batches: backlog.GH{},
 		Looks: &looks.Reader{GitHub: looks.GH{}, Run: looks.Shell, Now: time.Now}}
 
 	for {

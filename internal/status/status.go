@@ -196,6 +196,9 @@ type Collector struct {
 	// Times reads when each step of a merged pull request happened. It is
 	// needed only for a digest, and nil leaves the stages out.
 	Times PullTimer
+	// Batches reads the open batches of a repository with merge_train:
+	// batch. Nil leaves them out.
+	Batches BatchReader
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.
@@ -262,6 +265,12 @@ func (c Collector) collectRepo(parent context.Context, cfg *config.Config, repo 
 	}
 	if repo.Trains() {
 		report.Train = readTrain(open, cfg.Signals, report.Now, report.Lookers > 0)
+		if repo.Batches() && c.Batches != nil {
+			if err := readBatches(ctx, c.Batches, repo.Name, report.Train); err != nil {
+				report.Error = err.Error()
+				return report
+			}
+		}
 	}
 	if !repo.Deployed() {
 		return report

@@ -160,11 +160,57 @@ type Verify struct {
 	// MergeMethod is how such a pull request merges where the repository
 	// has no merge queue: merge, squash or rebase.
 	MergeMethod string `yaml:"merge_method"`
-	// MergeTrain is for a repository that cannot have a merge queue: shed
-	// merges what it queues one pull request at a time, each brought up to
-	// date with the base branch and merged only when its checks pass on
-	// that head. Off unless set; it needs merge_low.
-	MergeTrain bool `yaml:"merge_train"`
+	// MergeTrain is for a repository that cannot have a merge queue. With
+	// true, shed merges what it queues one pull request at a time, each
+	// brought up to date with the base branch and merged only when its
+	// checks pass on that head. With batch, it tests up to BatchSize pull
+	// requests together on one draft pull request and merges them all when
+	// its checks pass. Off unless set; it needs merge_low.
+	MergeTrain TrainMode `yaml:"merge_train"`
+	// BatchSize is how many pull requests a batch train tests together.
+	BatchSize int `yaml:"batch_size"`
+	// MergeTrainAlone are paths a change to which a batch train tests in a
+	// batch of its own, such as a schema, the migrations or a lockfile. A
+	// path names a file or a directory, as in areas.
+	MergeTrainAlone []string `yaml:"merge_train_alone"`
+}
+
+// TrainMode is how a merge train merges: one pull request at a time, or in
+// batches. "" runs no train.
+type TrainMode string
+
+const (
+	TrainOne   TrainMode = "one"
+	TrainBatch TrainMode = "batch"
+)
+
+// DefaultBatchSize is how many pull requests a batch train tests together.
+const DefaultBatchSize = 5
+
+// UnmarshalYAML reads merge_train: true, false or batch.
+func (t *TrainMode) UnmarshalYAML(node *yaml.Node) error {
+	var on bool
+	if err := node.Decode(&on); err == nil {
+		*t = ""
+		if on {
+			*t = TrainOne
+		}
+		return nil
+	}
+	var word string
+	if err := node.Decode(&word); err != nil || word != string(TrainBatch) {
+		return fmt.Errorf("line %d: merge_train must be true, false or batch, not %q", node.Line, node.Value)
+	}
+	*t = TrainBatch
+	return nil
+}
+
+// BatchSizeOrDefault is how many pull requests a batch train tests together.
+func (v Verify) BatchSizeOrDefault() int {
+	if v.BatchSize <= 0 {
+		return DefaultBatchSize
+	}
+	return v.BatchSize
 }
 
 // MergeMethodOrDefault is the merge method of a queued merge.
@@ -270,7 +316,12 @@ func (r Repo) Deployed() bool {
 
 // Trains reports whether shed runs a merge train for the repository.
 func (r Repo) Trains() bool {
-	return r.Verify != nil && r.Verify.MergeLow && r.Verify.MergeTrain
+	return r.Verify != nil && r.Verify.MergeLow && r.Verify.MergeTrain != ""
+}
+
+// Batches reports whether shed runs a batch train for the repository.
+func (r Repo) Batches() bool {
+	return r.Trains() && r.Verify.MergeTrain == TrainBatch
 }
 
 func (r Repo) LookBackOrDefault() time.Duration {
@@ -883,8 +934,14 @@ func (c *Config) validateVerify() error {
 		if m := r.Verify.MergeMethod; m != "" && m != "merge" && m != "squash" && m != "rebase" {
 			fail("repos: %s: verify.merge_method %q must be merge, squash or rebase", r.Name, m)
 		}
-		if r.Verify.MergeTrain && !r.Verify.MergeLow {
+		if r.Verify.MergeTrain != "" && !r.Verify.MergeLow {
 			fail("repos: %s: verify.merge_train merges what merge_low queues: turn on merge_low too", r.Name)
+		}
+		if r.Verify.MergeTrain != TrainBatch && (r.Verify.BatchSize != 0 || len(r.Verify.MergeTrainAlone) > 0) {
+			fail("repos: %s: verify.batch_size and verify.merge_train_alone are for merge_train: batch", r.Name)
+		}
+		if r.Verify.BatchSize < 0 {
+			fail("repos: %s: verify.batch_size must be 1 or more", r.Name)
 		}
 		for _, a := range r.Verify.Areas {
 			if a.Name == "" || len(a.Paths) == 0 {

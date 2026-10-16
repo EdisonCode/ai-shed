@@ -47,7 +47,7 @@ var (
 )
 
 func withTrain(t *testing.T, f *fixture, method string) (*fakeTrain, *fakeMerger) {
-	f.Repos = []config.Repo{{Name: "org/app", Verify: &config.Verify{MergeLow: true, MergeTrain: true, MergeMethod: method}}}
+	f.Repos = []config.Repo{{Name: "org/app", Verify: &config.Verify{MergeLow: true, MergeTrain: config.TrainOne, MergeMethod: method}}}
 	train := &fakeTrain{heads: map[int]backlog.Head{}}
 	merger := &fakeMerger{}
 	f.Train, f.Merger = train, merger
