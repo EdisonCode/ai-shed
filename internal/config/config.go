@@ -467,6 +467,17 @@ type Capacity struct {
 	// cores first. Everything the worker starts inherits it; the agent
 	// itself keeps its own. 0 leaves the priority alone.
 	Nice int `yaml:"nice"`
+	// ReleaseAfter is how long the machine may stay busy before it gives
+	// the work in its queue that nobody has started to the fleet: one issue
+	// each ReleaseAfter, onto its account's overflow label, which a machine
+	// with room takes up. Empty releases nothing.
+	ReleaseAfter string `yaml:"release_after"`
+}
+
+// ReleaseAfterOrZero is ReleaseAfter, or 0 when the machine releases
+// nothing.
+func (c Capacity) ReleaseAfterOrZero() time.Duration {
+	return durationOr(c.ReleaseAfter, 0)
 }
 
 // MaxNice is the lowest CPU priority a worker can be given.
@@ -993,6 +1004,17 @@ func (c *Config) validate() error {
 		}
 		if m.Capacity.MaxLoad < 0 {
 			fail("%s: capacity.max_load must not be negative", where)
+		}
+		if r := m.Capacity.ReleaseAfter; r != "" {
+			if d, err := time.ParseDuration(r); err != nil || d <= 0 {
+				fail("%s: capacity.release_after %q is not a positive duration such as 30m", where, r)
+			}
+			if !m.Capacity.Set() {
+				fail("%s: capacity.release_after needs max_load or busy_when to say when the machine is busy", where)
+			}
+			if a, ok := c.AccountOf(m.Name); !ok || a.Overflow == "" {
+				fail("%s: capacity.release_after needs an account with overflow, the label a machine with room takes released work from", where)
+			}
 		}
 		if n := m.Capacity.Nice; n < 0 || n > MaxNice {
 			fail("%s: capacity.nice %d must be from 0 to %d", where, n, MaxNice)

@@ -1559,6 +1559,23 @@ func TestMachineThatIsNeverQuietStillHandsOverAfterTheLongestWait(t *testing.T) 
 	}
 }
 
+func TestBusyMachineDoesNotTakeBackfillAfterTheLongestWait(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(50))
+	f.Machine.Capacity.MaxWait = "10m"
+	claimer := withBackfill(f)
+	busy := busyMachine(f)
+	f.tick(2 * time.Minute)
+	f.tick(30 * time.Minute)
+	if len(f.term.sent) != 0 || len(claimer.claimed) != 0 {
+		t.Fatalf("sent %q, claimed %q; a busy machine leaves backfill to a machine with room", f.term.sent, claimer.claimed)
+	}
+	*busy = false
+	f.tick(time.Minute)
+	if !slices.Equal(claimer.claimed, []string{"org/app#50 machine:box"}) {
+		t.Fatalf("claimed = %q, want #50 taken once the machine has room", claimer.claimed)
+	}
+}
+
 func TestBusyMachineDoesNotHoldANudgeAboutTheIssueInHand(t *testing.T) {
 	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), assign(12))
 	f.tick(2 * time.Minute) // handed #12 while there is room

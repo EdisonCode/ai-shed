@@ -61,6 +61,10 @@ machines:
       # Optional. Start each worker's command at a lower CPU priority, so
       # the CI runners on the machine get the cores first.
       nice: 10
+      # Optional. Busy this long: give queued work nobody has started to the
+      # account's overflow label, for a machine with room. Needs an account
+      # with overflow (see accounts below).
+      # release_after: 30m
     workers:
       # A long-running agent session that the machine's agent starts, keeps
       # alive and checks in on. It runs in tmux window shed:app.

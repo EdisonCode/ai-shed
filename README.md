@@ -840,7 +840,10 @@ machines:
   second time.
 - **It resists; it does not refuse.** A hand-over is held for `max_wait` at
   most (default 20 minutes) and then delivered whatever the load. A machine
-  that is never quiet still gets its work done, only more slowly.
+  that is never quiet still gets its work done, only more slowly. An issue
+  from a backfill source is the exception: any machine of the fleet may take
+  it, so a busy machine waits for room however long that takes and leaves it
+  to a machine that has some.
 - **Either test is enough to be busy.** `max_load` covers CPU. `busy_when` is
   any command of yours, run after the machine's `init` line, and it is the
   place for what load does not show. Two examples for Linux:
@@ -862,6 +865,57 @@ machines:
 `shed status` shows a worker whose next issue is waiting as `held`, with the
 reason. It needs nothing from you. With no `capacity` block a machine always
 has room.
+
+#### Giving work to a machine with room
+
+A machine schedules only its own queue. When one machine is loaded and
+another has idle workers, the queued work stays where it is. With
+`release_after`, a machine that stays busy gives the work nobody has started
+to the fleet:
+
+```yaml
+accounts:
+  - name: max-1
+    machines: [mini]
+    overflow: "fleet:ready"   # see Sharing work across machines
+machines:
+  - name: mini
+    capacity:
+      max_load: 1.5
+      release_after: 30m
+```
+
+- After the machine has been busy for `release_after` without a break, it
+  releases one issue from its queue onto the account's `overflow` label,
+  then one more each `release_after` while it stays busy. A machine that
+  lists the label as a backfill source takes it when it has room, as it
+  takes the work of a spent machine.
+- Only work nobody has started moves: no worker of the machine was ever
+  handed it, its hand-back names no pull request, the owner did not bump it,
+  and it is not rework, a look or a verification. An issue that was
+  released once is never released again, so two busy machines do not pass
+  it back and forth.
+- The first such issue in queue order goes first: what is most urgent goes
+  where it can start soonest.
+- The comment says `Released: mini, busy for 30m: the load is 3.10 per core,
+  above the limit of 1.50.` `shed status` lists the issue under the released
+  issues until a machine takes it.
+
+`release_after` needs `max_load` or `busy_when`, and an account with
+`overflow`.
+
+`shed status` ends with a `Balance` line when the fleet is out of step: a
+machine's workers are idle while another machine on the same repository has
+queued work nobody has started and no room for it:
+
+```
+Balance:
+  pc: 3 worker(s) idle, the longest for 7h, while mini has 4 queued issue(s) nobody has started (load 3.10 per core, above 1.50)
+```
+
+`shed digest` shows each machine's idle worker-hours by cause, `held for
+room` included, and names a machine that idled with no work while another
+held work for room.
 
 #### Sharing the machine with what else runs on it
 

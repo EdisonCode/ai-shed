@@ -105,7 +105,7 @@ const (
 	// releasedTold goes with the hand-over of an issue another machine gave
 	// up. Its work is started: the plan in the issue, the branch, the pull
 	// request.
-	releasedTold = " #%d was released by %s, which could not go on: it is yours even where your brief does not cover it. Read its plan and progress in the issue, and its branch and pull request, and go on from where it stopped."
+	releasedTold = " #%d was released by %s, which could not go on with it: it is yours even where your brief does not cover it. Read any plan and progress in the issue, and its branch and pull request if it has them, and go on from where it stands."
 )
 
 // retryBackoff is how long a worker whose tool stopped on an API error waits
@@ -194,6 +194,9 @@ type Supervisor struct {
 	Logf  func(format string, args ...any)
 
 	workers map[string]*workerState
+	// busySince is when the machine was first found busy without a break,
+	// and lastShed when it last gave unstarted work to the fleet.
+	busySince, lastShed time.Time
 	// lookError is the last failure to read the looks, so that it is logged
 	// once and not at every queue check.
 	lookError string
@@ -400,6 +403,10 @@ func (st *workerState) submittedSinceSent() bool {
 type heldHandOver struct {
 	verdict Verdict
 	since   time.Time
+	// backfill is set when the issue comes from a backfill source: work any
+	// machine of the fleet may take. It waits for room however long that
+	// takes, so a machine with room takes it first.
+	backfill bool
 	// activity is the worker's last output when the hand-over was chosen. If
 	// the screen has changed since, the choice is out of date.
 	activity time.Time
@@ -454,6 +461,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 			s.record(st, c)
 		}
 	}
+	s.shedQueue(ctx, s.Now())
 }
 
 // paused reports whether the owner paused the machine. While it is paused
@@ -548,7 +556,7 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 			switch {
 			case reason == "":
 				return s.release(ctx, w, st, obs, now, fmt.Sprintf("the machine has room again after %s", waited.Round(time.Second)))
-			case waited >= s.Machine.Capacity.MaxWaitOrDefault():
+			case waited >= s.Machine.Capacity.MaxWaitOrDefault() && !st.held.backfill:
 				// Resist, not refuse: a machine that never goes quiet must
 				// not starve its workers.
 				return s.release(ctx, w, st, obs, now, fmt.Sprintf("handed over after waiting %s, although: %s", waited.Round(time.Second), reason))
@@ -826,7 +834,7 @@ func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, 
 		// held while the machine is busy with something else.
 		handOver := st.handsOver(verdict.Issue, item)
 		if reason := s.busy(ctx); handOver && reason != "" {
-			st.held = &heldHandOver{verdict: verdict, since: now, activity: obs.LastActivity}
+			st.held = &heldHandOver{verdict: verdict, since: now, activity: obs.LastActivity, backfill: item.Backfill}
 			c.Verdict, c.Issue = runlog.VerdictHeld, verdict.Issue
 			c.Reason = fmt.Sprintf("#%d is held for this worker: %s", verdict.Issue, reason)
 		} else if err := s.deliver(ctx, w, st, now, idle, kind, verdict, item, &c); err != nil {

@@ -200,10 +200,11 @@ const (
 	IdleToolError = "tool error"
 	IdleOwner     = "waits on you"
 	IdleLimit     = "usage limit"
+	IdleRoom      = "held for room"
 )
 
 // IdleCauses lists the causes in the order they are reported.
-var IdleCauses = []string{IdleNoWork, IdleToolError, IdleOwner, IdleLimit}
+var IdleCauses = []string{IdleNoWork, IdleToolError, IdleOwner, IdleLimit, IdleRoom}
 
 // idleCause says why the worker was idle after this check-in; "" when it
 // was working, or was about to.
@@ -217,6 +218,8 @@ func idleCause(c Checkin) string {
 		return IdleOwner
 	case c.Verdict == VerdictLimited:
 		return IdleLimit
+	case c.Verdict == VerdictHeld:
+		return IdleRoom
 	}
 	return ""
 }

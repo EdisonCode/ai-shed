@@ -140,3 +140,79 @@ func TestAnIssueThatOverlapsWorkInFlightOnAnotherMachineIsHeld(t *testing.T) {
 		t.Fatalf("#12 is held by work another machine already handed back:\n%s", prompt)
 	}
 }
+
+// busyQueue gives the fixture a machine that releases unstarted work after
+// 30 minutes of being busy, with #12 in its worker's hands and #13 and #14
+// waiting behind it.
+func busyQueue(t *testing.T) (*fixture, *fakeReleaser, *bool) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack)
+	f.Account = &config.Account{Name: "max-1", Machines: []string{"box"}, Overflow: "fleet:ready"}
+	f.Machine.Capacity = config.Capacity{MaxLoad: 1.5, ReleaseAfter: "30m"}
+	releaser := &fakeReleaser{}
+	f.Releaser = releaser
+	f.lister.issues = []backlog.Issue{labeled(12, "machine:box"), labeled(13, "machine:box"), labeled(14, "machine:box")}
+	f.tick(2 * time.Minute) // #12 is handed over while there is room
+	return f, releaser, busyMachine(f)
+}
+
+func TestABusyMachineReleasesWorkNobodyStartedOneIssueAtATime(t *testing.T) {
+	f, releaser, _ := busyQueue(t)
+	f.tick(time.Minute)
+	f.tick(29 * time.Minute)
+	if len(releaser.released) != 0 {
+		t.Fatalf("released = %+v before the machine was busy for release_after", releaser.released)
+	}
+	f.tick(time.Minute)
+	if len(releaser.released) != 1 {
+		t.Fatalf("released = %+v, want one issue after 30m busy", releaser.released)
+	}
+	r := releaser.released[0]
+	if r.number != 13 || !slices.Equal(r.remove, []string{"machine:box"}) || r.add != "fleet:ready" || !strings.Contains(r.comment, "Released: box, busy for 30m") {
+		t.Fatalf("release = %+v, want #13: #12 is in hand", r)
+	}
+	f.lister.issues = []backlog.Issue{labeled(12, "machine:box"), labeled(14, "machine:box")} // #13 left the queue
+	f.tick(10 * time.Minute)
+	if len(releaser.released) != 1 {
+		t.Fatalf("released %d issues within release_after of the last", len(releaser.released))
+	}
+	f.tick(20 * time.Minute)
+	if len(releaser.released) != 2 || releaser.released[1].number != 14 {
+		t.Fatalf("released = %+v, want #14 next", releaser.released)
+	}
+}
+
+func TestAMachineThatHasRoomAgainReleasesNothingAndStartsCountingAfresh(t *testing.T) {
+	f, releaser, busy := busyQueue(t)
+	f.tick(20 * time.Minute)
+	*busy = false
+	f.tick(time.Minute)
+	*busy = true
+	f.tick(20 * time.Minute)
+	if len(releaser.released) != 0 {
+		t.Fatalf("released = %+v; the machine was not busy for 30m without a break", releaser.released)
+	}
+}
+
+func TestStartedOrAlreadyReleasedWorkStaysOnABusyMachine(t *testing.T) {
+	f, releaser, _ := busyQueue(t)
+	handedBack := labeled(13, "machine:box")
+	handedBack.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** #41 (draft: waits for a fixture)"}}
+	releasedBefore := labeled(14, "machine:box")
+	releasedBefore.Comments = []backlog.Comment{{Body: "Released: mini, busy for 45m: the load is high."}}
+	f.lister.issues = []backlog.Issue{labeled(12, "machine:box"), handedBack, releasedBefore}
+	f.tick(time.Minute)
+	f.tick(31 * time.Minute)
+	if len(releaser.released) != 0 {
+		t.Fatalf("released = %+v; only work nobody started, and that was never released, moves", releaser.released)
+	}
+}
+
+func TestWithoutReleaseAfterABusyMachineKeepsItsQueue(t *testing.T) {
+	f, releaser, _ := busyQueue(t)
+	f.Machine.Capacity.ReleaseAfter = ""
+	f.tick(time.Minute)
+	f.tick(2 * time.Hour)
+	if len(releaser.released) != 0 {
+		t.Fatalf("released = %+v without release_after", releaser.released)
+	}
+}
