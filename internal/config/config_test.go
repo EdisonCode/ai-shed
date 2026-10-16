@@ -59,6 +59,8 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 		{"worker issue source without filter", minimal + "    workers:\n      - {name: w, dir: /tmp, brief: b, issues: [{repo: org/app}]}\n", `worker "w": issue source org/app needs a label`},
 		{"negative max_load", minimal + "    capacity: {max_load: -1}\n", "max_load"},
 		{"bad max_wait", minimal + "    capacity: {max_wait: later}\n", "max_wait"},
+		{"nice above 19", minimal + "    capacity: {nice: 20}\n", "capacity.nice 20"},
+		{"negative nice", minimal + "    capacity: {nice: -5}\n", "capacity.nice -5"},
 		{"bad models.apply", minimal + "supervisor: {models: {apply: maybe}}\n", "models.apply"},
 		{"repo without a staging commit", minimal + "repos: [{repo: org/app, production: {commit: x}}]\n", "staging.commit is required"},
 		{"duplicate repo", minimal + "repos: [{repo: org/app, staging: {commit: x}}, {repo: org/app, staging: {commit: x}}]\n", "duplicate entry"},
@@ -228,6 +230,15 @@ func TestCapacity(t *testing.T) {
 	}
 	if got := (Capacity{MaxWait: "5m"}).MaxWaitOrDefault(); got != 5*time.Minute {
 		t.Errorf("max wait = %v", got)
+	}
+	if (Capacity{Nice: 10}).Set() {
+		t.Error("a priority is no test for busy")
+	}
+	if got := (Capacity{}).NicePrefix(); got != "" {
+		t.Errorf("no nice: prefix = %q", got)
+	}
+	if got := (Capacity{Nice: 10}).NicePrefix(); got != "nice -n 10 " {
+		t.Errorf("nice 10: prefix = %q", got)
 	}
 }
 

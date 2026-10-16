@@ -462,6 +462,23 @@ type Capacity struct {
 	// MaxWait is the longest a hand-over is held. After it the issue is
 	// handed over anyway, so a machine that is never quiet still works.
 	MaxWait string `yaml:"max_wait"`
+	// Nice starts each worker's command at this lower CPU priority (1 to
+	// 19), so what else runs on the machine, such as CI runners, gets the
+	// cores first. Everything the worker starts inherits it; the agent
+	// itself keeps its own. 0 leaves the priority alone.
+	Nice int `yaml:"nice"`
+}
+
+// MaxNice is the lowest CPU priority a worker can be given.
+const MaxNice = 19
+
+// NicePrefix is what goes in front of a worker's command to start it at the
+// machine's priority: "nice -n 10 ", or "" for none.
+func (c Capacity) NicePrefix() string {
+	if c.Nice == 0 {
+		return ""
+	}
+	return fmt.Sprintf("nice -n %d ", c.Nice)
 }
 
 // DefaultMaxWait is how long a hand-over is held on a busy machine.
@@ -976,6 +993,9 @@ func (c *Config) validate() error {
 		}
 		if m.Capacity.MaxLoad < 0 {
 			fail("%s: capacity.max_load must not be negative", where)
+		}
+		if n := m.Capacity.Nice; n < 0 || n > MaxNice {
+			fail("%s: capacity.nice %d must be from 0 to %d", where, n, MaxNice)
 		}
 		if w := m.Capacity.MaxWait; w != "" {
 			if d, err := time.ParseDuration(w); err != nil || d <= 0 {

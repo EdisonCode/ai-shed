@@ -53,6 +53,9 @@ type Result struct {
 	// Pace is the agent's last reading of the machine's spend against its
 	// share of its account's weekly budget; nil when it is in no account.
 	Pace *runlog.Pace `json:"pace,omitempty"`
+	// Usage is what each supervised worker's process tree uses now, by
+	// worker; nil when the machine has no worker session.
+	Usage map[string]Usage `json:"usage,omitempty"`
 }
 
 // Task is a one-off task's file on the machine. Where is the worker it waits
@@ -99,7 +102,7 @@ for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(b
 for f in "$s/` + runlog.BumpsDir + `"/*; do [ -f "$f" ] && echo "@@bump $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.ContextDir + `"/*; do [ -f "$f" ] && echo "@@context $(basename "$f") $(cat "$f")"; done
-echo "@@end"
+` + usageScript + `echo "@@end"
 `
 
 // Script builds the shell script that reports a machine's state. Each check
@@ -135,6 +138,8 @@ func Parse(out string, checks []config.Check) (Result, error) {
 	}
 	complete := false
 	var pausedUntil time.Time
+	panes := map[string]int{}
+	var procs []psLine
 	for _, line := range strings.Split(out, "\n") {
 		tag, rest, _ := strings.Cut(line, " ")
 		switch tag {
@@ -222,6 +227,15 @@ func Parse(out string, checks []config.Check) (Result, error) {
 				}
 				res.Marks[worker] = m
 			}
+		case "@@pane":
+			pid, window, _ := strings.Cut(strings.TrimSpace(rest), " ")
+			if n, err := strconv.Atoi(pid); err == nil && window != "" {
+				panes[window] = n
+			}
+		case "@@ps":
+			if p, ok := parsePS(rest); ok {
+				procs = append(procs, p)
+			}
 		case "@@end":
 			complete = true
 		default:
@@ -237,6 +251,7 @@ func Parse(out string, checks []config.Check) (Result, error) {
 	if pausedUntil.After(res.Now) {
 		res.PausedUntil = pausedUntil
 	}
+	res.Usage = treeUsage(panes, procs)
 	return res, nil
 }
 

@@ -863,6 +863,52 @@ machines:
 reason. It needs nothing from you. With no `capacity` block a machine always
 has room.
 
+#### Sharing the machine with what else runs on it
+
+`capacity` holds new work back, but a test run that has already started goes
+on. Three things pace work in progress.
+
+- **Priority.** `nice: 10` under `capacity` starts each worker's command at a
+  lower CPU priority (1 to 19). Everything the worker starts, its gates
+  included, inherits it, so CI runners and databases on the machine get the
+  cores first. The agent and its checks keep their own priority, which an
+  `init` line with `renice` cannot do.
+
+  ```yaml
+      capacity:
+        max_load: 1.5
+        nice: 10
+  ```
+
+- **A lock for heavy commands.** `shed lock <name> -- <command>` runs the
+  command once no other command holds the same lock on the machine, and exits
+  with the command's own code. Wrap what is heavy, in the repository's
+  pre-push hook or in the standing orders, so that one full test run happens
+  at a time and the others wait in line:
+
+  ```sh
+  shed lock test -- npm test
+  shed lock typecheck -- npx tsc --noEmit
+  ```
+
+  A command that waits says which one holds the lock, its worker and since
+  when. The lock is flock(2), which macOS has too, and the system gives it up
+  when its holder exits, however it exits: a holder that crashed leaves
+  nothing to clean up. Locks with different names do not wait for each
+  other.
+
+- **What each worker uses.** `shed status` shows, for each supervised worker,
+  the CPU and memory of its whole process tree now, and its largest process:
+
+  ```
+    supervised
+      app  #7   cpu 326% 7.0G, most node vitest 6.0G  nudge     20m ago  ...
+      web  #12  cpu 2% 310M, most claude 300M         on track  4m ago   ...
+  ```
+
+  CPU is in percent of one core: 326% is more than three cores. The JSON
+  report has it under `probe.usage`.
+
 ### Prompt cache
 
 A long session is cheap only while its prompt cache is warm. After the cache

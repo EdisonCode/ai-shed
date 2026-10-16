@@ -43,6 +43,8 @@ Usage:
   shed promote <owner/repo>         what a production deploy would carry, for one approval: go or no-go
   shed context [-contradictions] <machine> <worker>
                                     what a worker loads before its first item: tokens, rules said twice, stale references
+  shed lock <name> -- <command>     on a machine: run the command when no other holds the lock;
+                                    workers' heavy commands take turns
   shed mark working|idle|waiting|usage
                                     in a worker's tool hook: tell shed the worker's state;
                                     usage records tokens and changes no state
@@ -80,6 +82,8 @@ func main() {
 		code = cmdRecycle(args)
 	case "update":
 		code = cmdUpdate(args)
+	case "lock":
+		code = cmdLock(args)
 	case "mark":
 		code = cmdMark(args)
 	case "tidy":

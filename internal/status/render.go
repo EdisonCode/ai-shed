@@ -269,6 +269,7 @@ func renderMachine(w io.Writer, r MachineReport) {
 	if len(r.Workers) > 0 && r.Probe != nil {
 		fmt.Fprintln(w, "  supervised")
 		hooked := slices.ContainsFunc(r.Workers, func(wk WorkerStatus) bool { return wk.State != "" })
+		measured := len(r.Probe.Usage) > 0
 		for _, wk := range r.Workers {
 			if wk.Last == nil {
 				fmt.Fprintf(tw, "    %s\tno check-in yet\n", wk.Name)
@@ -286,6 +287,11 @@ func renderMachine(w io.Writer, r MachineReport) {
 			// some worker's tool reports one.
 			if hooked {
 				hand += "\t" + toolState(r, wk)
+			}
+			// What the worker's processes use has a column only on a
+			// machine where it could be read.
+			if measured {
+				hand += "\t" + usageWords(r.Probe.Usage, wk.Name)
 			}
 			fmt.Fprintf(tw, "    %s\t%s\t%s\t%s ago\t%s\n", wk.Name, hand, wk.Last.Verdict, Short(r.Probe.Now.Sub(wk.Last.Time)), reason)
 		}
@@ -449,6 +455,29 @@ func resetWords(resets, now time.Time) string {
 		return ""
 	}
 	return fmt.Sprintf("resets %s (in %s)", resets.In(now.Location()).Format("Mon 15:04"), Short(resets.Sub(now)))
+}
+
+// usageWords says what a worker's process tree uses now, and its largest
+// process, as in "cpu 325% 7.0G, most node vitest 5.7G"; "-" when its tree
+// was not found.
+func usageWords(usage map[string]probe.Usage, worker string) string {
+	u, ok := usage[worker]
+	if !ok {
+		return "-"
+	}
+	words := fmt.Sprintf("cpu %.0f%% %s", u.CPU, memory(u.MemKB))
+	if u.Top.MemKB > 0 {
+		words += fmt.Sprintf(", most %s %s", probe.ShortCommand(u.Top.Command), memory(u.Top.MemKB))
+	}
+	return words
+}
+
+// memory writes kilobytes as the owner reads them: 7.0G, 300M.
+func memory(kb int) string {
+	if kb >= 1<<20 {
+		return fmt.Sprintf("%.1fG", float64(kb)/(1<<20))
+	}
+	return fmt.Sprintf("%dM", kb>>10)
 }
 
 func inHand(w WorkerStatus) string {

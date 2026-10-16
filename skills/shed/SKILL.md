@@ -283,6 +283,11 @@ Run this as a checklist and report each line.
    - `held` under `supervised` needs nothing: the worker's next issue waits
      for the machine to have room (its `capacity` in the fleet file) and is
      handed over when it does, or after `max_wait`.
+   - A machine that is loaded or swaps: the `supervised` rows show each
+     worker's CPU and memory and its largest process. Name the heavy worker
+     and the command. For the owner, the fixes are `capacity.nice` (workers
+     yield the cores to CI) and wrapping heavy gates in
+     `shed lock <name> -- <command>` (one at a time per machine).
    - `worker could not be checked`: the reason is in the line. Usually the
      reviewer command or `gh` on that machine.
 3. The supervisor's log is on each machine:
