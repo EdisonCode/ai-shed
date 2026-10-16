@@ -1,5 +1,9 @@
 #!/bin/sh
 # The same gates as CI, so a commit that fails here never costs a CI run.
 set -e
+# In a linked worktree git exports GIT_DIR to its hooks. The tests run git in
+# their own temporary repositories, and with GIT_DIR set those commands would
+# act on this repository instead.
+unset $(git rev-parse --local-env-vars)
 make lint test
 make dist
