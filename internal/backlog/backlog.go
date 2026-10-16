@@ -561,12 +561,12 @@ func handBack(issue Issue, signals []config.Signal) (index, pr, first int) {
 	return index, pr, first
 }
 
-// lastComment returns the position of the last comment that has the phrase;
-// -1 for none.
+// lastComment returns the position of the last comment in which the phrase
+// begins a line; -1 for none.
 func lastComment(issue Issue, phrase string) int {
 	last := -1
 	for i, c := range issue.Comments {
-		if strings.Contains(strings.ToLower(c.Body), strings.ToLower(phrase)) {
+		if askAt(strings.ToLower(c.Body), strings.ToLower(phrase)) >= 0 {
 			last = i
 		}
 	}
@@ -582,7 +582,7 @@ func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Ti
 		body := strings.ToLower(c.Body)
 		// The answer is tested first: a comment that both cites an earlier
 		// answer and asks again leaves the signal open.
-		if s.AnsweredBy != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) {
+		if answeredIn(body, s) {
 			open = false
 		}
 		if value, found := asked(body, s); found {
@@ -686,14 +686,15 @@ func askAt(body, phrase string) int {
 	}
 }
 
-// afterPhrase returns the text that follows the phrase, without leading
-// whitespace and markdown emphasis.
+// afterPhrase returns the text that follows the phrase where it first begins
+// a line, without leading whitespace and markdown emphasis. body and phrase
+// are lower case.
 func afterPhrase(body, phrase string) (string, bool) {
-	_, rest, found := strings.Cut(body, phrase)
-	if !found {
+	at := askAt(body, phrase)
+	if at < 0 {
 		return "", false
 	}
-	return strings.TrimLeft(rest, " \t\r\n*_`\"'"), true
+	return strings.TrimLeft(body[at+len(phrase):], " \t\r\n*_`\"'"), true
 }
 
 func isClear(value string, clear []string) bool {
@@ -705,8 +706,18 @@ func isClear(value string, clear []string) bool {
 	return false
 }
 
+// answeredIn reports whether the comment gives the signal's answer. Like an
+// ask, an answer counts only where it begins a line: a comment that tells a
+// worker to "post Eyes checked or Eyes failed" answers nothing. body is
+// lower case.
+func answeredIn(body string, s config.Signal) bool {
+	return s.AnsweredBy != "" && askAt(body, strings.ToLower(s.AnsweredBy)) >= 0
+}
+
+// failedIn reports whether the comment reports the check failed, where the
+// phrase begins a line. body is lower case.
 func failedIn(body string, s config.Signal) bool {
-	return s.FailedBy != "" && strings.Contains(body, strings.ToLower(s.FailedBy))
+	return s.FailedBy != "" && askAt(body, strings.ToLower(s.FailedBy)) >= 0
 }
 
 // What an issue says about the eye check of its last handed-back pull request.
@@ -736,7 +747,7 @@ func EyeCheck(issue Issue, signals []config.Signal) (state string, pr int, since
 		for _, c := range issue.Comments {
 			body := strings.ToLower(c.Body)
 			// An answer with no ask before it answers nothing.
-			if s.AnsweredBy != "" && state != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) {
+			if state != "" && answeredIn(body, s) {
 				state, since = EyesPassed, c.CreatedAt
 			}
 			if value, found := asked(body, s); found {

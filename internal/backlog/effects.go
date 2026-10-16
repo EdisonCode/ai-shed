@@ -94,7 +94,7 @@ func DefaultOutcomes(issue Issue, signals []config.Signal) []DefaultOutcome {
 			}
 			continue
 		}
-		if open >= 0 && s.AnsweredBy != "" && strings.Contains(body, strings.ToLower(s.AnsweredBy)) {
+		if open >= 0 && answeredIn(body, s) {
 			if !accepts(c.Body, s) {
 				value, _ := afterPhrase(body, strings.ToLower(s.AnsweredBy))
 				out[open].Overruled = true

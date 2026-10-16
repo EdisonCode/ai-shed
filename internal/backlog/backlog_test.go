@@ -272,6 +272,9 @@ func TestEyeCheckOfHandedBackWork(t *testing.T) {
 		{"the owner looked instead", []string{asks, "Eyes blocked: signed out.", "Eyes checked: the total is right."}, EyesPassed, 41, nil},
 		{"blocked again after the way was cleared", []string{asks, "Eyes blocked: signed out.", "Eyes unblocked", "**Eyes blocked:**\nstaging is down"}, EyesBlocked, 41, []string{"eyes"}},
 		{"a look that passed cannot be blocked", []string{asks, "Eyes checked: fine.", "Eyes blocked: too late."}, EyesPassed, 41, nil},
+		{"a ruling that quotes the phrases is no verdict", []string{asks, `Owner ruling: look on staging. Post the result with "Eyes checked" or "Eyes failed".`}, EyesAsked, 41, []string{"eyes"}},
+		{"a ruling that quotes the phrases leaves a block in place", []string{asks, "Eyes blocked: signed out.", "Owner ruling: sign in again, then post `Eyes failed` if the total is blank."}, EyesBlocked, 41, []string{"eyes"}},
+		{"an answer in a list counts", []string{asks, "- **Eyes failed:** the total is blank"}, EyesFailed, 41, nil},
 		{"an ask with no pull request owes no look on staging", []string{"## Hand-back\n**Needs eyes:** open /orders"}, "", 0, []string{"eyes"}},
 	}
 	for _, tc := range cases {
