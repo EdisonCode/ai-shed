@@ -8,10 +8,13 @@
 # Environment:
 #   MACOS_CERT_P12       the Developer ID Application certificate and key, base64
 #   MACOS_CERT_PASSWORD  the .p12's password
-#   APPLE_TEAM_ID        the team that owns the certificate
+#   APPLE_TEAM_ID        the team that owns the certificate (public: every
+#                        signed binary names it)
 #   NOTARY_KEY_P8        an App Store Connect API key, base64
 #   NOTARY_KEY_ID        its key ID
 #   NOTARY_ISSUER_ID     its issuer ID
+#
+# Never run it with -x: it would print the secrets.
 set -eu
 
 identifier=com.edisoncode.shed
