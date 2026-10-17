@@ -15,6 +15,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/diraccess"
 	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/probe"
 	"github.com/edisoncode/ai-shed/internal/runlog"
@@ -282,6 +283,13 @@ func TestWorkerVerdictsThatNeedOwner(t *testing.T) {
 		res.Checkins = []runlog.Checkin{checkin(runlog.VerdictNudge, "older"), checkin(verdict, "a permission prompt is open")}
 		wantAttention(t, Assess(appWorker, signals, now, res, nil), want)
 	}
+}
+
+func TestWorkerDirThatTmuxCannotReadNeedsOwner(t *testing.T) {
+	res := healthy()
+	res.DirProblems = []diraccess.Problem{{Worker: "app", Via: diraccess.ViaTmux, Err: "Operation not permitted"}}
+	res.DirHost = diraccess.Host{OS: "Linux", Tmux: "/usr/bin/tmux"}
+	wantAttention(t, Assess(appWorker, signals, now, res, nil), "worker app: dir /tmp is not readable by tmux (/usr/bin/tmux) (Operation not permitted)")
 }
 
 func TestWorkerThatIsOnTrackNeedsNothing(t *testing.T) {

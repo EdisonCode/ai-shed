@@ -26,6 +26,9 @@ type pfTerminal struct {
 	started   time.Time
 	now       time.Time
 
+	// unreadable is what the read check of the worker's directory says.
+	unreadable string
+
 	opened, sent, closed []string
 }
 
@@ -56,7 +59,8 @@ func (p *pfTerminal) Close(window string) error {
 }
 
 func (p *pfTerminal) run(w config.Worker) PreflightResult {
-	return Preflight(p, w, func() time.Time { return p.now }, func(d time.Duration) { p.now = p.now.Add(d) })
+	readable := func(config.Worker) string { return p.unreadable }
+	return Preflight(p, w, readable, func() time.Time { return p.now }, func(d time.Duration) { p.now = p.now.Add(d) })
 }
 
 func newPF(command string) *pfTerminal {
@@ -123,6 +127,22 @@ func TestPreflightReportsAMissingDirectory(t *testing.T) {
 	w.Dir = filepath.Join(w.Dir, "nope")
 	if res := p.run(w); res.State != PreflightProblem || !strings.Contains(res.Problem, "does not exist") || len(p.opened) != 0 {
 		t.Fatalf("result = %+v, opened %v", res, p.opened)
+	}
+}
+
+func TestPreflightReportsADirectoryTheWorkersCannotRead(t *testing.T) {
+	p := newPF("claude")
+	p.unreadable = "dir ~/x is not readable by tmux (Operation not permitted)"
+	if res := p.run(pfWorker(t)); res.State != PreflightProblem || res.Problem != p.unreadable || len(p.opened) != 0 {
+		t.Fatalf("result = %+v, opened %v", res, p.opened)
+	}
+}
+
+func TestDirReadableSaysNothingForAReadableDirectory(t *testing.T) {
+	// A tmux server of the test's own, if the check reaches for one.
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	if got := DirReadable(pfWorker(t)); got != "" {
+		t.Fatalf("readable directory reported: %q", got)
 	}
 }
 
