@@ -3,13 +3,16 @@ package supervisor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/diraccess"
 )
 
 const (
@@ -47,7 +50,8 @@ type PreflightResult struct {
 // Preflight starts the worker's command in a throwaway window, waits for the
 // screen to settle, records it and closes the window. It types nothing but
 // the command, and it gives the command no prompt, so no work starts.
-func Preflight(term Terminal, w config.Worker, now func() time.Time, sleep func(time.Duration)) PreflightResult {
+// readable says why the worker's directory cannot be read; "" when it can.
+func Preflight(term Terminal, w config.Worker, readable func(config.Worker) string, now func() time.Time, sleep func(time.Duration)) PreflightResult {
 	res := PreflightResult{Worker: w.Name, State: PreflightProblem}
 	fail := func(format string, args ...any) PreflightResult {
 		res.Problem = fmt.Sprintf(format, args...)
@@ -55,8 +59,13 @@ func Preflight(term Terminal, w config.Worker, now func() time.Time, sleep func(
 	}
 
 	dir := expandHome(w.Dir)
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+	// Any other error, such as a read macOS does not permit, is for the
+	// read check to explain.
+	if info, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) || (err == nil && !info.IsDir()) {
 		return fail("directory %s does not exist", w.Dir)
+	}
+	if problem := readable(w); problem != "" {
+		return fail("%s", problem)
 	}
 	obs, err := term.Observe(w.Name)
 	if err != nil {
@@ -94,6 +103,22 @@ func Preflight(term Terminal, w config.Worker, now func() time.Time, sleep func(
 	}
 	res.State, res.Exited, res.Screen = PreflightCaptured, !obs.Exists || shells[obs.Command], screen
 	return res
+}
+
+// DirReadable reads the worker's directory as this process and as the
+// workers' tmux server, and says what failed; "" when both can read it.
+func DirReadable(w config.Worker) string {
+	dirs := []diraccess.Dir{{Worker: w.Name, Path: w.Dir}}
+	out, err := exec.Command("sh", "-c", diraccess.Script(dirs, diraccess.Options{})).Output()
+	if err != nil {
+		return fmt.Sprintf("could not check that %s can be read: %v", w.Dir, err)
+	}
+	problems, host := diraccess.Parse(string(out), dirs)
+	var said []string
+	for _, p := range problems {
+		said = append(said, p.Describe(host))
+	}
+	return strings.Join(said, "; ")
 }
 
 // waitToSettle waits for what was just typed into the window to finish

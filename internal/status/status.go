@@ -684,6 +684,12 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 				attend("worker %s could not be checked: %s", w.Name, c.Reason)
 			}
 		}
+		for _, p := range res.DirProblems {
+			if p.Worker == w.Name {
+				p.Path = w.Dir
+				attend("worker %s: %s", w.Name, p.Describe(res.DirHost))
+			}
+		}
 		report.Workers = append(report.Workers, st)
 	}
 	if until, ok := allWeekly(report.Workers, res.Now); ok {

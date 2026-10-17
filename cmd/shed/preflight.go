@@ -46,7 +46,7 @@ func cmdPreflight(args []string) int {
 
 	report := preflightReport{Version: version, Workers: []supervisor.PreflightResult{}}
 	for _, w := range m.Workers {
-		res := supervisor.Preflight(supervisor.Tmux{}, w, time.Now, time.Sleep)
+		res := supervisor.Preflight(supervisor.Tmux{}, w, supervisor.DirReadable, time.Now, time.Sleep)
 		res.Warnings = supervisor.HookWarnings(home, w)
 		report.Workers = append(report.Workers, res)
 	}

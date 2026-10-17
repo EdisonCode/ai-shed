@@ -1577,6 +1577,28 @@ SSH. For the same reason, a preflight on a Mac with no tmux server running
 reports a login problem that the agent itself will not have: start the server
 from the GUI domain first, or pass `-preflight=false`.
 
+**macOS and worker dirs on an external drive.** macOS asks before a program
+reads a removable volume, and on a machine with no one at it nobody answers.
+A read over SSH fails with `Operation not permitted`; a worker's tools, which
+all run under the tmux server, wait on a dialog on the machine's screen.
+`shed status` and the deploy preflight read each worker's dir both ways and
+print a `!` line that names the program to grant. To set a machine up:
+
+- Grant **Full Disk Access** (System Settings → Privacy & Security → Full Disk
+  Access) to the `tmux` binary the agent starts, with symlinks resolved
+  (`readlink -f "$(command -v tmux)"`), and to the `shed` binary. The file
+  picker hides dot-folders such as `~/.local`: press ⌘⇧. to show them, or drag
+  the binary in from Finder.
+- For SSH, turn on System Settings → General → Sharing → Remote Login → ⓘ →
+  "Allow full disk access for remote users".
+- Turn on file ownership on the volume (`sudo diskutil enableOwnership <mount
+  point>`), so files have owners as they do on the internal disk.
+- A grant to a binary that is not signed by a developer is kept for that
+  exact build. Homebrew's `tmux` and shed's own release binary are such
+  binaries, so `brew upgrade tmux` and `shed update` drop their grants; so
+  can a macOS update. `shed status` says so the next time
+  it runs. `tccutil` can only reset grants, not add them.
+
 After that, run `shed deploy` whenever the fleet file changes or after a
 `shed update`. The agent loads a changed fleet file within 30 seconds without
 a restart.

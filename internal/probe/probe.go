@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/diraccess"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
@@ -59,6 +60,11 @@ type Result struct {
 	// LoadPeaks are the machine's peak load and swap of each recent hour,
 	// oldest first.
 	LoadPeaks []runlog.LoadPeak `json:"-"`
+	// DirProblems are the reads of worker directories that failed or
+	// blocked, by this shell or by the workers' tmux server. Their Path is
+	// empty: the fleet file has it.
+	DirProblems []diraccess.Problem `json:"-"`
+	DirHost     diraccess.Host      `json:"-"`
 }
 
 // Task is a one-off task's file on the machine. Where is the worker it waits
@@ -121,8 +127,18 @@ func Script(m config.Machine, checks []config.Check) string {
 		fmt.Fprintf(&b, "out=$(sh -c %s 2>&1 </dev/null); echo \"@@check %d $?\"\n", quote(m.Command(c.Run)), i)
 		fmt.Fprintf(&b, "printf '%%s\\n' \"$out\" | head -n 1 | sed 's/^/@@detail %d /'\n", i)
 	}
+	b.WriteString(diraccess.Script(WorkerDirs(m), diraccess.Options{}))
 	b.WriteString(footer)
 	return b.String()
+}
+
+// WorkerDirs are the directories of a machine's workers.
+func WorkerDirs(m config.Machine) []diraccess.Dir {
+	var dirs []diraccess.Dir
+	for _, w := range m.Workers {
+		dirs = append(dirs, diraccess.Dir{Worker: w.Name, Path: w.Dir})
+	}
+	return dirs
 }
 
 func quote(s string) string {
@@ -260,6 +276,7 @@ func Parse(out string, checks []config.Check) (Result, error) {
 		res.PausedUntil = pausedUntil
 	}
 	res.Usage = treeUsage(panes, procs)
+	res.DirProblems, res.DirHost = diraccess.Parse(out, nil)
 	return res, nil
 }
 

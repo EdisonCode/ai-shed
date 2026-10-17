@@ -103,6 +103,24 @@ func TestScriptQuotesCheckCommands(t *testing.T) {
 	}
 }
 
+func TestRunReportsAWorkerDirThatCannotBeRead(t *testing.T) {
+	// A tmux server of the test's own, if the script reaches for one.
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	m := config.Machine{Name: "here", Host: config.LocalHost, Workers: []config.Worker{
+		{Name: "ok", Dir: t.TempDir()},
+		{Name: "gone", Dir: filepath.Join(t.TempDir(), "gone")},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, err := Run(ctx, ShellRunner{}, m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.DirProblems) != 1 || res.DirProblems[0].Worker != "gone" || res.DirHost.OS == "" {
+		t.Fatalf("dir problems = %+v, host = %+v", res.DirProblems, res.DirHost)
+	}
+}
+
 // The generated script must work in a real shell, not only match our parser.
 func TestRunAgainstLocalShell(t *testing.T) {
 	m := config.Machine{Name: "here", Host: config.LocalHost, Init: "export SHED_TEST_VALUE=7"}
