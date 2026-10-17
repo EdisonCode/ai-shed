@@ -1596,9 +1596,9 @@ that fails, naming the program to grant. To set a machine up:
 - Turn on file ownership on the volume (`sudo diskutil enableOwnership <mount
   point>`), so files have owners as they do on the internal disk.
 - A grant to a binary that is not signed by a developer is kept for that
-  exact build. Homebrew's `tmux` and shed's own release binary are such
-  binaries, so `brew upgrade tmux` and `shed update` drop their grants; so
-  can a macOS update. `shed status` says so the next time
+  exact build. Homebrew's `tmux` is such a binary, so `brew upgrade tmux`
+  drops its grant; so can a macOS update. shed's release binaries are signed,
+  so `shed update` keeps theirs, as long as shed stays at the same path. `shed status` says so the next time
   it runs. `tccutil` can only reset grants, not add them.
 
 After that, run `shed deploy` whenever the fleet file changes or after a
@@ -2028,5 +2028,7 @@ make dist && shed deploy -dist dist   # send an unreleased build to the machines
 ```
 
 A release is a version tag. Pushing `v1.2.3` runs the gates, builds the
-binaries for Linux and macOS, and publishes them with checksums on the GitHub
-release.
+binaries for Linux and macOS, signs and notarizes the macOS ones with a
+Developer ID (identifier `com.edisoncode.shed`), and publishes them with
+checksums on the GitHub release. A build from `make dist` is not signed: on a
+Mac, a privacy grant to it lasts only until the next build.

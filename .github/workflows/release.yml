@@ -9,7 +9,8 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # macOS, for codesign and notarytool.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,7 +18,15 @@ jobs:
           go-version-file: go.mod
       - run: make lint test
       - run: make dist VERSION="$GITHUB_REF_NAME"
-      - run: cd dist && sha256sum shed-* > checksums.txt
+      - run: .github/sign-macos.sh
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+      - run: cd dist && shasum -a 256 shed-* > checksums.txt
       - run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
