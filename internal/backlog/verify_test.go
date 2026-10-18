@@ -81,6 +81,17 @@ func TestAFailedVerificationSendsThePullRequestBack(t *testing.T) {
 	}
 }
 
+func TestAPullRequestSentBackStaysReworkWhileItIsADraft(t *testing.T) {
+	i := verifying(handedBack, "Verification failed (high): a refund of 0 is accepted")
+	i.OpenPRs[41] = PR{Draft: true}
+	if reason := Rework(i, config.DefaultSignals()); !strings.Contains(reason, "the verifier sent pull request #41 back") {
+		t.Fatalf("rework = %q, want the verifier's finding while the worker reworks a draft", reason)
+	}
+	if asks := Asks(i, config.DefaultSignals()); len(asks) != 0 {
+		t.Fatalf("asks = %+v, want none of the owner while the worker reworks", asks)
+	}
+}
+
 func TestAVerificationEscapedWhenTheOwnerOrAnEyeCheckFoundAFaultAfterIt(t *testing.T) {
 	signals := config.DefaultSignals()
 	i := verifying(handedBack, "Verified (low): ran the tests", "Owner ruling: the total is off by one",

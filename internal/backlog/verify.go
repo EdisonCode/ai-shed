@@ -51,7 +51,7 @@ func Verification(issue Issue, signals []config.Signal) VerificationState {
 	}
 	index, pr := lastHandBack(issue, signals)
 	open, isOpen := issue.OpenPRs[pr]
-	if index < 0 || !isOpen || open.Draft {
+	if index < 0 || !isOpen {
 		return VerificationState{}
 	}
 	v := VerificationState{PR: pr}
@@ -68,6 +68,11 @@ func Verification(issue Issue, signals []config.Signal) VerificationState {
 	}
 	switch {
 	case v.State != "":
+		// A verdict holds while the pull request is a draft: one sent back
+		// is made a draft for its rework, and is still the worker's.
+	case open.Draft:
+		// Not ready: there is nothing to verify yet.
+		return VerificationState{}
 	case open.Problem != "":
 		// A failed check is rework; no verifier looks at it.
 		return VerificationState{}
