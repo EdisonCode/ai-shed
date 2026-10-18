@@ -361,6 +361,31 @@ func unaskedOrder(inHand int, waits bool, next QueueItem) string {
 	return order
 }
 
+// unaskedReason says why an item was handed over without the reviewer: what
+// the worker had in hand, why nothing is left in it, and what it was given.
+// item is the queue item of the issue in hand; found is false when the
+// issue is not in the queue any more.
+func unaskedReason(idle time.Duration, last string, inHand int, item QueueItem, found bool, next int) string {
+	had := "with no issue in hand"
+	if inHand != 0 {
+		var why string
+		switch {
+		case !found:
+			why = "it is not in the queue: closed or finished"
+		case item.Blocked != "":
+			why = item.Blocked
+		case len(item.Waiting) > 0:
+			why = "it waits on the owner: " + strings.Join(item.Waiting, ", ")
+		case item.Paced != "":
+			why = item.Paced
+		default:
+			why = "its time for an answer ran out"
+		}
+		had = fmt.Sprintf("with nothing it can act on in #%d (%s)", inHand, why)
+	}
+	return fmt.Sprintf("it rested %s %s, after a check-in that found it %s; handed #%d over without the reviewer", spell(idle.Truncate(time.Minute)), had, last, next)
+}
+
 // handsOver reports whether a nudge that names this queue item gives the
 // worker new work. A nudge may name the issue the worker is already on. An
 // eye check of work it built earlier and still has in hand is new work.
@@ -644,8 +669,8 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 		// must not hold a worker until its queue changes.
 		last := st.lastVerdict()
 		if next, ok := st.nextUnasked(queue, now); ok && idle >= restBesideWork && (last == runlog.VerdictOnTrack || last == runlog.VerdictDone) {
-			reason := fmt.Sprintf("it rested %s beside #%d with nothing in hand that it can act on, after a check-in that found it %s: handed over without the reviewer", spell(idle.Truncate(time.Minute)), next.Number, last)
-			_, waits := find(queue, st.issue)
+			held, waits := find(queue, st.issue)
+			reason := unaskedReason(idle, last, st.issue, held, waits, next.Number)
 			order := Verdict{Verdict: runlog.VerdictNudge, Issue: next.Number, Message: unaskedOrder(st.issue, waits, next), Reason: reason}
 			return s.act(ctx, w, st, obs, now, KindQueue, queue, order)
 		}

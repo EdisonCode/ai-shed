@@ -2704,6 +2704,18 @@ func TestWorkerWithNothingInHandIsHandedAnItemAfterAReviewerFoundItDone(t *testi
 	}
 }
 
+func TestAHandOverToAWorkerWithNoIssueSaysItHadNone(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	f.tick(2 * time.Minute)
+	f.tick(5 * time.Minute)
+	f.tick(5 * time.Minute)
+	c := f.lastCheckin(t)
+	want := "with no issue in hand, after a check-in that found it done; handed #12 over without the reviewer"
+	if c.Issue != 12 || !strings.Contains(c.Reason, want) {
+		t.Fatalf("check-in = %+v, want reason %q", c, want)
+	}
+}
+
 func TestReworkHandedOverWithoutTheReviewerSaysWhatIsWrong(t *testing.T) {
 	item := QueueItem{Number: 13, Rework: "its pull request has conflicts"}
 	if got, want := unaskedOrder(0, false, item), "Start #13 now. Its pull request cannot merge as it stands: its pull request has conflicts. Fix that and nothing else."; got != want {
