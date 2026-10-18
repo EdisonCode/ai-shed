@@ -24,8 +24,11 @@ import (
 )
 
 const (
-	probeTimeout   = 45 * time.Second
-	diskFullPct    = 90
+	probeTimeout = 45 * time.Second
+	diskFullPct  = 90
+	// highLoadAfter is how long the load must stay at or above the cores to
+	// be flagged: a build's burst is not a full machine.
+	highLoadAfter  = 10 * time.Minute
 	heartbeatStale = 3 * time.Minute
 	missedGrace    = 2 * time.Minute
 	workerQuiet    = 30 * time.Minute
@@ -432,6 +435,9 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 		if res.DiskUsedPct >= diskFullPct {
 			attend("disk is %d%% full", res.DiskUsedPct)
 		}
+		if d, ok := highLoad(*res); ok {
+			attend("load has been at or above the %d cores for %s: tests time out and builds slow", res.Cores, Short(d))
+		}
 		agentUp := assessAgent(m, *res, attend)
 		assessTasks(m, *res, agentUp, &report, attend)
 		assessWorkers(m, *res, &report, attend)
@@ -805,6 +811,16 @@ func workerFor(number int, windows []probe.Window) (probe.Window, bool) {
 		}
 	}
 	return probe.Window{}, false
+}
+
+// highLoad reports how long the machine's load has stayed at or above its
+// cores, by the agent's readings, when that is highLoadAfter or longer.
+func highLoad(res probe.Result) (time.Duration, bool) {
+	if res.HighLoadSince.IsZero() {
+		return 0, false
+	}
+	d := res.Now.Sub(res.HighLoadSince).Truncate(time.Minute)
+	return d, d >= highLoadAfter
 }
 
 func parenthesized(s string) string {

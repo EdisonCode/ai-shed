@@ -958,6 +958,13 @@ By machine:
 The agent reads the load and swap each minute and keeps the peak of each
 hour, for a week, in `~/.local/state/shed/loads.jsonl`.
 
+A machine whose 1-minute load has stayed at or above its core count for 10
+minutes is full: tests time out and builds slow, for the workers and for
+anything else on it, such as CI runners. `shed status` says so on the
+machine line, `load 11.69/12 high 14m`, and as an `!` line. A shorter spell,
+such as one build, is not flagged. The agent records when the load reached
+the cores in `~/.local/state/shed/high-load` while it stays there.
+
 #### Sharing the machine with what else runs on it
 
 `capacity` holds new work back, but a test run that has already started goes

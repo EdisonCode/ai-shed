@@ -244,6 +244,13 @@ func TestParseReadsThePace(t *testing.T) {
 	}
 }
 
+func TestParseReadsWhenTheLoadReachedTheCores(t *testing.T) {
+	res, err := Parse("@@now 1790000000\n@@highload 2026-10-16T09:11:00Z\n@@end\n", nil)
+	if err != nil || !res.HighLoadSince.Equal(time.Date(2026, 10, 16, 9, 11, 0, 0, time.UTC)) {
+		t.Fatalf("high load since = %v, %v", res.HighLoadSince, err)
+	}
+}
+
 func TestParseReadsTheGateRuns(t *testing.T) {
 	res, err := Parse(linuxOutput, twoChecks)
 	if err != nil {

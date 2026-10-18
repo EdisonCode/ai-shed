@@ -60,6 +60,9 @@ type Result struct {
 	// LoadPeaks are the machine's peak load and swap of each recent hour,
 	// oldest first.
 	LoadPeaks []runlog.LoadPeak `json:"-"`
+	// HighLoadSince is when the load reached the core count, by the agent's
+	// readings, while it stays there; zero while it is under them.
+	HighLoadSince time.Time `json:"high_load_since,omitzero"`
 	// DirProblems are the reads of worker directories that failed or
 	// blocked, by this shell or by the workers' tmux server. Their Path is
 	// empty: the fleet file has it.
@@ -110,6 +113,7 @@ s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.GatesFile + `" ] && tail -n 100 "$s/` + runlog.GatesFile + `" | sed 's/^/@@gate /'
 [ -f "$s/` + runlog.DeploysFile + `" ] && tail -n 50 "$s/` + runlog.DeploysFile + `" | sed 's/^/@@deploy /'
 [ -f "$s/` + runlog.LoadsFile + `" ] && sed 's/^/@@loads /' "$s/` + runlog.LoadsFile + `"
+[ -f "$s/` + runlog.HighLoadFile + `" ] && echo "@@highload $(cat "$s/` + runlog.HighLoadFile + `")"
 [ -d "$s/` + runlog.RecycleDir + `" ] && ls "$s/` + runlog.RecycleDir + `" | sed 's/^/@@recycle /'
 for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(basename "$(dirname "$f")") $(basename "$f" .md)"; done
 [ -f "$s/` + runlog.PauseFile + `" ] && echo "@@pause $(cat "$s/` + runlog.PauseFile + `")"
@@ -232,6 +236,10 @@ func Parse(out string, checks []config.Check) (Result, error) {
 		case "@@loads":
 			if p, err := runlog.ParseLoadPeak(rest); err == nil {
 				res.LoadPeaks = append(res.LoadPeaks, p)
+			}
+		case "@@highload":
+			if since, err := runlog.ParseHighLoad(rest); err == nil {
+				res.HighLoadSince = since
 			}
 		case "@@recycle":
 			res.Recycle = append(res.Recycle, strings.TrimSpace(rest))

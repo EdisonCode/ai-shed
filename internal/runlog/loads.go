@@ -13,6 +13,11 @@ import (
 // each, for shed digest.
 const LoadsFile = "loads.jsonl"
 
+// HighLoadFile holds when the machine's load reached its core count, while
+// it stays there: one RFC 3339 time. It is written when the load reaches
+// the cores and removed when it falls under them.
+const HighLoadFile = "high-load"
+
 // KeepLoadHours is how many hours of peaks the file keeps: a week.
 const KeepLoadHours = 7 * 24
 
@@ -86,6 +91,10 @@ type LoadSampler struct {
 	peak LoadPeak
 	// failed is set once a failed reading was logged, so it is logged once.
 	failed bool
+	// high is when the load reached the cores, zero while it is under them;
+	// synced is set once HighLoadFile says the same.
+	high   time.Time
+	synced bool
 }
 
 // Sample reads the machine once.
@@ -111,4 +120,59 @@ func (s *LoadSampler) Sample(now time.Time) {
 	}
 	s.peak.Load = max(s.peak.Load, load)
 	s.peak.SwapKB = max(s.peak.SwapKB, swap)
+	s.noteHigh(now, load)
+}
+
+// noteHigh keeps HighLoadFile in step with the load: written when it
+// reaches the cores, removed when it falls under them. A file left by an
+// agent that stopped is replaced on the first reading.
+func (s *LoadSampler) noteHigh(now time.Time, load float64) {
+	if s.Cores <= 0 {
+		return
+	}
+	high := load >= float64(s.Cores)
+	if s.synced && high == !s.high.IsZero() {
+		return
+	}
+	path := filepath.Join(s.Dir, HighLoadFile)
+	var err error
+	if high {
+		s.high = now
+		if err = os.MkdirAll(s.Dir, 0o755); err == nil {
+			err = os.WriteFile(path, []byte(now.UTC().Format(time.RFC3339)+"\n"), 0o644)
+		}
+	} else {
+		s.high = time.Time{}
+		if err = os.Remove(path); os.IsNotExist(err) {
+			err = nil
+		}
+	}
+	if err != nil {
+		s.Logf("record high load: %v", err)
+		return
+	}
+	s.synced = true
+}
+
+// ParseHighLoad reads the time in HighLoadFile.
+func ParseHighLoad(line string) (time.Time, error) {
+	since, err := time.Parse(time.RFC3339, strings.TrimSpace(line))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse high load: %w", err)
+	}
+	return since, nil
+}
+
+// ReadHighLoad reads when the load reached the cores; false while it is
+// under them.
+func ReadHighLoad(dir string) (time.Time, bool, error) {
+	data, err := os.ReadFile(filepath.Join(dir, HighLoadFile))
+	if os.IsNotExist(err) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("read high load: %w", err)
+	}
+	since, err := ParseHighLoad(string(data))
+	return since, err == nil, err
 }

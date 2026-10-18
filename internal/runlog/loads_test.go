@@ -66,3 +66,45 @@ func TestTheLoadsFileKeepsAWeek(t *testing.T) {
 		t.Fatalf("%d peaks from %v, want the last %d hours", len(peaks), peaks[0].Hour, KeepLoadHours)
 	}
 }
+
+func TestTheSamplerRecordsWhenTheLoadReachedTheCoresUntilItFalls(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, HighLoadFile)
+	// A stretch left by an agent that stopped while the load was high.
+	if err := os.WriteFile(path, []byte("2026-10-15T09:00:00Z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loads := []float64{3, 4, 6, 5, 3.9}
+	n := 0
+	s := &LoadSampler{Dir: dir, Cores: 4, Logf: t.Logf, Read: func() (float64, int, error) {
+		l := loads[n]
+		n++
+		return l, 0, nil
+	}}
+	at := time.Date(2026, 10, 16, 9, 10, 0, 0, time.UTC)
+	s.Sample(at)
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("a stretch from before the agent started was kept under the cores")
+	}
+	for m := 1; m <= 3; m++ {
+		s.Sample(at.Add(time.Duration(m) * time.Minute))
+	}
+	since, ok, err := ReadHighLoad(dir)
+	if err != nil || !ok || !since.Equal(at.Add(time.Minute)) {
+		t.Fatalf("high since = %v, %v, %v; want %v, the first reading at the cores", since, ok, err, at.Add(time.Minute))
+	}
+	s.Sample(at.Add(4 * time.Minute))
+	if _, ok, _ := ReadHighLoad(dir); ok {
+		t.Fatal("the stretch was kept after the load fell under the cores")
+	}
+}
+
+func TestAHighLoadLineIsParsed(t *testing.T) {
+	since, err := ParseHighLoad("2026-10-16T09:11:00Z\n")
+	if err != nil || !since.Equal(time.Date(2026, 10, 16, 9, 11, 0, 0, time.UTC)) {
+		t.Fatalf("since = %v, err = %v", since, err)
+	}
+	if _, err := ParseHighLoad("soon"); err == nil {
+		t.Fatal("a line that is no time parsed")
+	}
+}
