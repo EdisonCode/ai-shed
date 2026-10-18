@@ -20,8 +20,10 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/diraccess"
 	"github.com/edisoncode/ai-shed/internal/gates"
 	"github.com/edisoncode/ai-shed/internal/looks"
+	"github.com/edisoncode/ai-shed/internal/probe"
 	"github.com/edisoncode/ai-shed/internal/risk"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 	"github.com/edisoncode/ai-shed/internal/supervisor"
@@ -36,6 +38,9 @@ const (
 	// sampleEvery is how often the load and swap are read, for the peak of
 	// each hour.
 	sampleEvery = time.Minute
+	// dirsEvery is how often the agent reads each worker's dir itself. A
+	// grant it loses, such as to a shed update, shows within this time.
+	dirsEvery = 5 * time.Minute
 	// deployTimeout bounds a staging deploy command. It starts the deploy;
 	// the supervisor then waits for staging to serve the new commit.
 	deployTimeout = 10 * time.Minute
@@ -159,8 +164,9 @@ func (a Agent) start(ctx context.Context, cfg *config.Config, m config.Machine) 
 	}
 	scheduler.Start()
 
-	stopSupervisor := func() {}
+	stopSupervisor, stopDirs := func() {}, func() {}
 	if len(m.Workers) > 0 {
+		stopDirs = every(ctx, dirsEvery, func(context.Context) { a.checkDirs(m) })
 		sup := a.supervisor(cfg, m)
 		sup.Notify = notify
 		if m.Capacity.Set() {
@@ -177,7 +183,7 @@ func (a Agent) start(ctx context.Context, cfg *config.Config, m config.Machine) 
 		}
 		stopGates = every(ctx, gatesEvery, runner.Tick)
 	}
-	stopAll := func() { stopSupervisor(); stopGates() }
+	stopAll := func() { stopSupervisor(); stopGates(); stopDirs() }
 	a.Logf("machine %s: %d task(s) scheduled, %d worker(s) supervised", m.Name, len(m.Tasks), len(m.Workers))
 	return loaded{scheduler: scheduler, stopSupervisor: stopAll}
 }
@@ -293,6 +299,30 @@ func adoptPath(m config.Machine) {
 	lines := strings.Split(string(out), "\n")
 	if path := lines[len(lines)-1]; path != "" {
 		os.Setenv("PATH", path)
+	}
+}
+
+// checkDirs reads each worker's dir from the agent's own process, which on
+// macOS has a privacy grant apart from tmux's and SSH's, and keeps what it
+// found for `shed status`. A read that blocks is stopped, so the agent never
+// waits on it.
+func (a Agent) checkDirs(m config.Machine) {
+	problems, host, err := diraccess.Check(probe.WorkerDirs(m), diraccess.Options{ShellOnly: true})
+	if err != nil {
+		a.Logf("%v", err)
+		return
+	}
+	for i := range problems {
+		problems[i].Via = diraccess.ViaAgent
+	}
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		host.Shed = exe
+	}
+	if err := runlog.WriteDirCheck(a.StateDir, runlog.DirCheck{Time: time.Now(), Problems: problems, Host: host}); err != nil {
+		a.Logf("%v", err)
 	}
 }
 

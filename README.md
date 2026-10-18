@@ -1580,9 +1580,11 @@ from the GUI domain first, or pass `-preflight=false`.
 **macOS and worker dirs on an external drive.** macOS asks before a program
 reads a removable volume, and on a machine with no one at it nobody answers.
 A read over SSH fails with `Operation not permitted`; a worker's tools, which
-all run under the tmux server, wait on a dialog on the machine's screen.
-`shed status` and the deploy preflight read each worker's dir both ways and
-print a `!` line that names the program to grant. To set a machine up:
+all run under the tmux server, and the agent, which runs git and gates in the
+dirs, wait on a dialog on the machine's screen. `shed status` and the deploy
+preflight read each worker's dir over SSH and through tmux, the agent reads
+each one itself every 5 minutes, and `shed status` prints a `!` line for any
+that fails, naming the program to grant. To set a machine up:
 
 - Grant **Full Disk Access** (System Settings → Privacy & Security → Full Disk
   Access) to the `tmux` binary the agent starts, with symlinks resolved
