@@ -88,3 +88,19 @@ func TestTheReleaseStateShowsABatchWithItsPullRequestsChecksAndAge(t *testing.T)
 		t.Fatalf("output lacks %q:\n%s", want, out.String())
 	}
 }
+
+func TestTheReleaseStateSaysABatchWhoseEveryCheckWasSkippedWasNotTested(t *testing.T) {
+	cfg := withTrain()
+	cfg.Repos[0].Verify.MergeTrain = config.TrainBatch
+	batches := fakeBatches{
+		batches: []backlog.Batch{{PR: 101, Created: time.Now().Add(-25 * time.Minute), Cars: []backlog.Car{{Issue: 12, PR: 41}}}},
+		heads:   map[int]backlog.Head{101: {Open: true, Skipped: 5}},
+	}
+	c := Collector{Lister: fakeLister{}, Looks: &fakeLooks{}, Batches: batches}
+	var out bytes.Buffer
+	Render(&out, nil, c.CollectRepos(context.Background(), cfg))
+	want := "batch PR #101 of PR #41 (#12) 25m, every check was skipped: its CI did not run on it"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}

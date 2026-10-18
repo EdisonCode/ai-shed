@@ -95,9 +95,13 @@ type Head struct {
 	Base string
 	// Behind counts the commits of the base branch the head does not have.
 	Behind int
-	// Checks counts the checks reported on the head. None reported yet is
-	// not green: the checks of a new head take a moment to start.
-	Checks  int
+	// Checks counts the checks reported on the head, skipped ones aside.
+	// None reported yet is not green: the checks of a new head take a
+	// moment to start.
+	Checks int
+	// Skipped counts the checks reported as skipped. A skipped check tested
+	// nothing: a head whose every check was skipped is not green.
+	Skipped int
 	Pending bool
 	// Problem says why the pull request cannot merge at this head, as PR's.
 	Problem string
@@ -106,6 +110,12 @@ type Head struct {
 // Green reports whether every check of the head passed, and some did.
 func (h Head) Green() bool {
 	return h.Checks > 0 && !h.Pending && h.Problem == ""
+}
+
+// AllSkipped reports whether checks were reported on the head and every one
+// was skipped: its CI did not run on it.
+func (h Head) AllSkipped() bool {
+	return h.Checks == 0 && h.Skipped > 0
 }
 
 // ReadHead reads the pull request at its head commit, and how far that head
@@ -146,7 +156,13 @@ func parseHead(data []byte) (Head, string, error) {
 	if pr.SHA == "" || pr.Base == "" {
 		return Head{}, "", fmt.Errorf("no head commit or base branch in %s", data)
 	}
-	return Head{Open: pr.State == "OPEN", SHA: pr.SHA, Base: pr.Base, Checks: len(pr.Checks), Pending: pending(pr.Checks), Problem: prProblem(pr.Mergeable, pr.Checks)}, pr.Base, nil
+	skipped := 0
+	for _, c := range pr.Checks {
+		if c.Conclusion == "SKIPPED" {
+			skipped++
+		}
+	}
+	return Head{Open: pr.State == "OPEN", SHA: pr.SHA, Base: pr.Base, Checks: len(pr.Checks) - skipped, Skipped: skipped, Pending: pending(pr.Checks), Problem: prProblem(pr.Mergeable, pr.Checks)}, pr.Base, nil
 }
 
 // UpdateBranch brings the pull request up to date with its base branch: a

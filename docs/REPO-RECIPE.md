@@ -141,6 +141,15 @@ merge that draft yourself.
 - **`merge_train_alone`** paths, named as in `areas`: a pull request that
   touches one is tested in a batch of its own.
 
+The batch is a draft, and a CI that skips draft pull requests skips the
+batch: every check comes back skipped, and nothing was tested. shed merges
+nothing on a skipped run, and `shed status` shows the batch as `every check
+was skipped`. Let such a CI run on the train's branches:
+
+```yaml
+if: ${{ !github.event.pull_request.draft || startsWith(github.head_ref, 'shed-train/') }}
+```
+
 A batch train merges each pull request as it stands, so the base must not
 require branches to be up to date before merging (the branch protection or
 ruleset option "Require branches to be up to date before merging"). Where it

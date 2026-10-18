@@ -68,6 +68,8 @@ func checkWords(h backlog.Head) string {
 		return h.Problem
 	case h.Green():
 		return "checks passed"
+	case h.AllSkipped():
+		return "every check was skipped: its CI did not run on it"
 	default:
 		return "checks running"
 	}
