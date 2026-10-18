@@ -1186,7 +1186,7 @@ func TestStatusShowsWhyAQueuedIssueIsHeld(t *testing.T) {
 		{Repo: "org/app", Number: 11, State: Queued}, {Repo: "org/app", Number: 12, State: Working, Worker: "docs"},
 		{Repo: "org/app", Number: 13, State: Queued}, {Repo: "org/app", Number: 14, State: Queued},
 	}}
-	MarkHeld(&report, issues, "area:")
+	MarkHeld(&report, issues, "area:", nil, nil)
 	want := []struct{ state, held string }{
 		{Held, "waits for #9 to close"}, {Working, ""}, {Held, "overlaps #12 in hand: both are area:billing"}, {Queued, ""},
 	}
@@ -1420,4 +1420,31 @@ func TestThePromotionBriefSplitsWhatShedMergedFromWhatTheOwnerDid(t *testing.T) 
 			t.Fatalf("brief lacks %q:\n%s", want, out.String())
 		}
 	}
+}
+
+func TestStatusShowsANewIssueHeldAtItsRepositorysOpenPullRequestLimit(t *testing.T) {
+	prs := map[int]backlog.PR{41: {}, 42: {}}
+	held, bumped := issue(11, ""), issue(12, "")
+	held.OpenPRs, bumped.OpenPRs = prs, prs
+	report := MachineReport{Issues: []IssueStatus{
+		{Repo: "org/app", Number: 11, State: Queued}, {Repo: "org/app", Number: 12, State: Queued, Bumped: true},
+	}}
+	MarkHeld(&report, []backlog.Issue{held, bumped}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}, config.DefaultSignals())
+	if got, want := report.Issues[0].Held, "org/app has 2 open pull requests, at or over its limit of 2: they are finished first"; report.Issues[0].State != Held || got != want {
+		t.Errorf("#11 = %s %q, want held %q", report.Issues[0].State, got, want)
+	}
+	if got := report.Issues[1]; got.State != Queued {
+		t.Errorf("#12 = %s %q, want the bumped issue queued", got.State, got.Held)
+	}
+}
+
+func TestStatusSaysWorkersHaveNoWorkBecauseTheRepositoryIsAtItsOpenPullRequestLimit(t *testing.T) {
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app"}, {Name: "docs"}}}
+	res := healthy()
+	res.Checkins = []runlog.Checkin{{Time: now.Add(-time.Hour), Worker: "app", Kind: "idle", Verdict: runlog.VerdictDone, Reason: "nothing workable"}}
+	queued := issue(7)
+	queued.OpenPRs = map[int]backlog.PR{41: {}, 42: {}, 43: {}}
+	r := Assess(m, signals, now, res, []backlog.Issue{queued})
+	MarkHeld(&r, []backlog.Issue{queued}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}, signals)
+	wantAttention(t, r, "1 of 2 workers have no work: 1 queued issue(s) are held: org/app has 3 open pull requests, at or over its limit of 2")
 }

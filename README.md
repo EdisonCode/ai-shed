@@ -413,6 +413,33 @@ pull request's own CI can shrink to what the gates do not cover.
 A `repos` entry may have gates alone. The release state and eye checks need
 `staging.commit`, and leave out a repository that has none.
 
+### A limit on open pull requests
+
+Workers that start issues faster than their pull requests merge leave a
+pile for the morning: each one waits for review, goes stale as main moves,
+and costs another full CI run when it is brought up to date. Give a
+repository a limit, and new issues wait while it has that many open pull
+requests or more:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    max_open_prs: 8
+```
+
+- **Started work goes on.** The issue a worker has in hand, rework of an
+  open pull request, verification, an issue whose question you answered, and
+  an issue you bumped are handed out at any count: each brings an open pull
+  request closer to its merge, or is your own word.
+- **The count is shed's**, read from the repository's open pull requests
+  each time the queue is read, drafts and pull requests nobody's worker
+  opened included. No worker counts for itself.
+- **It says so.** A held issue shows
+  `held: my-org/my-app has 9 open pull requests, at or over its limit of 8`
+  in `shed status` and to the reviewer, and a worker left with no work for
+  that reason is an `!` line: `1 of 3 workers have no work: 4 queued
+  issue(s) are held: ...`.
+
 ### Verification before your review
 
 A second reader catches work that does not do what its issue asked. A

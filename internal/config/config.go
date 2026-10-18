@@ -143,6 +143,11 @@ type Repo struct {
 	// back pull request before the owner is asked to review it, as deep as
 	// the pull request's risk tier says.
 	Verify *Verify `yaml:"verify"`
+	// MaxOpenPRs holds new issues of the repository while it has this many
+	// open pull requests or more: started work is finished before more is
+	// started. Rework, verification and the issue a worker has in hand go
+	// on. 0, the default, holds nothing.
+	MaxOpenPRs int `yaml:"max_open_prs"`
 }
 
 // Verify says how a repository's pull requests are tiered for verification.
@@ -1225,8 +1230,11 @@ func (c *Config) validate() error {
 		switch {
 		case deploys && r.Staging.Commit == "":
 			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
-		case !deploys && r.Gates.Command == "" && r.Verify == nil:
-			fail("%s: give it staging, gates or verify, or leave it out", where)
+		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0:
+			fail("%s: give it staging, gates, verify or max_open_prs, or leave it out", where)
+		}
+		if r.MaxOpenPRs < 0 {
+			fail("%s: max_open_prs %d must not be negative", where, r.MaxOpenPRs)
 		}
 		if r.Gates.Timeout != "" {
 			if d, err := time.ParseDuration(r.Gates.Timeout); err != nil || d <= 0 {

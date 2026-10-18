@@ -130,3 +130,49 @@ func TestBriefAsksForLessonsAndLeavesTheMemoryToTheOwner(t *testing.T) {
 		t.Fatalf("brief lacks the lessons rule:\n%s", brief)
 	}
 }
+
+// atLimit gives each issue the repository's open pull requests: #41 and #42,
+// the limit of org/app.
+func atLimit(f *fixture, issues ...backlog.Issue) {
+	f.Repos = []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}
+	for n := range issues {
+		if issues[n].OpenPRs == nil {
+			issues[n].OpenPRs = map[int]backlog.PR{}
+		}
+		for _, pr := range []int{41, 42} {
+			if _, ok := issues[n].OpenPRs[pr]; !ok {
+				issues[n].OpenPRs[pr] = backlog.PR{}
+			}
+		}
+	}
+	f.lister.issues = issues
+}
+
+func TestANewIssueIsHeldWhileItsRepositoryIsAtItsOpenPullRequestLimit(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	atLimit(f, labeled(11))
+	f.tick(2 * time.Minute)
+	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#11 Issue [held: org/app has 2 open pull requests, at or over its limit of 2: they are finished first]") {
+		t.Fatalf("prompt does not show the hold:\n%s", prompt)
+	}
+	f.tick(15 * time.Minute)
+	for _, c := range f.checkins(t) {
+		if c.Issue == 11 {
+			t.Fatalf("check-in = %+v: #11 was handed over while the repository is at its limit", c)
+		}
+	}
+}
+
+func TestReworkGoesOnWhileItsRepositoryIsAtItsOpenPullRequestLimit(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"},
+		Verdict{Verdict: runlog.VerdictNudge, Message: "PR #41 conflicts with main. Rebase it and nothing else.", Issue: 12, Reason: "its pull request went stale"})
+	atLimit(f, labeled(5), handedBackWith(12, "conflicts with the base branch"))
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	if !strings.Contains(prompt, "org/app#5 Issue [held: org/app has 2 open pull requests") || strings.Contains(prompt, "org/app#12 Issue [rework: pull request #41 conflicts with the base branch] [held:") {
+		t.Fatalf("want #5 held and the rework not:\n%s", prompt)
+	}
+	if c := f.lastCheckin(t); c.Issue != 12 || !c.Sent {
+		t.Fatalf("check-in = %+v, want the rework of #12 handed over", c)
+	}
+}

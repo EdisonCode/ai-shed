@@ -12,14 +12,16 @@ import (
 )
 
 // applyHolds holds the items that would make work for another: an issue
-// that depends on one still open, and an issue that touches the same code
-// as one another worker of the machine has in hand. Two branches on the same
+// that depends on one still open, an issue of a repository at its limit of
+// open pull requests, and an issue that touches the same code as one
+// another worker of the machine has in hand. Two branches on the same
 // code go stale on each other's merge, and cost a rebase and a full run of
 // the checks. With stacking, an issue whose one open dependency has a ready
 // pull request is built on that pull request's branch instead.
 //
 // Started work is never held: the worker's own issue in hand, rework and
-// eye checks.
+// eye checks. Nor is a verification, which brings an open pull request
+// closer to its merge, nor an issue the owner bumped.
 func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewhere []backlog.Issue, checkins []runlog.Checkin) {
 	byNumber := map[int]backlog.Issue{}
 	for _, i := range open {
@@ -50,6 +52,10 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 			item.Blocked = hold
 			continue
 		}
+		if hold := backlog.PRLimitHold(issue, s.maxOpenPRs(issue.Repo)); hold != "" && item.Verify == "" && !item.Bumped && !item.resumes() {
+			item.Blocked = hold
+			continue
+		}
 		for _, number := range inFlight {
 			other, ok := byNumber[number]
 			if !ok {
@@ -72,6 +78,16 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 			}
 		}
 	}
+}
+
+// maxOpenPRs is the repository's limit of open pull requests; 0 for none.
+func (s *Supervisor) maxOpenPRs(repo string) int {
+	for _, r := range s.Repos {
+		if r.Name == repo {
+			return r.MaxOpenPRs
+		}
+	}
+	return 0
 }
 
 // stackOnDep lets an item go ahead on top of its one open dependency, when
