@@ -1213,6 +1213,18 @@ func TestAPullRequestWaitingForItsVerificationIsNotTheOwners(t *testing.T) {
 	}
 }
 
+func TestAPullRequestTheVerifierSentBackIsNotTheOwnersWhileItIsADraftForRework(t *testing.T) {
+	i := issue(12, "## Hand-back\n**PR:** #41 (ready)", "Verification failed (high): accepts a refund of 0")
+	// The worker turned the pull request back into a draft for the rework.
+	i.OpenPRs = map[int]backlog.PR{41: {Draft: true}}
+	i.Verify = true
+	r := Assess(config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}, signals, now, healthy(), []backlog.Issue{i})
+	wantAttention(t, r)
+	if st := r.Issues[0]; st.State != Rework || !strings.Contains(st.Rework, "the verifier sent pull request #41 back") {
+		t.Fatalf("issue = %+v, want the rework the verifier asked for, not the owner's review", st)
+	}
+}
+
 type fakeClosed struct{ issues []backlog.Issue }
 
 func (f fakeClosed) ClosedSince(context.Context, config.IssueSource, time.Time) ([]backlog.Issue, error) {
