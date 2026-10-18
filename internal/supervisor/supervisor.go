@@ -1472,6 +1472,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		}
 		for n := range issues {
 			issues[n].Verify = s.verifies(issues[n].Repo)
+			issues[n].MergeHigh = s.mergesHigh(issues[n].Repo)
 		}
 		open = append(open, issues...)
 		for _, i := range issues {

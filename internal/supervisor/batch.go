@@ -207,13 +207,13 @@ func (s *Supervisor) boardBatch(ctx context.Context, repo config.Repo, bt *batch
 			s.Logf("merge train %s: read what #%d changes: %v", repo.Name, next.v.PR, err)
 			continue
 		}
-		comment := fmt.Sprintf("%s pull request #%d, verified at low risk with green checks. The verifier said: %s\n\nIt is on the merge train: shed tests it in a batch with other verified pull requests, on a draft pull request, and merges it when the batch's checks pass. The merge is no longer yours on this repository: shed promote lists it with what reaches production.", backlog.QueuedPhrase, next.v.PR, next.v.Note)
+		comment := fmt.Sprintf("%s pull request #%d, verified at %s risk with green checks. The verifier said: %s\n\nIt is on the merge train: shed tests it in a batch with other verified pull requests, on a draft pull request, and merges it when the batch's checks pass. The merge is no longer yours on this repository: shed promote lists it with what reaches production.", backlog.QueuedPhrase, next.v.PR, next.v.Tier, next.v.Note)
 		if err := s.Train.Comment(ctx, repo.Name, next.issue.Number, comment); err != nil {
 			s.Logf("merge train %s: board #%d: %v", repo.Name, next.v.PR, err)
 			return
 		}
 		bt.cars = append(bt.cars, batchCar{Car: backlog.Car{Issue: next.issue.Number, PR: next.v.PR, SHA: h.SHA}, base: h.Base, alone: alone})
-		s.Logf("merge train %s: #%d boarded at %s: verified at low risk", repo.Name, next.v.PR, short(h.SHA))
+		s.Logf("merge train %s: #%d boarded at %s: verified at %s risk", repo.Name, next.v.PR, short(h.SHA), next.v.Tier)
 	}
 }
 

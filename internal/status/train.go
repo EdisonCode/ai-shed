@@ -87,8 +87,9 @@ type TrainCar struct {
 
 // readTrain reads the merge train of a repository with merge_train from its
 // open issues. A look on staging does not hold a pull request back when a
-// worker does it after the merge.
-func readTrain(open []backlog.Issue, signals []config.Signal, now time.Time, lookAfter bool) *Train {
+// worker does it after the merge. With mergeHigh, a high-risk pass boards
+// as a low-risk one does.
+func readTrain(open []backlog.Issue, signals []config.Signal, now time.Time, lookAfter, mergeHigh bool) *Train {
 	t := &Train{}
 	seen := map[int]bool{}
 	for _, i := range open {
@@ -96,7 +97,7 @@ func readTrain(open []backlog.Issue, signals []config.Signal, now time.Time, loo
 			continue
 		}
 		seen[i.Number] = true
-		i.Verify = true
+		i.Verify, i.MergeHigh = true, mergeHigh
 		if pr, at := backlog.Boarded(i, signals); pr != 0 {
 			t.InHand = append(t.InHand, TrainCar{Issue: i.Number, PR: pr, Since: at, Checks: i.OpenPRs[pr].Pending})
 			continue

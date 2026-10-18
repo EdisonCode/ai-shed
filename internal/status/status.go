@@ -268,7 +268,7 @@ func (c Collector) collectRepo(parent context.Context, cfg *config.Config, repo 
 		}
 	}
 	if repo.Trains() {
-		report.Train = readTrain(open, cfg.Signals, report.Now, report.Lookers > 0)
+		report.Train = readTrain(open, cfg.Signals, report.Now, report.Lookers > 0, repo.Verify.MergeHigh)
 		if repo.Batches() && c.Batches != nil {
 			if err := readBatches(ctx, c.Batches, repo.Name, report.Train); err != nil {
 				report.Error = err.Error()
@@ -390,7 +390,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 	}
 	for n := range issues {
 		if r, ok := cfg.Repo(issues[n].Repo); ok && r.Verify != nil {
-			issues[n].Verify = true
+			issues[n].Verify, issues[n].MergeHigh = true, r.Verify.MergeHigh
 		}
 	}
 

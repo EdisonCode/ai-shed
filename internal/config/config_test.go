@@ -637,3 +637,18 @@ func TestARepositoryCanLimitItsOpenPullRequests(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestMergeHighNeedsMergeLow(t *testing.T) {
+	queue := minimal + "    issues: [{repo: org/app, label: x}]\n    workers: [{name: w, dir: /tmp, brief: b, verifies: true}]\n"
+	cfg, err := Parse([]byte(queue + "repos: [{repo: org/app, verify: {merge_low: true, merge_high: true}}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := cfg.Repo("org/app"); !r.Verify.MergeHigh {
+		t.Fatalf("repo = %+v, want merge_high", r.Verify)
+	}
+	_, err = Parse([]byte(queue + "repos: [{repo: org/app, verify: {merge_high: true}}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "merge_high needs merge_low") {
+		t.Fatalf("err = %v", err)
+	}
+}

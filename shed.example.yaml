@@ -151,6 +151,10 @@ machines:
 #         - name: billing
 #           paths: [internal/billing/, migrations/]
 #       high_lines: 400       # the default
+#       # Optional. shed queues the merge of a low-risk pass, and with
+#       # merge_high of a high-risk one too; you approve at shed promote.
+#       merge_low: true
+#       merge_high: true
 #     # Optional. Fast checks the agent runs on the head commit of each pull
 #     # request built on its machine, posted as the shed/gates status. A
 #     # repo may be listed for its gates alone, with no staging.

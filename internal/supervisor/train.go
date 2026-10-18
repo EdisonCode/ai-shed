@@ -79,13 +79,13 @@ func (s *Supervisor) runTrain(ctx context.Context, repo config.Repo, ready []boa
 		}
 		sort.SliceStable(ready, func(a, b int) bool { return ready[a].v.At.Before(ready[b].v.At) })
 		next := ready[0]
-		comment := fmt.Sprintf("%s pull request #%d, verified at low risk with green checks. The verifier said: %s\n\nIt is on the merge train: shed brings it up to date with the base branch and merges it when its checks pass on that head. The merge is no longer yours on this repository: shed promote lists it with what reaches production.", backlog.QueuedPhrase, next.v.PR, next.v.Note)
+		comment := fmt.Sprintf("%s pull request #%d, verified at %s risk with green checks. The verifier said: %s\n\nIt is on the merge train: shed brings it up to date with the base branch and merges it when its checks pass on that head. The merge is no longer yours on this repository: shed promote lists it with what reaches production.", backlog.QueuedPhrase, next.v.PR, next.v.Tier, next.v.Note)
 		if err := s.Train.Comment(ctx, repo.Name, next.issue.Number, comment); err != nil {
 			s.Logf("merge train %s: board #%d: %v", repo.Name, next.v.PR, err)
 			return
 		}
 		t.issue, t.pr = next.issue.Number, next.v.PR
-		s.Logf("merge train %s: #%d boarded: verified at low risk", repo.Name, t.pr)
+		s.Logf("merge train %s: #%d boarded: verified at %s risk", repo.Name, t.pr, next.v.Tier)
 	}
 	s.drive(ctx, repo, t)
 }

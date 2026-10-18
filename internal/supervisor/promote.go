@@ -17,9 +17,9 @@ type Merger interface {
 	QueueMerge(ctx context.Context, repo string, issue, pr int, method, comment string) error
 }
 
-// queueMerges moves the owner's approval of low-risk work from the merge to
+// queueMerges moves the owner's approval of verified work from the merge to
 // the promotion, where the repository says so: a pull request a verifier
-// passed at low risk, with green checks, nothing else waiting on the owner
+// passed at low risk (or at high risk, with merge_high), with green checks, nothing else waiting on the owner
 // and not yet on its way, is queued for merge. A look on staging that a
 // worker of the fleet does waits for nothing: it can only happen after the
 // merge, and a failed one reopens the issue for the owner. Only the machine whose log
@@ -42,7 +42,7 @@ func (s *Supervisor) queueMerges(ctx context.Context, open []backlog.Issue, chec
 			continue
 		}
 		key := fmt.Sprintf("%s#%d", i.Repo, v.PR)
-		comment := fmt.Sprintf("%s pull request #%d, verified at low risk with green checks. The verifier said: %s\n\nThe merge is no longer yours on this repository: shed promote lists it with what reaches production.", backlog.QueuedPhrase, v.PR, v.Note)
+		comment := fmt.Sprintf("%s pull request #%d, verified at %s risk with green checks. The verifier said: %s\n\nThe merge is no longer yours on this repository: shed promote lists it with what reaches production.", backlog.QueuedPhrase, v.PR, v.Tier, v.Note)
 		if err := s.Merger.QueueMerge(ctx, i.Repo, i.Number, v.PR, repo.Verify.MergeMethodOrDefault(), comment); err != nil {
 			s.Logf("queue %s for merge: %v", key, err)
 			continue
@@ -51,7 +51,7 @@ func (s *Supervisor) queueMerges(ctx context.Context, open []backlog.Issue, chec
 			s.mergeQueued = map[string]bool{}
 		}
 		s.mergeQueued[key] = true
-		s.Logf("queued %s for merge: verified at low risk", key)
+		s.Logf("queued %s for merge: verified at %s risk", key, v.Tier)
 	}
 	if s.Train == nil {
 		return

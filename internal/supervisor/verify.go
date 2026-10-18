@@ -37,6 +37,13 @@ func (s *Supervisor) verifies(repo string) bool {
 	return false
 }
 
+// mergesHigh reports whether the repository lets shed queue the merge of a
+// high-risk pass too.
+func (s *Supervisor) mergesHigh(repo string) bool {
+	r, ok := s.repoConfig(repo)
+	return ok && r.Verify != nil && r.Verify.MergeHigh
+}
+
 // withVerifies adds the pull requests that wait for a verifier to the queue
 // of a worker that verifies, each at its risk tier. Their checks have
 // passed: no model looks at work a deterministic check already failed.
@@ -140,6 +147,11 @@ and starts you with an empty context: judge the work on its own evidence.
 - When it does what the issue asks, post a comment on the issue that starts
   with `+"`Verified (<tier>):`"+` and gives your evidence: the commands you ran
   with their results, and each acceptance item with how you checked it.
+  Where the repository lets shed merge what you pass, your pass queues the
+  merge. When the merge cannot be undone (a dropped column or table, rows
+  rewritten for good, data sent to another system), start with
+  `+"`Verified (<tier>, owner merges):`"+` instead and say why: the owner
+  merges it.
 - When it does not, post a comment that starts with
   `+"`Verification failed (<tier>):`"+`, then one finding per line: what is
   wrong and how to see it. Do not fix it: the pull request goes back to a

@@ -1482,3 +1482,17 @@ func TestStatusSaysWorkersHaveNoWorkBecauseTheRepositoryIsAtItsOpenPullRequestLi
 	MarkHeld(&r, []backlog.Issue{queued}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}, signals)
 	wantAttention(t, r, "1 of 2 workers have no work: 1 queued issue(s) are held: org/app has 3 open pull requests, at or over its limit of 2")
 }
+
+func TestThePromotionBriefListsTheHighRiskMergesShedQueuedApart(t *testing.T) {
+	p := Promotion{Repo: "org/app", ByShed: []PromotionLine{
+		{PR: 41, Issue: 5, Title: "Retry the export", Tier: "low", OnStaging: true, ByShed: true, Verified: "ran the export tests"},
+		{PR: 43, Issue: 7, Title: "Refund a partial order", Tier: "high", OnStaging: true, ByShed: true, Verified: "tried to break the refund"},
+	}}
+	var out bytes.Buffer
+	RenderPromotion(&out, p, now)
+	high := strings.Index(out.String(), "Queued by shed on the verifier's word, high risk: 1")
+	low := strings.Index(out.String(), "Queued by shed on the verifier's word, low risk: 1")
+	if high < 0 || low < 0 || high > low || !strings.Contains(out.String()[high:low], "#43  #7") {
+		t.Fatalf("want the high-risk merge in its own group, first:\n%s", out.String())
+	}
+}
