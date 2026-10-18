@@ -47,6 +47,15 @@ func TestEachAskSaysWhatAnsweringItDoes(t *testing.T) {
 	if got := effect(review, t0); got != EffectRead {
 		t.Errorf("a review verified at high = %q", got)
 	}
+	review.MergeHigh = true
+	if got := effect(review, t0); got != EffectMerge {
+		t.Errorf("a review verified at high, with merge_high = %q", got)
+	}
+	review.Comments[1].Body = "Verified (high, owner merges): drops the legacy_total column"
+	if got := effect(review, t0); got != EffectRead {
+		t.Errorf("a high pass the verifier left to the owner = %q", got)
+	}
+	review.MergeHigh = false
 	if got := effect(at("## Hand-back\n**PR:** none\n**Needs eyes:** open /audit"), t0); got != EffectRead {
 		t.Errorf("an eye check the owner does = %q", got)
 	}

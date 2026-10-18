@@ -36,6 +36,9 @@ type Issue struct {
 	// Verify is set by the reader when the issue's repository verifies a
 	// handed-back pull request before the owner reviews it.
 	Verify bool `json:"-"`
+	// MergeHigh is set by the reader when the repository lets shed queue
+	// the merge of a high-risk pass too (merge_high).
+	MergeHigh bool `json:"-"`
 	// Deps are the issues this one waits for, with their state: the ones
 	// its text names and the ones GitHub's blocked-by relation names. Nil
 	// when the lister did not look them up.

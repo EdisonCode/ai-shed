@@ -110,3 +110,33 @@ func TestAVerificationEscapedWhenTheOwnerOrAnEyeCheckFoundAFaultAfterIt(t *testi
 		t.Fatalf("outcomes = %+v", got)
 	}
 }
+
+func TestAVerifierCanLeaveTheMergeToTheOwner(t *testing.T) {
+	v := Verification(verifying(handedBack, "**Verified (high, owner merges):** drops the legacy_total column"), config.DefaultSignals())
+	if v.State != VerifyPassed || v.Tier != "high" || !v.OwnerMerges || v.Note != "drops the legacy_total column" {
+		t.Fatalf("verification = %+v, want passed at high with the merge left to the owner", v)
+	}
+	if v := Verification(verifying(handedBack, "Verified (high): tried to break it"), config.DefaultSignals()); v.OwnerMerges {
+		t.Fatalf("verification = %+v, want the merge not left to the owner", v)
+	}
+	if tier, _ := LastVerified(verifying(handedBack, "Verified (high, owner merges): drops a column")); tier != "high" {
+		t.Fatalf("last verified tier = %q, want high", tier)
+	}
+}
+
+func TestAHighPassIsReadyToMergeOnlyWithMergeHigh(t *testing.T) {
+	i := verifying(handedBack, "Verified (high): tried to break it")
+	now := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	if _, ready := MergeReady(i, config.DefaultSignals(), now, false); ready {
+		t.Fatal("a high pass is ready to merge without merge_high")
+	}
+	i.MergeHigh = true
+	if v, ready := MergeReady(i, config.DefaultSignals(), now, false); !ready || v.PR != 41 {
+		t.Fatalf("verification = %+v, ready = %v; want a high pass ready with merge_high", v, ready)
+	}
+	left := verifying(handedBack, "Verified (high, owner merges): drops a column")
+	left.MergeHigh = true
+	if _, ready := MergeReady(left, config.DefaultSignals(), now, false); ready {
+		t.Fatal("a high pass the verifier left to the owner is ready to merge")
+	}
+}

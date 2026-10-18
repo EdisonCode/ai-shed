@@ -25,7 +25,12 @@ const (
 	VerificationFailedPhrase = "Verification failed"
 )
 
-var verdictRE = regexp.MustCompile(`(?im)^[\s*_>#]*(verification failed|verified)\b[\s*_]*(?:\((low|high)\))?[\s*_]*:[\s*_]*(.*)$`)
+// OwnerMergesPhrase follows the tier in a pass whose merge the verifier
+// leaves to the owner, as in "Verified (high, owner merges): ...": a change
+// that cannot be undone, such as a dropped column.
+const OwnerMergesPhrase = "owner merges"
+
+var verdictRE = regexp.MustCompile(`(?im)^[\s*_>#]*(verification failed|verified)\b[\s*_]*(?:\((low|high)(,\s*owner merges)?\))?[\s*_]*:[\s*_]*(.*)$`)
 
 // VerificationState is what a verifier said about the pull request of an
 // issue's last hand-back.
@@ -40,6 +45,20 @@ type VerificationState struct {
 	Tier string    `json:"tier,omitempty"`
 	Note string    `json:"note,omitempty"`
 	At   time.Time `json:"at,omitzero"`
+	// OwnerMerges is set when the verifier passed the work and left its
+	// merge to the owner.
+	OwnerMerges bool `json:"owner_merges,omitempty"`
+}
+
+// ShedMerges reports whether shed may queue the merge of a pass at this
+// verification, as far as its tier goes: a low pass, or a high one where
+// the repository has merge_high, and never one the verifier left to the
+// owner.
+func ShedMerges(issue Issue, v VerificationState) bool {
+	if v.State != VerifyPassed || v.OwnerMerges {
+		return false
+	}
+	return v.Tier == config.TierLow || (v.Tier == config.TierHigh && issue.MergeHigh)
 }
 
 // Verification reads where the verification of the issue's last hand-back
@@ -64,7 +83,8 @@ func Verification(issue Issue, signals []config.Signal) VerificationState {
 		if strings.EqualFold(m[1], VerificationFailedPhrase) {
 			v.State = VerifyFailed
 		}
-		v.Tier, v.Note, v.At = strings.ToLower(m[2]), strings.TrimSpace(strings.Trim(m[3], "*_ ")), c.CreatedAt
+		v.Tier, v.Note, v.At = strings.ToLower(m[2]), strings.TrimSpace(strings.Trim(m[4], "*_ ")), c.CreatedAt
+		v.OwnerMerges = m[3] != ""
 	}
 	switch {
 	case v.State != "":
@@ -170,7 +190,7 @@ func HandedPRs(issue Issue, signals []config.Signal) []int {
 func LastVerified(issue Issue) (tier, note string) {
 	for _, c := range issue.Comments {
 		if m := verdictRE.FindStringSubmatch(c.Body); m != nil && !strings.EqualFold(m[1], VerificationFailedPhrase) {
-			tier, note = strings.ToLower(m[2]), strings.TrimSpace(strings.Trim(m[3], "*_ "))
+			tier, note = strings.ToLower(m[2]), strings.TrimSpace(strings.Trim(m[4], "*_ "))
 		}
 	}
 	return tier, note

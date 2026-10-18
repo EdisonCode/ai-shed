@@ -18,8 +18,9 @@ const (
 	EffectGrace = "in grace"
 	// EffectRead: the owner reads something: a diff, a page on staging.
 	EffectRead = "read"
-	// EffectMerge: a review a verifier passed at low risk, with its checks
-	// green. Merging stays the owner's call.
+	// EffectMerge: a review a verifier passed at a tier shed merges (low, or
+	// high with merge_high), with its checks green. Merging stays the
+	// owner's call where shed does not queue it.
 	EffectMerge = "merge"
 )
 
@@ -43,7 +44,7 @@ func effect(issue Issue, signals []config.Signal, a Ask, now time.Time) string {
 	case s.FollowsPR:
 		v := Verification(issue, signals)
 		pr := issue.OpenPRs[a.PR]
-		if v.State == VerifyPassed && v.Tier == config.TierLow && pr.Problem == "" && !pr.Pending && !pr.Draft {
+		if ShedMerges(issue, v) && pr.Problem == "" && !pr.Pending && !pr.Draft {
 			return EffectMerge
 		}
 		return EffectRead

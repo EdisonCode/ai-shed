@@ -135,7 +135,7 @@ func TestBriefOfAVerifierSaysHowToVerify(t *testing.T) {
 	withVerifier(t, f)
 	f.tick(0)
 	brief, _ := os.ReadFile(filepath.Join(f.Machine.Workers[1].Dir, BriefFile))
-	for _, want := range []string{"## Verification", "Low tier", "High tier: try to break it", "`Verified (<tier>):`", "`Verification failed (<tier>):`", "Change no code"} {
+	for _, want := range []string{"## Verification", "Low tier", "High tier: try to break it", "`Verified (<tier>):`", "`Verification failed (<tier>):`", "`Verified (<tier>, owner merges):`", "Change no code"} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("brief lacks %q:\n%s", want, brief)
 		}

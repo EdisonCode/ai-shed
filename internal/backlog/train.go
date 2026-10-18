@@ -63,7 +63,8 @@ func train(issue Issue, signals []config.Signal) (pr int, on bool, at time.Time,
 }
 
 // MergeReady reports whether shed may queue the issue's pull request for
-// merge, with its verification: a verifier passed it at low risk, its checks
+// merge, with its verification: a verifier passed it at a tier shed merges
+// (see ShedMerges), its checks
 // are green, it is not a draft, not on its way to the merge already, not
 // taken off a merge train since its hand-back, and nothing else on the issue
 // waits on the owner. A look on staging waits for nothing when lookAfter is
@@ -71,7 +72,7 @@ func train(issue Issue, signals []config.Signal) (pr int, on bool, at time.Time,
 func MergeReady(issue Issue, signals []config.Signal, now time.Time, lookAfter bool) (VerificationState, bool) {
 	v := Verification(issue, signals)
 	pr := issue.OpenPRs[v.PR]
-	if v.State != VerifyPassed || v.Tier != config.TierLow || pr.Draft || pr.Pending || pr.Problem != "" || pr.AutoMerge {
+	if !ShedMerges(issue, v) || pr.Draft || pr.Pending || pr.Problem != "" || pr.AutoMerge {
 		return v, false
 	}
 	if on, _ := Boarded(issue, signals); on != 0 || TakenOff(issue, signals) {

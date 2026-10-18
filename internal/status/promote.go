@@ -184,7 +184,18 @@ func RenderPromotion(w io.Writer, p Promotion, now time.Time) {
 			}
 		}
 	}
-	write("Queued by shed on the verifier's word, low risk", p.ByShed)
+	// A high-risk merge shed queued is read first: it is the one the
+	// approval at promotion is most for.
+	var high, low []PromotionLine
+	for _, l := range p.ByShed {
+		if l.Tier == config.TierHigh {
+			high = append(high, l)
+		} else {
+			low = append(low, l)
+		}
+	}
+	write("Queued by shed on the verifier's word, high risk", high)
+	write("Queued by shed on the verifier's word, low risk", low)
 	write("Merged by you", p.ByOwner)
 	tw.Flush()
 	fmt.Fprintf(w, "\nLooks on staging: %d not done, %d failed or blocked\n", p.LooksOpen, p.LooksBad)

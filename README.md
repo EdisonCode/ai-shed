@@ -579,6 +579,15 @@ repos:
 - **When it is safe.** Start with a narrow `low`: many `areas`, a small
   `high_lines`. Widen it only while the digest's escape rate for `low`
   stays near zero, and turn `merge_low` off when a low pass escapes.
+- **High risk too.** `merge_high: true` (it needs `merge_low`) queues a
+  high-risk pass the same way, on the train where there is one, so nothing
+  merges behind it with its own auto-merge. A verifier keeps a merge for
+  you by starting its pass with `Verified (high, owner merges):` and saying
+  why, which its brief asks for when the merge cannot be undone: a dropped
+  column or table, rows rewritten for good, data sent to another system.
+  That pass waits for you as before. `shed promote` lists the high-risk
+  merges shed queued in a group of their own, first. Turn it on only where
+  the digest's escape rate for `high` has stayed near zero.
 
 ### Eye checks on staging
 

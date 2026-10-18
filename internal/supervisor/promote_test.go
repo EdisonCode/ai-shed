@@ -137,3 +137,25 @@ func TestAMachineThatDidNotBuildThePullRequestLeavesIt(t *testing.T) {
 		t.Fatalf("queued %+v by a machine whose log does not show it built #12", merger.queued)
 	}
 }
+
+func TestWithMergeHighAHighRiskPassIsQueuedForMergeUnlessTheVerifierLeftItToTheOwner(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	merger := withMergeLow(t, f, true)
+	f.Repos[0].Verify.MergeHigh = true
+	f.lister.issues = []backlog.Issue{verifiedLow("high")}
+	f.tick(2 * time.Minute)
+	if len(merger.queued) != 1 || !strings.Contains(merger.queued[0].comment, "verified at high risk with green checks") {
+		t.Fatalf("queued = %+v, want #41 queued as a high-risk pass", merger.queued)
+	}
+
+	f = started(t, config.Supervisor{}, done)
+	merger = withMergeLow(t, f, true)
+	f.Repos[0].Verify.MergeHigh = true
+	left := handedBackWith(12, "")
+	left.Comments = append(left.Comments, backlog.Comment{Body: "Verified (high, owner merges): drops the legacy_total column"})
+	f.lister.issues = []backlog.Issue{left}
+	f.tick(2 * time.Minute)
+	if len(merger.queued) != 0 {
+		t.Fatalf("queued %+v: the verifier left the merge to the owner", merger.queued)
+	}
+}

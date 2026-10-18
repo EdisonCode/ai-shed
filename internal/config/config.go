@@ -162,6 +162,10 @@ type Verify struct {
 	// with green checks and nothing else waiting on the owner, is queued
 	// for merge by the machine that built it. Off unless set.
 	MergeLow bool `yaml:"merge_low"`
+	// MergeHigh does the same for a pull request a verifier passed at high
+	// risk, unless the verifier said the merge is the owner's. It needs
+	// MergeLow. Off unless set.
+	MergeHigh bool `yaml:"merge_high"`
 	// MergeMethod is how such a pull request merges where the repository
 	// has no merge queue: merge, squash or rebase.
 	MergeMethod string `yaml:"merge_method"`
@@ -938,6 +942,9 @@ func (c *Config) validateVerify() error {
 		}
 		if m := r.Verify.MergeMethod; m != "" && m != "merge" && m != "squash" && m != "rebase" {
 			fail("repos: %s: verify.merge_method %q must be merge, squash or rebase", r.Name, m)
+		}
+		if r.Verify.MergeHigh && !r.Verify.MergeLow {
+			fail("repos: %s: verify.merge_high needs merge_low: a high-risk pass is queued only where a low-risk one is", r.Name)
 		}
 		if r.Verify.MergeTrain != "" && !r.Verify.MergeLow {
 			fail("repos: %s: verify.merge_train merges what merge_low queues: turn on merge_low too", r.Name)
