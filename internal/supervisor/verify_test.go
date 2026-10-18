@@ -144,3 +144,22 @@ func TestBriefOfAVerifierSaysHowToVerify(t *testing.T) {
 		t.Fatal("a worker that does not verify has the Verification section")
 	}
 }
+
+func TestAHandOverAfterAHandBackSaysWhatTheWorkerHadAndWhyNothingIsLeftInIt(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack, onTrack)
+	withVerifier(t, f)
+	f.Machine.Workers = f.Machine.Workers[:1] // the verifier is elsewhere
+	f.lister.issues = []backlog.Issue{labeled(12), labeled(13)}
+	f.tick(2 * time.Minute) // it takes #12
+
+	f.lister.issues = []backlog.Issue{handedBackWith(12, ""), labeled(13)}
+	f.term.running(f.now.Add(time.Minute))
+	for range 6 {
+		f.tick(5 * time.Minute)
+	}
+	c := f.lastCheckin(t)
+	want := "with nothing it can act on in #12 (pull request #41 waits for a verifier), after a check-in that found it on_track; handed #13 over without the reviewer"
+	if c.Issue != 13 || !c.Sent || !strings.Contains(c.Reason, want) || !strings.HasPrefix(c.Reason, "it rested ") {
+		t.Fatalf("check-in = %+v, want #13 handed over with reason %q", c, want)
+	}
+}
