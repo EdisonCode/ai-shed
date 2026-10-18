@@ -108,12 +108,10 @@ func Preflight(term Terminal, w config.Worker, readable func(config.Worker) stri
 // DirReadable reads the worker's directory as this process and as the
 // workers' tmux server, and says what failed; "" when both can read it.
 func DirReadable(w config.Worker) string {
-	dirs := []diraccess.Dir{{Worker: w.Name, Path: w.Dir}}
-	out, err := exec.Command("sh", "-c", diraccess.Script(dirs, diraccess.Options{})).Output()
+	problems, host, err := diraccess.Check([]diraccess.Dir{{Worker: w.Name, Path: w.Dir}}, diraccess.Options{})
 	if err != nil {
-		return fmt.Sprintf("could not check that %s can be read: %v", w.Dir, err)
+		return err.Error()
 	}
-	problems, host := diraccess.Parse(string(out), dirs)
 	var said []string
 	for _, p := range problems {
 		said = append(said, p.Describe(host))

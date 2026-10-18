@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/diraccess"
 	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
@@ -190,5 +191,29 @@ func TestTheSupervisorIsGivenEverythingItCanUse(t *testing.T) {
 		if missing {
 			t.Errorf("the agent's supervisor has no %s", name)
 		}
+	}
+}
+
+func TestCheckDirsRecordsADirTheAgentCannotRead(t *testing.T) {
+	state := t.TempDir()
+	m := config.Machine{Workers: []config.Worker{
+		{Name: "ok", Dir: t.TempDir()},
+		{Name: "gone", Dir: filepath.Join(t.TempDir(), "gone")},
+	}}
+	Agent{StateDir: state, Logf: t.Logf}.checkDirs(m)
+
+	data, err := os.ReadFile(filepath.Join(state, runlog.DirsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := runlog.ParseDirCheck(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Problems) != 1 || c.Problems[0].Worker != "gone" || c.Problems[0].Via != diraccess.ViaAgent {
+		t.Fatalf("problems = %+v", c.Problems)
+	}
+	if c.Host.Shed == "" || c.Time.IsZero() {
+		t.Fatalf("check = %+v; want the agent's binary and the time", c)
 	}
 }

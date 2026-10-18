@@ -292,6 +292,18 @@ func TestWorkerDirThatTmuxCannotReadNeedsOwner(t *testing.T) {
 	wantAttention(t, Assess(appWorker, signals, now, res, nil), "worker app: dir /tmp is not readable by tmux (/usr/bin/tmux) (Operation not permitted)")
 }
 
+func TestWorkerDirThatTheAgentCannotReadNamesShed(t *testing.T) {
+	res := healthy()
+	res.AgentDirs = runlog.DirCheck{Time: now,
+		Problems: []diraccess.Problem{{Worker: "app", Via: diraccess.ViaAgent, Err: "Operation not permitted"}},
+		Host:     diraccess.Host{OS: "Darwin", Shed: "/Users/x/.local/bin/shed"}}
+	r := Assess(appWorker, signals, now, res, nil)
+	if len(r.Attention) != 1 || !strings.Contains(r.Attention[0], "worker app: dir /tmp is not readable by the agent (/Users/x/.local/bin/shed)") ||
+		!strings.Contains(r.Attention[0], "grant /Users/x/.local/bin/shed Full Disk Access") {
+		t.Fatalf("attention = %q", r.Attention)
+	}
+}
+
 func TestWorkerThatIsOnTrackNeedsNothing(t *testing.T) {
 	for _, verdict := range []string{runlog.VerdictOnTrack, runlog.VerdictNudge, runlog.VerdictDone, runlog.VerdictStarted, runlog.VerdictLimited, runlog.VerdictHeld, runlog.VerdictRecycled} {
 		res := healthy()

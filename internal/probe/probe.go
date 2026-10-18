@@ -65,6 +65,9 @@ type Result struct {
 	// empty: the fleet file has it.
 	DirProblems []diraccess.Problem `json:"-"`
 	DirHost     diraccess.Host      `json:"-"`
+	// AgentDirs is the agent's own last read of the worker dirs; zero Time
+	// when it has made none.
+	AgentDirs runlog.DirCheck `json:"-"`
 }
 
 // Task is a one-off task's file on the machine. Where is the worker it waits
@@ -101,6 +104,7 @@ const footer = `tmux list-windows -a -F '@@win|#{window_activity}|#{session_name
 s="$HOME/` + runlog.StateDir + `"
 [ -f "$s/` + runlog.HeartbeatFile + `" ] && echo "@@heartbeat $(cat "$s/` + runlog.HeartbeatFile + `")"
 [ -f "$s/` + runlog.PaceFile + `" ] && echo "@@pace $(cat "$s/` + runlog.PaceFile + `")"
+[ -f "$s/` + runlog.DirsFile + `" ] && echo "@@agentdirs $(cat "$s/` + runlog.DirsFile + `")"
 [ -f "$s/` + runlog.RunsFile + `" ] && tail -n 200 "$s/` + runlog.RunsFile + `" | sed 's/^/@@run /'
 [ -f "$s/` + runlog.CheckinsFile + `" ] && tail -n 500 "$s/` + runlog.CheckinsFile + `" | sed 's/^/@@checkin /'
 [ -f "$s/` + runlog.GatesFile + `" ] && tail -n 100 "$s/` + runlog.GatesFile + `" | sed 's/^/@@gate /'
@@ -168,6 +172,10 @@ func Parse(out string, checks []config.Check) (Result, error) {
 		case "@@pace":
 			if p, ok, err := runlog.ParsePace([]byte(rest)); err == nil && ok {
 				res.Pace = &p
+			}
+		case "@@agentdirs":
+			if c, err := runlog.ParseDirCheck([]byte(rest)); err == nil {
+				res.AgentDirs = c
 			}
 		case "@@account":
 			res.Account = strings.TrimSpace(rest)

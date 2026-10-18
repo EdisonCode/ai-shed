@@ -121,6 +121,17 @@ func TestRunReportsAWorkerDirThatCannotBeRead(t *testing.T) {
 	}
 }
 
+func TestParseReadsTheAgentsDirCheck(t *testing.T) {
+	out := "@@now 1790000000\n" + `@@agentdirs {"time":"2026-10-01T03:00:00Z","problems":[{"worker":"app","via":"agent","blocked":true}],"host":{"os":"Darwin","shed":"/x/shed"}}` + "\n@@end\n"
+	res, err := Parse(out, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.AgentDirs.Problems) != 1 || !res.AgentDirs.Problems[0].Blocked || res.AgentDirs.Host.Shed != "/x/shed" {
+		t.Fatalf("agent dirs = %+v", res.AgentDirs)
+	}
+}
+
 // The generated script must work in a real shell, not only match our parser.
 func TestRunAgainstLocalShell(t *testing.T) {
 	m := config.Machine{Name: "here", Host: config.LocalHost, Init: "export SHED_TEST_VALUE=7"}

@@ -8,6 +8,7 @@ package diraccess
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -29,23 +30,26 @@ type Dir struct {
 const (
 	ViaShell = "shell" // the process that ran the check, such as sshd's
 	ViaTmux  = "tmux"  // the tmux server, which every worker's tools inherit
+	ViaAgent = "agent" // the agent, which reads the dirs for git and gates
 )
 
 // Problem is a read of a worker's directory that failed or did not finish.
 type Problem struct {
-	Worker string
-	Path   string
-	Via    string
+	Worker string `json:"worker"`
+	Path   string `json:"path,omitempty"`
+	Via    string `json:"via"`
 	// Blocked is set when the read did not finish within Wait.
-	Blocked bool
+	Blocked bool `json:"blocked,omitempty"`
 	// Err is the first line the read printed when it failed.
-	Err string
+	Err string `json:"err,omitempty"`
 }
 
 // Host is what the check found about the machine, to name the fix.
 type Host struct {
-	OS   string // uname: "Darwin" or "Linux"
-	Tmux string // the tmux binary, symlinks resolved; "" when not found
+	OS   string `json:"os"`             // uname: "Darwin" or "Linux"
+	Tmux string `json:"tmux,omitempty"` // the tmux binary, symlinks resolved; "" when not found
+	// Shed is the agent's binary; "" when the agent did not run the check.
+	Shed string `json:"shed,omitempty"`
 }
 
 // Options shape the check script. The zero value is the real check.
@@ -55,6 +59,8 @@ type Options struct {
 	Tmux string
 	// Wait overrides Wait; tests shorten it.
 	Wait time.Duration
+	// ShellOnly skips the read through tmux.
+	ShellOnly bool
 }
 
 // The read runs from a file, so a directory's path never passes through
@@ -86,7 +92,11 @@ func Script(dirs []Dir, opt Options) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "m=$(mktemp -d \"${TMPDIR:-/tmp}/shed-dircheck.XXXXXX\")\n")
 	fmt.Fprintf(&b, "cat >\"$m/read.sh\" <<'SHED_READ'\n%sSHED_READ\n", readScript)
-	fmt.Fprintf(&b, "t=; %s has-session -t =%s 2>/dev/null && t=1\n", tmux, Session)
+	if opt.ShellOnly {
+		b.WriteString("t=\n")
+	} else {
+		fmt.Fprintf(&b, "t=; %s has-session -t =%s 2>/dev/null && t=1\n", tmux, Session)
+	}
 	for i, d := range dirs {
 		fmt.Fprintf(&b, "printf '%%s\\n' %s >\"$m/s%d.dir\"; cp \"$m/s%d.dir\" \"$m/t%d.dir\"\n", quote(d.Path), i, i, i)
 		fmt.Fprintf(&b, "sh \"$m/read.sh\" \"$m/s%d\" </dev/null >/dev/null 2>&1 &\n", i)
@@ -115,6 +125,19 @@ fi
 	fmt.Fprintf(&b, "echo \"@@dirhost $(uname) $(readlink -f \"$(command -v %s)\" 2>/dev/null)\"\n", strings.Fields(tmux)[0])
 	b.WriteString("rm -rf \"$m\"\n")
 	return b.String()
+}
+
+// Check runs Script in a shell of this process and reads what it printed.
+func Check(dirs []Dir, opt Options) ([]Problem, Host, error) {
+	if len(dirs) == 0 {
+		return nil, Host{}, nil
+	}
+	out, err := exec.Command("sh", "-c", Script(dirs, opt)).Output()
+	if err != nil {
+		return nil, Host{}, fmt.Errorf("check that worker dirs can be read: %w", err)
+	}
+	problems, host := Parse(string(out), dirs)
+	return problems, host, nil
 }
 
 // Parse reads the lines Script printed. Other lines are ignored, so it can
@@ -162,7 +185,24 @@ func (p Problem) Describe(h Host) string {
 	if h.Tmux != "" {
 		tmux += " (" + h.Tmux + ")"
 	}
+	shed := "shed"
+	if h.Shed != "" {
+		shed = h.Shed
+	}
+	grantShed := fmt.Sprintf("grant %s Full Disk Access in System Settings → Privacy & Security; remove an older shed entry first, as it may be pinned to an earlier build", shed)
 	switch {
+	case p.Via == ViaAgent && p.Blocked:
+		s := fmt.Sprintf("dir %s: a read by the agent (%s) did not finish in %s", p.Path, shed, Wait)
+		if mac {
+			s += ", so its git and gates will wait on a privacy prompt: " + grantShed
+		}
+		return s
+	case p.Via == ViaAgent:
+		s := fmt.Sprintf("dir %s is not readable by the agent (%s) (%s)", p.Path, shed, p.Err)
+		if mac {
+			s += ": " + grantShed
+		}
+		return s
 	case p.Via == ViaTmux && p.Blocked:
 		s := fmt.Sprintf("dir %s: a read by %s did not finish in %s", p.Path, tmux, Wait)
 		if mac {
