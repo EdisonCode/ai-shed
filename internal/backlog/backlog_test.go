@@ -328,6 +328,58 @@ func TestFindLooksInEverySourceForAnOpenIssue(t *testing.T) {
 	}
 }
 
+// viewByNumber is GitHub's live read of one issue: the issue lists lag a
+// label change, a read by number does not.
+type viewByNumber map[int]Issue
+
+func (v viewByNumber) View(_ context.Context, repo string, number int) (Issue, bool, error) {
+	i, ok := v[number]
+	if !ok || i.Repo != repo {
+		return Issue{}, false, nil
+	}
+	return i, true, nil
+}
+
+func TestFindNowTakesAnIssueWhoseLabelChangedBeforeTheListsCaughtUp(t *testing.T) {
+	lister := listByLabel{"box": {{Number: 12, Title: "Paginate"}}}
+	sources := []config.IssueSource{{Repo: "org/app", Label: "box"}}
+	moved := Issue{Repo: "org/app", Number: 41, Title: "Export", Labels: []Label{{Name: "box"}}}
+
+	i, found, err := FindNow(context.Background(), lister, viewByNumber{41: moved}, sources, 41)
+	if err != nil || !found || i.Title != "Export" {
+		t.Fatalf("#41 = %+v, %v, %v; want it found by its live labels", i, found, err)
+	}
+}
+
+func TestAViewedIssueIsReadWithItsLabelsAndState(t *testing.T) {
+	i, open, err := parseView([]byte(`{"number":41,"title":"Export","state":"OPEN","labels":[{"name":"box"}]}`), "org/app")
+	if err != nil || !open || i.Repo != "org/app" || i.Number != 41 || !slices.Equal(i.LabelNames(), []string{"box"}) {
+		t.Fatalf("issue = %+v, open %v, err %v", i, open, err)
+	}
+	if _, open, _ := parseView([]byte(`{"number":41,"title":"Export","state":"CLOSED","labels":[]}`), "org/app"); open {
+		t.Fatal("a closed issue read as open")
+	}
+}
+
+func TestFindNowRefusesAnOpenIssueNoSourceSelects(t *testing.T) {
+	lister := listByLabel{}
+	elsewhere := Issue{Repo: "org/app", Number: 41, Title: "Export", Labels: []Label{{Name: "other-box"}}}
+	for name, sources := range map[string][]config.IssueSource{
+		"another label":      {{Repo: "org/app", Label: "box"}},
+		"a search":           {{Repo: "org/app", Query: "label:other-box"}},
+		"an assignee":        {{Repo: "org/app", Label: "other-box", Assignee: "sam"}},
+		"another repository": {{Repo: "org/api", Label: "other-box"}},
+	} {
+		i, found, err := FindNow(context.Background(), lister, viewByNumber{41: elsewhere}, sources, 41)
+		if err != nil || found {
+			t.Errorf("%s: found = %v, %v; want it refused", name, found, err)
+		}
+		if name != "another repository" && i.Number != 41 {
+			t.Errorf("%s: issue = %+v; want the open issue returned, to say what its labels are", name, i)
+		}
+	}
+}
+
 func TestRuled(t *testing.T) {
 	plan := "## Hand-back\n**PR:** none (plan-only pass)\n**Decisions needed:**\n1. Build it this way?"
 	cases := []struct {

@@ -59,13 +59,15 @@ func cmdBump(args []string) int {
 			return fail(err)
 		}
 	}
-	// A bump of an issue no queue has would do nothing, and say nothing.
-	found, open, err := backlog.Find(ctx, backlog.GH{}, m.AllSources(), issue)
+	// A bump of an issue no queue has would do nothing, and say nothing. An
+	// issue relabeled a moment ago is read by number, as GitHub's issue
+	// lists can lag the change.
+	found, open, err := backlog.FindNow(ctx, backlog.GH{}, backlog.GH{}, m.AllSources(), issue)
 	if err != nil {
 		return fail(err)
 	}
 	if !open {
-		return fail(fmt.Errorf("#%d is not open in any queue of machine %s: an issue is bumped on the machine whose `issues` select it", issue, m.Name))
+		return fail(fmt.Errorf("%s: an issue is bumped on the machine whose `issues` select it", notInQueue(m.Name, issue, found)))
 	}
 	if err := deploy.Bump(ctx, runner, m, issue, *worker); err != nil {
 		return fail(err)
@@ -78,4 +80,17 @@ func cmdBump(args []string) int {
 	fmt.Println("It is handed over when a worker has nothing in progress. Nobody is interrupted, and an issue a worker already has in hand stays with it.")
 	fmt.Printf("To take it back: shed bump -undo %s %d\n", m.Name, issue)
 	return exitOK
+}
+
+// notInQueue says why a bump was refused: the issue is open but no queue of
+// the machine selects it, with the labels it has now, or it is not open.
+func notInQueue(machine string, issue int, seen backlog.Issue) string {
+	if seen.Number == 0 {
+		return fmt.Sprintf("#%d is not open in any queue of machine %s", issue, machine)
+	}
+	labels := "none"
+	if names := seen.LabelNames(); len(names) > 0 {
+		labels = strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s#%d is open, but no queue of machine %s selects it; its labels now: %s", seen.Repo, issue, machine, labels)
 }
