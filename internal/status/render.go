@@ -229,7 +229,11 @@ func renderMachine(w io.Writer, r MachineReport) {
 		fmt.Fprintf(w, "%s  %s  UNREACHABLE\n", r.Name, r.Host)
 	} else {
 		p := r.Probe
-		fmt.Fprintf(w, "%s  %s  load %.2f/%d  disk %d%%  agent %s\n", r.Name, r.Host, p.Load1, p.Cores, p.DiskUsedPct, agentWord(r))
+		high := ""
+		if d, ok := highLoad(*p); ok {
+			high = " high " + Short(d)
+		}
+		fmt.Fprintf(w, "%s  %s  load %.2f/%d%s  disk %d%%  agent %s\n", r.Name, r.Host, p.Load1, p.Cores, high, p.DiskUsedPct, agentWord(r))
 		if p.Account != "" {
 			fmt.Fprintf(w, "  account  %s%s\n", p.Account, r.sharedWith)
 		}

@@ -77,6 +77,28 @@ func TestFullDiskNeedsOwner(t *testing.T) {
 	wantAttention(t, Assess(config.Machine{}, signals, now, res, nil), "disk is 93% full")
 }
 
+func TestLoadAtTheCoresForTenMinutesNeedsOwner(t *testing.T) {
+	res := healthy()
+	res.Load1, res.HighLoadSince = 11.69, now.Add(-14*time.Minute)
+	wantAttention(t, Assess(config.Machine{}, signals, now, res, nil), "load has been at or above the 8 cores for 14m")
+	var out bytes.Buffer
+	Render(&out, []MachineReport{Assess(config.Machine{Name: "box", Host: "me@box"}, signals, now, res, nil)}, nil)
+	if want := "box  me@box  load 11.69/8 high 14m  disk 40%"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}
+
+func TestABriefSpellOfLoadAtTheCoresIsNotFlagged(t *testing.T) {
+	res := healthy()
+	res.Load1, res.HighLoadSince = 9, now.Add(-4*time.Minute)
+	wantAttention(t, Assess(config.Machine{}, signals, now, res, nil))
+	var out bytes.Buffer
+	Render(&out, []MachineReport{Assess(config.Machine{Name: "box", Host: "me@box"}, signals, now, res, nil)}, nil)
+	if strings.Contains(out.String(), "high") {
+		t.Fatalf("a 4m spell is flagged:\n%s", out.String())
+	}
+}
+
 func TestIssueWithWorkerIsWorking(t *testing.T) {
 	res := healthy()
 	res.Windows = []probe.Window{window("app-123", time.Minute)}
