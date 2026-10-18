@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +96,48 @@ func Find(ctx context.Context, lister Lister, sources []config.IssueSource, numb
 	return Issue{}, false, nil
 }
 
+// Viewer reads one issue by its number, whatever queue it is in. The bool
+// says whether it is open; an issue that does not exist is not.
+type Viewer interface {
+	View(ctx context.Context, repo string, number int) (Issue, bool, error)
+}
+
+// FindNow is Find for an issue whose labels may have just changed: GitHub's
+// issue lists can lag a label change, a read by number does not. When no
+// source lists the issue, it is read by number in each repository of the
+// sources and taken when its labels now put it in one. A source with a
+// query or an assignee cannot be told from the labels, and takes nothing
+// this way. When nothing selects it, an open issue that was read is
+// returned with false, so the caller can say what its labels are.
+func FindNow(ctx context.Context, lister Lister, viewer Viewer, sources []config.IssueSource, number int) (Issue, bool, error) {
+	if i, found, err := Find(ctx, lister, sources, number); err != nil || found {
+		return i, found, err
+	}
+	var seen Issue
+	var repos []string
+	for _, src := range sources {
+		if !slices.Contains(repos, src.Repo) {
+			repos = append(repos, src.Repo)
+		}
+	}
+	for _, repo := range repos {
+		i, open, err := viewer.View(ctx, repo, number)
+		if err != nil {
+			return Issue{}, false, err
+		}
+		if !open {
+			continue
+		}
+		for _, src := range sources {
+			if src.Repo == repo && src.Query == "" && src.Assignee == "" && slices.Contains(i.LabelNames(), src.Label) {
+				return i, true, nil
+			}
+		}
+		seen = i
+	}
+	return seen, false, nil
+}
+
 // GH lists issues with the GitHub CLI, so shed needs no token of its own.
 type GH struct{}
 
@@ -118,6 +161,31 @@ func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 		return nil, err
 	}
 	return issues, nil
+}
+
+// View reads the issue by its number. One the repository does not have is
+// not open.
+func (GH) View(ctx context.Context, repo string, number int) (Issue, bool, error) {
+	out, err := gh(ctx, "issue", "view", strconv.Itoa(number), "--repo", repo, "--json", "number,title,state,labels")
+	if err != nil {
+		if strings.Contains(err.Error(), "Could not resolve to an issue") {
+			return Issue{}, false, nil
+		}
+		return Issue{}, false, err
+	}
+	return parseView(out, repo)
+}
+
+func parseView(data []byte, repo string) (Issue, bool, error) {
+	var i struct {
+		Issue
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(data, &i); err != nil {
+		return Issue{}, false, fmt.Errorf("gh issue view %s: parse output: %w", repo, err)
+	}
+	i.Issue.Repo = repo
+	return i.Issue, i.State == "OPEN", nil
 }
 
 // mergedLimit is how many of the latest merged pull requests are asked for.

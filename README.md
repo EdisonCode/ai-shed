@@ -363,7 +363,9 @@ shed bump -undo linux-box 41          # back to its usual place
   as rework comes back to the worker that built it. A move ends by itself
   once the issue is closed or leaves the machine's queues.
 - The issue must be open in one of the machine's queues. To send an issue to
-  another machine, change its label.
+  another machine, change its label; a bump right after it works, as the
+  issue is read by number when GitHub's issue lists have not caught up with
+  the label yet. A refusal names the labels the issue has now.
 
 `shed status` marks the issue `(bumped)` or `(bumped to docs)`.
 
