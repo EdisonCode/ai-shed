@@ -60,7 +60,11 @@ for bin in dist/shed-darwin-*; do
 		exit 1
 		;;
 	esac
+done
 
+# Every binary is signed before any is notarized: a notarization can wait in
+# Apple's queue for hours, and the keychain locks itself after an hour.
+for bin in dist/shed-darwin-*; do
 	# A bare binary cannot be stapled: Gatekeeper looks the ticket up online.
 	zip="$work/$(basename "$bin").zip"
 	ditto -c -k "$bin" "$zip"
