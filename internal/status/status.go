@@ -3,6 +3,7 @@
 package status
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -391,7 +392,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 	}
 
 	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
-	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels)
+	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels, cfg.Repos, cfg.Signals)
 	if res != nil {
 		AssessContext(&report, m, *res, cfg.Supervisor.ContextBudget)
 	}
@@ -546,16 +547,7 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 // queued issue waits on you (oldest 27h)". "" when no worker is idle for
 // that reason: an empty queue is not the owner's backlog.
 func noWork(r MachineReport, now time.Time) string {
-	idle, builders := 0, 0
-	for _, w := range r.Workers {
-		if w.Ask {
-			continue
-		}
-		builders++
-		if w.Last != nil && w.Last.Verdict == runlog.VerdictDone && w.Task == "" {
-			idle++
-		}
-	}
+	idle, builders := idleBuilders(r)
 	waiting, oldest := 0, time.Duration(0)
 	first, firstAt := 0, time.Time{}
 	for _, i := range r.Issues {
@@ -585,6 +577,21 @@ func noWork(r MachineReport, now time.Time) string {
 		why += fmt.Sprintf("; #%d goes back to a worker when you answer it", first)
 	}
 	return fmt.Sprintf("%d of %d workers have no work: %s", idle, builders, why)
+}
+
+// idleBuilders counts the machine's workers that build, and how many of
+// them have no work: the last check-in found them done, with no task.
+func idleBuilders(r MachineReport) (idle, builders int) {
+	for _, w := range r.Workers {
+		if w.Ask {
+			continue
+		}
+		builders++
+		if w.Last != nil && w.Last.Verdict == runlog.VerdictDone && w.Task == "" {
+			idle++
+		}
+	}
+	return idle, builders
 }
 
 // askWords says what an issue asks of the owner and for how long, as in
@@ -876,9 +883,15 @@ func deployWords(d runlog.Deploy) string {
 }
 
 // MarkHeld marks the queued issues that the supervisor holds back, with
-// why: an issue they depend on that is still open, or an issue a worker has
-// in hand that touches the same code. It reads what the supervisor reads.
-func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels string) {
+// why: an issue they depend on that is still open, a repository at its limit
+// of open pull requests, or an issue a worker has in hand that touches the
+// same code. It reads what the supervisor reads.
+func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels string, repos []config.Repo, signals []config.Signal) {
+	limits := map[string]int{}
+	for _, r := range repos {
+		limits[r.Name] = r.MaxOpenPRs
+	}
+	atLimit, limitWhy := 0, ""
 	byKey := map[string]backlog.Issue{}
 	for _, i := range issues {
 		byKey[issueKey(i.Repo, i.Number)] = i
@@ -893,6 +906,14 @@ func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels strin
 			st.State, st.Held = Held, hold
 			continue
 		}
+		// A bumped issue and one whose question the owner answered go
+		// ahead, as the supervisor hands them out.
+		if hold := backlog.PRLimitHold(issue, limits[issue.Repo]); hold != "" && !st.Bumped && !backlog.Ruled(issue, signals) {
+			st.State, st.Held = Held, hold
+			atLimit++
+			limitWhy = cmp.Or(limitWhy, hold)
+			continue
+		}
 		for _, other := range report.Issues {
 			if other.State != Working || other.Repo != st.Repo {
 				continue
@@ -902,6 +923,11 @@ func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels strin
 				break
 			}
 		}
+	}
+	// A worker idle beside a queue the limit holds is not stuck: the open
+	// pull requests are to be finished first.
+	if idle, builders := idleBuilders(*report); atLimit > 0 && idle > 0 {
+		report.Attention = append(report.Attention, fmt.Sprintf("%d of %d workers have no work: %d queued issue(s) are held: %s", idle, builders, atLimit, limitWhy))
 	}
 }
 

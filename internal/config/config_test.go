@@ -483,7 +483,7 @@ func TestARepoMayBeListedForItsGatesAlone(t *testing.T) {
 
 func TestARepoNeedsStagingOrGatesAndAGatesTimeoutIsADuration(t *testing.T) {
 	for _, tc := range []struct{ repo, want string }{
-		{"{repo: org/app}", "give it staging, gates or verify"},
+		{"{repo: org/app}", "give it staging, gates, verify or max_open_prs"},
 		{"{repo: org/app, gates: {command: make, timeout: soon}}", "gates.timeout"},
 		{"{repo: org/app, gates: {timeout: 5m}, staging: {commit: echo x}}", "gates.timeout needs gates.command"},
 		{"{repo: org/app, staging: {url: https://s.example.com}}", "staging.commit is required"},
@@ -621,5 +621,19 @@ func TestReleaseAfterWithAnOverflowAccountLoads(t *testing.T) {
 	}
 	if got := cfg.Machines[0].Capacity.ReleaseAfterOrZero(); got != 30*time.Minute {
 		t.Fatalf("release_after = %v", got)
+	}
+}
+
+func TestARepositoryCanLimitItsOpenPullRequests(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + "repos: [{repo: org/app, max_open_prs: 8}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := cfg.Repo("org/app"); r.MaxOpenPRs != 8 {
+		t.Fatalf("repo = %+v, want max_open_prs 8", r)
+	}
+	_, err = Parse([]byte(minimal + "repos: [{repo: org/app, max_open_prs: -1}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "max_open_prs -1 must not be negative") {
+		t.Fatalf("err = %v", err)
 	}
 }

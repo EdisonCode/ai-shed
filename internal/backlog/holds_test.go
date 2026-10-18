@@ -115,3 +115,28 @@ func TestAnErrorOtherThanNotFoundFailsTheDependencyRead(t *testing.T) {
 		t.Fatalf("err = %v, want the rate limit", err)
 	}
 }
+
+func TestANewIssueIsHeldWhileItsRepositoryIsAtItsOpenPullRequestLimit(t *testing.T) {
+	open := func(n int) Issue {
+		i := Issue{Repo: "org/app", Number: 20, OpenPRs: map[int]PR{}}
+		for pr := range n {
+			i.OpenPRs[100+pr] = PR{}
+		}
+		return i
+	}
+	if got, want := PRLimitHold(open(9), 8), "org/app has 9 open pull requests, at or over its limit of 8: they are finished first"; got != want {
+		t.Errorf("over the limit: hold = %q, want %q", got, want)
+	}
+	if got := PRLimitHold(open(8), 8); !strings.Contains(got, "8 open pull requests") {
+		t.Errorf("at the limit: hold = %q, want it held", got)
+	}
+	if got := PRLimitHold(open(7), 8); got != "" {
+		t.Errorf("under the limit: hold = %q, want none", got)
+	}
+	if got := PRLimitHold(open(50), 0); got != "" {
+		t.Errorf("no limit: hold = %q, want none", got)
+	}
+	if got := PRLimitHold(Issue{Repo: "org/app", Number: 20}, 8); got != "" {
+		t.Errorf("pull requests not looked up: hold = %q, want none", got)
+	}
+}

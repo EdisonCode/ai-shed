@@ -141,6 +141,9 @@ machines:
 #     # Optional. How far back to look when production is older than this
 #     # or has no command. The default is 14 days.
 #     look_back: 336h
+#     # Optional. New issues wait while the repository has this many open
+#     # pull requests or more; started work, rework and verification go on.
+#     max_open_prs: 8
 #     # Optional. A worker with `verifies: true` checks each handed-back pull
 #     # request before you review it, deeper for a high-risk one.
 #     verify:

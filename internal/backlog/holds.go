@@ -95,6 +95,16 @@ func DepHold(i Issue) string {
 	return ""
 }
 
+// PRLimitHold says why a new issue waits while its repository has limit
+// open pull requests or more, or "" when it does not: there is no limit, or
+// the open pull requests were not looked up.
+func PRLimitHold(i Issue, limit int) string {
+	if limit <= 0 || i.OpenPRs == nil || len(i.OpenPRs) < limit {
+		return ""
+	}
+	return fmt.Sprintf("%s has %d open pull requests, at or over its limit of %d: they are finished first", i.Repo, len(i.OpenPRs), limit)
+}
+
 // DepWords names dependencies: #12 in the issue's own repository, and
 // org/api#7 in another.
 func DepWords(deps []Dep, repo string) string {
