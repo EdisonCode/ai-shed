@@ -132,6 +132,18 @@ func TestABatchTrainTestsVerifiedPullRequestsTogetherAndMergesEachWhenTheBatchIs
 	}
 }
 
+func TestABatchWhoseEveryCheckWasSkippedIsNotMerged(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, _ := withBatches(t, f, config.Verify{}, 12, 13)
+	f.ride(t, train)
+	train.heads[101] = backlog.Head{Open: true, SHA: "ba7c4", Base: "main", Skipped: 5}
+	f.ride(t, train)
+	f.ride(t, train)
+	if len(train.merged) != 0 {
+		t.Fatalf("merged %q on a batch its CI did not run on", train.merged)
+	}
+}
+
 func TestARedBatchIsSplitUntilThePullRequestThatFailsIsFound(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	train, batcher := withBatches(t, f, config.Verify{}, 12, 13)

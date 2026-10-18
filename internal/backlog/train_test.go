@@ -52,6 +52,8 @@ func TestAHeadIsGreenOnlyWhenItsChecksRanAndPassed(t *testing.T) {
 		{"no checks yet", `{"state":"OPEN","headRefOid":"abc","baseRefName":"main","mergeable":"MERGEABLE","statusCheckRollup":[]}`, false},
 		{"running", `{"state":"OPEN","headRefOid":"abc","baseRefName":"main","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"test","status":"IN_PROGRESS"}]}`, false},
 		{"failed", `{"state":"OPEN","headRefOid":"abc","baseRefName":"main","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"test","status":"COMPLETED","conclusion":"FAILURE"}]}`, false},
+		{"every check skipped", `{"state":"OPEN","headRefOid":"abc","baseRefName":"main","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"test","status":"COMPLETED","conclusion":"SKIPPED"},{"name":"summary","status":"COMPLETED","conclusion":"SKIPPED"}]}`, false},
+		{"passed beside a skipped one", `{"state":"OPEN","headRefOid":"abc","baseRefName":"main","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"test","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"docs","status":"COMPLETED","conclusion":"SKIPPED"}]}`, true},
 	} {
 		h, base, err := parseHead([]byte(tc.json))
 		if err != nil || base != "main" || h.SHA != "abc" || !h.Open {
