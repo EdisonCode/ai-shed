@@ -1739,6 +1739,11 @@ func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []Que
 			items = slices.DeleteFunc(items, func(q QueueItem) bool { return q.Repo == look.Repo && q.Number == look.Number })
 			item := QueueItem{Repo: look.Repo, Number: look.Number, Title: look.Title,
 				Look: fmt.Sprintf("pull request #%d is on staging", look.PR), Model: s.Settings.Models.For(nil)}
+			if look.Production {
+				// Too late to keep it out of production, not too late to find
+				// a defect there.
+				item.Look += ", and production already serves it: look after the fact, and report a failure as a defect in production"
+			}
 			if m := s.Settings.Models.EyeChecks; m != "" {
 				// A look runs its session on its own model, whatever the
 				// rest of the fleet is told.

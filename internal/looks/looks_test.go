@@ -22,10 +22,14 @@ const (
 // fakeGitHub has pull requests merged at known times. Staging serves the
 // merge commits listed in onStaging.
 type fakeGitHub struct {
-	closed       []backlog.Issue
-	merged       map[int]string
-	deployed     time.Time
-	onStaging    map[string]bool
+	closed    []backlog.Issue
+	merged    map[int]string
+	deployed  time.Time
+	onStaging map[string]bool
+	// early are the pull requests merged before production's deploy, and
+	// inProduction the merge commits production serves.
+	early        map[int]bool
+	inProduction map[string]bool
 	closedSince  time.Time
 	containCalls int
 	containErr   error
@@ -38,7 +42,11 @@ func (f *fakeGitHub) ClosedSince(_ context.Context, _ config.IssueSource, since 
 func (f *fakeGitHub) MergedSince(context.Context, string, time.Time) (map[int]Pull, error) {
 	pulls := map[int]Pull{}
 	for number, commit := range f.merged {
-		pulls[number] = Pull{Number: number, Commit: commit}
+		at := now.Add(-time.Minute)
+		if f.early[number] {
+			at = f.deployed.Add(-time.Hour)
+		}
+		pulls[number] = Pull{Number: number, Commit: commit, MergedAt: at}
 	}
 	return pulls, nil
 }
@@ -50,7 +58,7 @@ func (f *fakeGitHub) Contains(_ context.Context, _, head, commit string) (bool, 
 	if f.containErr != nil {
 		return false, f.containErr
 	}
-	return head == stagingCommit && f.onStaging[commit], nil
+	return (head == stagingCommit && f.onStaging[commit]) || (head == productionCommit && f.inProduction[commit]), nil
 }
 
 func handedBack(number, pr int, more ...string) backlog.Issue {
@@ -127,8 +135,8 @@ func TestWindowStartsAtProductionsCommitOrTheLookBackLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := now.Add(-tc.want); !report.Since.Equal(want) || !gh.closedSince.Equal(want) || report.SinceProduction != (tc.want == tc.deployed) {
-			t.Errorf("%s: window starts %s (closed issues asked since %s), want %s", tc.name, report.Since, gh.closedSince, want)
+		if want := now.Add(-tc.want); !report.Since.Equal(want) || !gh.closedSince.Equal(now.Add(-config.DefaultLookBack)) || report.SinceProduction != (tc.want == tc.deployed) {
+			t.Errorf("%s: window starts %s (closed issues asked since %s), want %s, and closed issues from the look-back limit", tc.name, report.Since, gh.closedSince, want)
 		}
 	}
 }
@@ -269,5 +277,29 @@ func TestParsePullTimesReadsEachStepOfEachPullRequest(t *testing.T) {
 		if times[n] != w {
 			t.Errorf("#%d = %+v, want %+v", n, times[n], w)
 		}
+	}
+}
+
+func TestALookStillAskedOfWorkProductionServesIsOwedAfterTheFact(t *testing.T) {
+	gh := &fakeGitHub{deployed: now.Add(-2 * time.Hour),
+		merged:       map[int]string{41: "c41", 42: "c42", 43: "c43"},
+		early:        map[int]bool{41: true, 42: true, 43: true},
+		onStaging:    map[string]bool{"c41": true, "c42": true, "c43": true},
+		inProduction: map[string]bool{"c41": true, "c42": true},
+	}
+	open := []backlog.Issue{
+		handedBack(1, 41), // shipped, nobody looked
+		handedBack(2, 42, "Eyes checked: the total is right."), // shipped and looked at
+		handedBack(3, 43), // merged before the deploy, not in it
+	}
+	report, err := reader(gh).Read(context.Background(), repo, sources, open, config.DefaultSignals())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Looks) != 1 || report.Looks[0].Number != 1 || report.Looks[0].State != Due || !report.Looks[0].Production {
+		t.Fatalf("looks = %+v, want only #1, due after the fact", report.Looks)
+	}
+	if report.Merged != 0 || len(report.Passed) != 0 {
+		t.Fatalf("merged = %d, passed = %+v: work before the window is not counted in it", report.Merged, report.Passed)
 	}
 }

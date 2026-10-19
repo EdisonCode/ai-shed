@@ -52,6 +52,15 @@ func Render(w io.Writer, reports []MachineReport, repos []RepoReport) {
 // lookWords says each look state the way the report prints it.
 var lookWords = map[string]string{looks.Due: "on staging", looks.Awaiting: "waits for staging", looks.Failed: "FAILED", looks.Blocked: "BLOCKED"}
 
+// lookState is a look's state in words, and whether production already
+// serves the work.
+func lookState(l looks.Look) string {
+	if l.Production {
+		return lookWords[l.State] + ", production already serves it"
+	}
+	return lookWords[l.State]
+}
+
 // notDone counts the looks nobody has done, as in "2 not done (1 on staging,
 // 1 wait for a staging deploy)". Blocked ones are named when there are any.
 func (r RepoReport) notDone() string {
@@ -91,7 +100,7 @@ func renderRepo(w io.Writer, r RepoReport) {
 		}
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		for _, l := range r.Looks {
-			fmt.Fprintf(tw, "    #%d\tPR #%d\t%s\t%s\t%s\n", l.Number, l.PR, lookWords[l.State], Short(r.Now.Sub(l.Since)), l.Title)
+			fmt.Fprintf(tw, "    #%d\tPR #%d\t%s\t%s\t%s\n", l.Number, l.PR, lookState(l), Short(r.Now.Sub(l.Since)), l.Title)
 		}
 		tw.Flush()
 		if r.Train != nil {
