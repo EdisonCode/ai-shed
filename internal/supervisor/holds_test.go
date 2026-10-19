@@ -176,3 +176,28 @@ func TestReworkGoesOnWhileItsRepositoryIsAtItsOpenPullRequestLimit(t *testing.T)
 		t.Fatalf("check-in = %+v, want the rework of #12 handed over", c)
 	}
 }
+
+func TestTheReserveIsOfferedWhenTheQueueIsHeldOrReworkOnCodeInHand(t *testing.T) {
+	f := started(t, config.Supervisor{OverlapLabels: "area:"}, done)
+	f.Machine.Workers = append(f.Machine.Workers, config.Worker{Name: "docs", Dir: t.TempDir(), Brief: "b"})
+	appendCheckin(t, f, runlog.Checkin{Time: f.now, Worker: "docs", Kind: KindIdle, Verdict: runlog.VerdictNudge, Sent: true, Issue: 12})
+	rework := handedBackWith(13, "has a failed check (test)")
+	rework.Labels = append(rework.Labels, backlog.Label{Name: "area:billing"})
+	withBackfill(f, labeled(11, "area:billing"), labeled(12, "area:billing"), rework)
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	for _, want := range []string{"org/app#11 Issue [held: overlaps #12", "#50 Issue [backlog]"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestTheReserveIsNotOfferedBesideReworkAWorkerCanDo(t *testing.T) {
+	f := started(t, config.Supervisor{OverlapLabels: "area:"}, done)
+	withBackfill(f, handedBackWith(13, "has a failed check (test)"))
+	f.tick(2 * time.Minute)
+	if prompt := f.reviewer.prompts[0]; strings.Contains(prompt, "[backlog]") {
+		t.Fatalf("the reserve is offered beside rework a worker can do:\n%s", prompt)
+	}
+}

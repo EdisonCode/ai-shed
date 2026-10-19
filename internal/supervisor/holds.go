@@ -42,6 +42,16 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 	for n := range items {
 		item := &items[n]
 		issue, ok := byNumber[item.Number]
+		if ok && item.Rework != "" && item.Number != inHand {
+			for _, number := range inFlight {
+				if other, ok := byNumber[number]; ok {
+					if why := backlog.Overlap(issue, other, s.Settings.OverlapLabels); why != "" {
+						item.overlaps = fmt.Sprintf("overlaps #%d, which %s has in hand: %s", number, others[number], why)
+						break
+					}
+				}
+			}
+		}
 		if !ok || item.Look != "" || item.Rework != "" || item.Stack != "" || item.Number == inHand {
 			continue
 		}

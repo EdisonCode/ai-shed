@@ -63,6 +63,9 @@ type PR struct {
 	NoCI bool
 	// Head is the pull request's head commit.
 	Head string
+	// ProblemAt is when the last of its failed checks finished; zero when
+	// none failed or GitHub gave no time.
+	ProblemAt time.Time
 }
 
 type Label struct {
@@ -311,6 +314,8 @@ type check struct {
 	State      string `json:"state"`
 	// Status is a check run's progress: QUEUED, IN_PROGRESS, COMPLETED.
 	Status string `json:"status"`
+	// CompletedAt is when a check run finished.
+	CompletedAt time.Time `json:"completedAt"`
 }
 
 func parsePRs(data []byte) (map[int]PR, error) {
@@ -327,7 +332,7 @@ func parsePRs(data []byte) (map[int]PR, error) {
 	}
 	open := make(map[int]PR, len(prs))
 	for _, pr := range prs {
-		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks), Draft: pr.Draft, Pending: pending(pr.Checks), AutoMerge: pr.AutoMerge != nil, NoCI: noCI(pr.Checks), Head: pr.Head}
+		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks), Draft: pr.Draft, Pending: pending(pr.Checks), AutoMerge: pr.AutoMerge != nil, NoCI: noCI(pr.Checks), Head: pr.Head, ProblemAt: problemAt(pr.Checks)}
 	}
 	return open, nil
 }
@@ -341,6 +346,17 @@ func pending(checks []check) bool {
 		}
 	}
 	return false
+}
+
+// problemAt is when the last failed check finished.
+func problemAt(checks []check) time.Time {
+	var at time.Time
+	for _, c := range checks {
+		if failed[c.Conclusion] && c.CompletedAt.After(at) {
+			at = c.CompletedAt
+		}
+	}
+	return at
 }
 
 // noCI reports whether checks were reported and every one was skipped or
@@ -482,7 +498,7 @@ func Rework(issue Issue, signals []config.Signal) string {
 			break
 		}
 	}
-	if open.Problem != "" {
+	if open.Problem != "" && !answered(issue, handBack, open) {
 		reasons = append(reasons, fmt.Sprintf("pull request #%d %s", pr, open.Problem))
 	}
 	if off, _, reverify := offTrain(issue, handBack, pr); off >= 0 && !reverify {
@@ -494,6 +510,26 @@ func Rework(issue Issue, signals []config.Signal) string {
 		reasons = append(reasons, fmt.Sprintf("the verifier sent pull request #%d back: %s; fix what it found and hand back again", pr, v.Note))
 	}
 	return strings.Join(reasons, "; ")
+}
+
+// answered reports whether the pull request's failed check finished before
+// the hand-back at index: the worker handed back with the failure in front
+// of it, so sending it back again changes nothing. It waits for the check
+// to run again, or for the owner.
+func answered(issue Issue, index int, open PR) bool {
+	return open.Problem != "conflicts with the base branch" && !open.ProblemAt.IsZero() && issue.Comments[index].CreatedAt.After(open.ProblemAt)
+}
+
+// HandedBackRed says why the issue's handed-back pull request waits for a
+// check to run again: its failed check finished before the hand-back. ""
+// when it does not.
+func HandedBackRed(issue Issue, signals []config.Signal) string {
+	index, pr := lastHandBack(issue, signals)
+	open, isOpen := issue.OpenPRs[pr]
+	if index < 0 || !isOpen || open.Problem == "" || !answered(issue, index, open) {
+		return ""
+	}
+	return fmt.Sprintf("pull request #%d %s before its last hand-back: it waits for the check to run again", pr, open.Problem)
 }
 
 // Ruled reports whether the owner answered a question of the issue's last
