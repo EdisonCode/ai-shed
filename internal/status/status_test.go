@@ -1528,3 +1528,34 @@ func TestAPullRequestItsCISkippedShowsAsNoCIOnHead(t *testing.T) {
 		t.Fatalf("issue = %+v", st)
 	}
 }
+
+func TestALookOfUnmergedWorkIsNotTheOwnersWhereAWorkerDoesEyeChecks(t *testing.T) {
+	open := issue(7, "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders")
+	open.OpenPRs = map[int]backlog.PR{41: {}}
+	for _, tc := range []struct {
+		name      string
+		eyeChecks bool
+		want      int
+	}{{"a worker does eye checks", true, 0}, {"no worker does them", false, 1}} {
+		c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{open}}, Looks: &fakeLooks{report: looks.Report{Repo: "org/app"}}}
+		report := c.CollectAll(context.Background(), withRepo(tc.eyeChecks))
+		eyes := 0
+		for _, a := range report.Machines[0].Issues[0].Asks {
+			if a.Name == config.EyesSignal {
+				eyes++
+			}
+		}
+		if eyes != tc.want {
+			t.Errorf("%s: eyes asks = %d, want %d", tc.name, eyes, tc.want)
+		}
+	}
+}
+
+func TestALookOfWorkProductionServesSaysSo(t *testing.T) {
+	r := RepoReport{Report: looks.Report{Repo: "org/app", Staging: "aaaaaaa", Looks: []looks.Look{{Repo: "org/app", Number: 7, PR: 41, State: looks.Due, Production: true, Title: "Fix the thing"}}}, Lookers: 1, Now: now}
+	var out bytes.Buffer
+	Render(&out, nil, []RepoReport{r})
+	if want := "on staging, production already serves it"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}

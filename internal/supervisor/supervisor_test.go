@@ -3056,3 +3056,14 @@ func TestAMessageStillUnsentAfterOneEnterNeedsTheOwner(t *testing.T) {
 		t.Fatalf("submitted %d times, notes %q; Enter is pressed once per message", f.term.submitted, notes)
 	}
 }
+
+func TestALookOfWorkProductionServesIsHandedOutAfterTheFact(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(7))
+	shipped := look(7, 41, looks.Due)
+	shipped.Production = true
+	withStaging(f, shipped)
+	f.tick(2 * time.Minute)
+	if len(f.term.sent) != 1 || !strings.Contains(f.term.sent[0], "production already serves it: look after the fact, and report a failure as a defect in production") {
+		t.Fatalf("sent = %q, want the look handed out, marked after the fact", f.term.sent)
+	}
+}

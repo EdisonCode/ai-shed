@@ -183,3 +183,17 @@ func TestAPullRequestTakenOffTheTrainForNewCommitsGoesToAVerifierAgain(t *testin
 		t.Fatalf("message = %q, want the head it was verified at named", c.Message)
 	}
 }
+
+func TestALookAskedOfUnmergedWorkDoesNotHoldItsVerification(t *testing.T) {
+	f := started(t, config.Supervisor{}, done, assign(12))
+	withVerifier(t, f)
+	built(t, f, 12)
+	eyes := handedBackWith(12, "")
+	eyes.Comments[0].Body += "\n**Needs eyes:** open /orders and check the total"
+	f.lister.issues = []backlog.Issue{eyes}
+	f.tick(2 * time.Minute)
+	f.tick(10 * time.Minute)
+	if c := lastOf(t, f, "rev"); c.Issue != 12 || !c.Verify {
+		t.Fatalf("rev's check-in = %+v, want #12 verified while its look waits for the merge", c)
+	}
+}

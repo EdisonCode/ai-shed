@@ -622,9 +622,15 @@ machines:
 
 - **What owes a look.** An issue, open or closed, whose last hand-back names
   a pull request and asks for eyes, when that pull request was merged after
-  production's commit. Work that production already serves is not looked at:
-  it is too late to gate. With no `production` command, or when production is
-  older than `look_back`, the window is `look_back`.
+  production's commit. With no `production` command, or when production is
+  older than `look_back`, the window is `look_back`. A look nobody did of
+  work that production already serves, within `look_back`, is still owed:
+  too late to gate, not too late to find a defect. It goes to a worker
+  marked `production already serves it`, and a failure is a defect in
+  production.
+- **Before the merge.** A `Needs eyes:` ask of a pull request that has not
+  merged is nobody's yet where a worker does eye checks: it is not in
+  `waits on you`, and it holds neither the verification nor the merge.
 - **When it is due.** When staging's commit has the pull request's merge
   commit in its history. Until then the look waits for a staging deploy, and
   nothing is asked of anyone.

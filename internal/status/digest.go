@@ -209,7 +209,7 @@ func RenderDigest(w io.Writer, d Digest) {
 		}
 		for _, l := range r.Looks {
 			if l.State == looks.Failed || l.State == looks.Blocked {
-				fmt.Fprintf(tw, "    #%d\tPR #%d\t%s\t%s ago\t%s\n", l.Number, l.PR, lookWords[l.State], Short(d.Now.Sub(l.Since)), l.Title)
+				fmt.Fprintf(tw, "    #%d\tPR #%d\t%s\t%s ago\t%s\n", l.Number, l.PR, lookState(l), Short(d.Now.Sub(l.Since)), l.Title)
 			}
 		}
 		tw.Flush()

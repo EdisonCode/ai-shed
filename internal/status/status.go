@@ -349,6 +349,9 @@ func (c Collector) CollectAll(ctx context.Context, cfg *config.Config) Report {
 	repos := c.CollectRepos(ctx, cfg)
 	workerLooks := map[string]bool{}
 	for _, r := range repos {
+		if r.Lookers > 0 {
+			workerLooks[r.Repo] = true
+		}
 		for _, l := range r.Looks {
 			// A look that is due is a worker's. One that waits for a staging
 			// deploy asks for no eyes yet.
@@ -426,7 +429,10 @@ func Assess(m config.Machine, signals []config.Signal, now time.Time, res *probe
 }
 
 // AssessWith is Assess that knows which issues' eye checks a worker will do
-// on staging (by "owner/name#number"). Such a look is not asked of the owner.
+// on staging (by "owner/name#number"), and in which repositories a worker
+// does them (by "owner/name"). Such a look is not asked of the owner, and
+// neither is one of work that has not merged where a worker will do it: it
+// can only happen after the merge.
 func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *probe.Result, issues []backlog.Issue, workerLooks map[string]bool) MachineReport {
 	report := MachineReport{Name: m.Name, Host: m.Host, Probe: res, Attention: []string{}, Now: now}
 	attend := func(format string, args ...any) {
@@ -468,7 +474,12 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 			State: Queued, Asks: backlog.Effects(issue, signals, now), Rework: backlog.Rework(issue, signals),
 			Decided: backlog.Decided(issue, signals)}
 		workerLook := workerLooks[issueKey(issue.Repo, issue.Number)]
-		if workerLook {
+		// A look a worker does waits for the merge: it is nobody's yet.
+		afterMerge := false
+		if eyes, pr, _, _ := backlog.EyeCheck(issue, signals); eyes == backlog.EyesAsked && workerLooks[issue.Repo] {
+			_, afterMerge = issue.OpenPRs[pr]
+		}
+		if workerLook || afterMerge {
 			st.Asks = slices.DeleteFunc(st.Asks, func(a backlog.Ask) bool { return a.Name == config.EyesSignal })
 		}
 		// A draft that says what it waits for is not the owner's to review.

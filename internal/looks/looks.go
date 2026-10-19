@@ -40,6 +40,10 @@ type Look struct {
 	Since time.Time `json:"since"`
 	// Note is what stopped a blocked look, in the worker's words.
 	Note string `json:"note,omitempty"`
+	// Production is set when production already served the pull request
+	// before anyone looked: the look is after the fact, and a failure is a
+	// defect in production.
+	Production bool `json:"production,omitempty"`
 }
 
 // Report is what one repository has merged since production and what of it
@@ -133,11 +137,18 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 			report.Since, report.SinceProduction = deployed, true
 		}
 	}
-	merged, err := r.GitHub.MergedSince(ctx, repo.Name, report.Since)
+	// A look still asked for of work production already serves is owed
+	// too: it is read back to the look-back limit.
+	start := r.Now().Add(-repo.LookBackOrDefault())
+	merged, err := r.GitHub.MergedSince(ctx, repo.Name, start)
 	if err != nil {
 		return report, err
 	}
-	report.Merged = len(merged)
+	for _, p := range merged {
+		if p.MergedAt.After(report.Since) {
+			report.Merged++
+		}
+	}
 
 	var issues []backlog.Issue
 	for _, i := range open {
@@ -149,7 +160,7 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 		if src.Repo != repo.Name {
 			continue
 		}
-		closed, err := r.GitHub.ClosedSince(ctx, src, report.Since)
+		closed, err := r.GitHub.ClosedSince(ctx, src, start)
 		if err != nil {
 			return report, err
 		}
@@ -162,8 +173,25 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 		if state == "" || !isMerged || seen[issue.Number] {
 			continue
 		}
+		inProduction := false
+		if !pull.MergedAt.After(report.Since) {
+			// Before the window: only a look nobody has done is still owed,
+			// and only when production serves the work.
+			if state != backlog.EyesAsked || report.Production == "" {
+				continue
+			}
+			if report.Unchecked != "" {
+				continue
+			}
+			if inProduction, err = r.contains(ctx, repo.Name, report.Production, pull.Commit); err != nil {
+				report.Unchecked = err.Error()
+			}
+			if !inProduction {
+				continue
+			}
+		}
 		seen[issue.Number] = true
-		look := Look{Repo: repo.Name, Number: issue.Number, Title: issue.Title, URL: issue.URL, PR: pr, State: Failed, Since: since}
+		look := Look{Repo: repo.Name, Number: issue.Number, Title: issue.Title, URL: issue.URL, PR: pr, State: Failed, Since: since, Production: inProduction}
 		if state == backlog.EyesPassed {
 			look.State = Passed
 			report.Passed = append(report.Passed, look)
