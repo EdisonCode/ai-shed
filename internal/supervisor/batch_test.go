@@ -17,15 +17,27 @@ type fakeBatcher struct {
 	conflict int
 	next     int
 	built    [][]int
+	rebuilt  []backlog.Rebuilt
 	closed   []int
 	open     []backlog.Batch
+	// moved is what the base has that a batch does not; batchFiles what
+	// every batch changes.
+	moved      backlog.Comparison
+	batchFiles []string
 }
 
 func (f *fakeBatcher) RequiresUpToDate(context.Context, string, string) (bool, error) {
 	return f.strict, nil
 }
 
-func (f *fakeBatcher) BuildBatch(_ context.Context, _, _, _ string, cars []backlog.Car) (int, error) {
+func (f *fakeBatcher) Compare(_ context.Context, _, from, _ string) (backlog.Comparison, error) {
+	if from == "main" {
+		return backlog.Comparison{Files: f.batchFiles}, nil
+	}
+	return f.moved, nil
+}
+
+func (f *fakeBatcher) BuildBatch(_ context.Context, _, _, _ string, cars []backlog.Car, rebuilt backlog.Rebuilt) (int, error) {
 	var prs []int
 	for _, c := range cars {
 		if c.PR == f.conflict {
@@ -34,6 +46,7 @@ func (f *fakeBatcher) BuildBatch(_ context.Context, _, _, _ string, cars []backl
 		prs = append(prs, c.PR)
 	}
 	f.built = append(f.built, prs)
+	f.rebuilt = append(f.rebuilt, rebuilt)
 	f.next++
 	return 100 + f.next, nil
 }
@@ -237,17 +250,90 @@ func TestAPullRequestWhoseHeadMovesLeavesTheBatchAndTheBatchIsBuiltAgain(t *test
 	}
 }
 
-func TestABatchWhoseBaseMovedIsBuiltAgain(t *testing.T) {
+func TestABatchWhoseBaseMovedInItsFilesIsBuiltAgainAndCountsIt(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	train, batcher := withBatches(t, f, config.Verify{}, 12)
+	batcher.batchFiles = []string{"export.go", "export_test.go"}
+	batcher.moved = backlog.Comparison{Commits: []string{"d00d1230000", "d00d4560000"}, Files: []string{"export.go"}}
 	f.ride(t, train)
 	moved := batchGreen
 	moved.Behind = 2
 	train.heads[101] = moved
 	f.ride(t, train)
-	f.ride(t, train)
+	f.ride(t, train) // #102
 	if len(train.merged) != 0 || len(batcher.built) != 2 {
 		t.Fatalf("merged = %q, built = %v: want it tested again on the new base", train.merged, batcher.built)
+	}
+	if want := (backlog.Rebuilt{Times: 1, Green: 1, Last: "d00d456"}); batcher.rebuilt[1] != want {
+		t.Fatalf("rebuilt = %+v, want %+v", batcher.rebuilt[1], want)
+	}
+	running := batchRunning
+	running.Behind = 1
+	train.heads[102] = running
+	f.ride(t, train)
+	f.ride(t, train) // #103
+	if want := (backlog.Rebuilt{Times: 2, Green: 1, Last: "d00d456"}); len(batcher.rebuilt) != 3 || batcher.rebuilt[2] != want {
+		t.Fatalf("rebuilt = %+v, want the third batch to say %+v", batcher.rebuilt, want)
+	}
+	train.heads[103] = batchGreen
+	f.ride(t, train)
+	f.ride(t, train)
+	if len(batcher.built) != 3 || len(train.merged) != 1 {
+		t.Fatalf("built = %v, merged = %q: want the third batch merged", batcher.built, train.merged)
+	}
+}
+
+func TestABatchWhoseBaseMovedApartFromItsFilesMergesWhenGreen(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{}, 12, 13)
+	batcher.batchFiles = []string{"export.go"}
+	batcher.moved = backlog.Comparison{Commits: []string{"d00d1230000"}, Files: []string{"README.md", "billing.go"}}
+	f.ride(t, train)
+	moved := batchRunning
+	moved.Behind = 1
+	train.heads[101] = moved
+	f.ride(t, train)
+	moved.Pending = false
+	train.heads[101] = moved
+	f.ride(t, train)
+	if len(batcher.built) != 1 || !slices.Equal(train.merged, []string{"#41 merge at c0ffee41", "#42 merge at c0ffee42"}) {
+		t.Fatalf("built = %v, merged = %q: want the batch merged, the base's commits touching none of its files", batcher.built, train.merged)
+	}
+}
+
+func TestABatchIsBuiltAgainWhenTheBaseMovedByMoreThanGitHubLists(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{}, 12)
+	batcher.batchFiles = []string{"export.go"}
+	batcher.moved = backlog.Comparison{Commits: []string{"d00d1230000"}, Files: []string{"vendor/a.go"}, Partial: true}
+	f.ride(t, train)
+	moved := batchGreen
+	moved.Behind = 1
+	train.heads[101] = moved
+	f.ride(t, train)
+	if len(train.merged) != 0 || !slices.Equal(batcher.closed, []int{101}) {
+		t.Fatalf("merged = %q, closed = %v: a base change too large to list may touch the batch's files", train.merged, batcher.closed)
+	}
+}
+
+func TestARunningBatchFinishesBeforeANewlyVerifiedPullRequestBoards(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{}, 12)
+	f.ride(t, train) // #101: #41
+	train.heads[101] = batchRunning
+	built(t, f, 13)
+	f.lister.issues = append(f.lister.issues, verifiedAs(13, 42))
+	train.heads[42] = headAt(42)
+	f.ride(t, train)
+	f.ride(t, train)
+	if len(batcher.built) != 1 || len(batcher.closed) != 0 {
+		t.Fatalf("built = %v, closed = %v: the running batch was thrown away for a newcomer", batcher.built, batcher.closed)
+	}
+	train.heads[101] = batchGreen
+	f.ride(t, train)
+	f.ride(t, train) // #102: #42
+	if !slices.Equal(train.merged, []string{"#41 merge at c0ffee41"}) || len(batcher.built) != 2 || !slices.Equal(batcher.built[1], []int{42}) {
+		t.Fatalf("merged = %q, built = %v: want #41 merged, then #42 in the next batch", train.merged, batcher.built)
 	}
 }
 

@@ -144,8 +144,20 @@ merge that draft yourself.
   status` shows it as `re-verify`. The verifier is told the head it passed
   before, and judges only what changed since when that touches only tests
   or docs.
-- **A batch whose base moved** is built again, so that what merges is what
-  was tested.
+- **A batch whose base moved** under it (something merged to the base
+  branch outside the train) goes on when the new base commits touch none of
+  the files the batch changes: they cannot change what it tested, and it
+  merges when it is green. When they touch its files, or are too many for
+  GitHub to list, the batch is built again on the new base, its pull
+  requests together, so that what merges is what was tested. A running
+  batch is never thrown away for a pull request verified while it runs:
+  that one waits for the next batch.
+- **One merger per base.** Each rebuild is counted on the batch, and
+  `shed status` shows it (`built again 2 time(s) for the base moving outside
+  the train`). From the second, the batch waits on you in `shed status` and
+  the digest, with the base commit that moved it last: as long as people or
+  other sessions merge to the base in the batch's files, a slow suite can
+  keep it from ever landing. Route those merges through the train.
 - **`merge_train_alone`** paths, named as in `areas`: a pull request that
   touches one is tested in a batch of its own.
 

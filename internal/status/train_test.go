@@ -10,6 +10,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/looks"
 )
 
 func withTrain() *config.Config {
@@ -102,5 +103,38 @@ func TestTheReleaseStateSaysABatchWhoseEveryCheckWasSkippedWasNotTested(t *testi
 	want := "batch PR #101 of PR #41 (#12) 25m, every check was skipped: its CI did not run on it"
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+}
+
+func TestABatchTheBaseKeepsMovingUnderWaitsOnTheOwner(t *testing.T) {
+	cfg := withTrain()
+	cfg.Repos[0].Verify.MergeTrain = config.TrainBatch
+	batch := backlog.Batch{PR: 103, Created: time.Now().Add(-5 * time.Minute), Cars: []backlog.Car{{Issue: 12, PR: 41}}, Rebuilt: backlog.Rebuilt{Times: 1, Green: 1, Last: "d00d123"}}
+	batches := fakeBatches{batches: []backlog.Batch{batch}, heads: map[int]backlog.Head{103: {Open: true, Checks: 2, Pending: true}}}
+	c := Collector{Lister: fakeLister{}, Looks: &fakeLooks{}, Batches: batches}
+	repos := c.CollectRepos(context.Background(), cfg)
+	if got := repos[0].Attention(); len(got) != 0 {
+		t.Fatalf("attention = %q after one rebuild, want none yet", got)
+	}
+	var out bytes.Buffer
+	Render(&out, nil, repos)
+	if want := "checks running, built again 1 time(s) for the base moving outside the train"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+	batches.batches[0].Rebuilt.Times = 2
+	c.Batches = batches
+	got := c.CollectRepos(context.Background(), cfg)[0].Attention()
+	if len(got) != 1 || !strings.Contains(got[0], "batch PR #103 waits on you (base moved outside the train): built again 2 time(s), 1 of them after its checks passed") || !strings.Contains(got[0], "last d00d123") {
+		t.Fatalf("attention = %q, want the batch the base keeps moving under named with its cause", got)
+	}
+}
+
+func TestTheDigestNamesABatchTheBaseKeepsMovingUnder(t *testing.T) {
+	train := &Train{Batches: []TrainBatch{{PR: 103, Cars: []TrainCar{{Issue: 12, PR: 41}}, Rebuilt: backlog.Rebuilt{Times: 3, Green: 2, Last: "d00d123"}}}}
+	d := Digest{Since: now.Add(-24 * time.Hour), Now: now, Report: Report{Repos: []RepoReport{{Report: looks.Report{Repo: "org/app"}, Train: train}}}}
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	if want := "! merge train org/app: batch PR #103 waits on you (base moved outside the train): built again 3 time(s), 2 of them after its checks passed"; !strings.Contains(out.String(), want) {
+		t.Fatalf("digest lacks %q:\n%s", want, out.String())
 	}
 }

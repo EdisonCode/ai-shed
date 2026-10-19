@@ -33,7 +33,15 @@ type TrainBatch struct {
 	// Checks says where the batch's checks stand: running, passed, or what
 	// failed.
 	Checks string `json:"checks"`
+	// Rebuilt counts the batches of these pull requests before it that
+	// the base branch moved under from outside the train.
+	Rebuilt backlog.Rebuilt `json:"rebuilt,omitzero"`
 }
+
+// rebuiltTooOften is how often a batch is built again for the base moving
+// under it before the owner hears of it: the base has a merger besides the
+// train.
+const rebuiltTooOften = 2
 
 // BatchReader reads the open batches of a batch train, and where the checks
 // of each stand.
@@ -53,7 +61,7 @@ func readBatches(ctx context.Context, r BatchReader, repo string, t *Train) erro
 		if err != nil {
 			return err
 		}
-		tb := TrainBatch{PR: b.PR, Since: b.Created, Checks: checkWords(h)}
+		tb := TrainBatch{PR: b.PR, Since: b.Created, Checks: checkWords(h), Rebuilt: b.Rebuilt}
 		for _, c := range b.Cars {
 			tb.Cars = append(tb.Cars, TrainCar{Issue: c.Issue, PR: c.PR, Since: b.Created})
 		}
@@ -124,7 +132,11 @@ func renderTrain(w io.Writer, t *Train, now time.Time) {
 			batched[c.PR] = true
 			cars = append(cars, fmt.Sprintf("PR #%d (#%d)", c.PR, c.Issue))
 		}
-		parts = append(parts, fmt.Sprintf("batch PR #%d of %s %s, %s", b.PR, strings.Join(cars, ", "), Short(now.Sub(b.Since)), b.Checks))
+		words := fmt.Sprintf("batch PR #%d of %s %s, %s", b.PR, strings.Join(cars, ", "), Short(now.Sub(b.Since)), b.Checks)
+		if b.Rebuilt.Times > 0 {
+			words += fmt.Sprintf(", built again %d time(s) for the base moving outside the train", b.Rebuilt.Times)
+		}
+		parts = append(parts, words)
 	}
 	for _, c := range t.InHand {
 		if batched[c.PR] {
@@ -144,4 +156,21 @@ func renderTrain(w io.Writer, t *Train, now time.Time) {
 		parts = append(parts, "next "+strings.Join(next, ", "))
 	}
 	fmt.Fprintf(w, "  merge train: %s\n", strings.Join(parts, "; "))
+}
+
+// trainAttention says what of the train needs the owner: a batch the base
+// moved under from outside the train so often that it may never land.
+func trainAttention(repo string, t *Train) []string {
+	if t == nil {
+		return nil
+	}
+	var attention []string
+	for _, b := range t.Batches {
+		if b.Rebuilt.Times < rebuiltTooOften {
+			continue
+		}
+		attention = append(attention, fmt.Sprintf("merge train %s: batch PR #%d waits on you (base moved outside the train): built again %d time(s), %d of them after its checks passed, because something else merged to the base branch, last %s, in files the batch touches; merge through the train, or the batch may never land",
+			repo, b.PR, b.Rebuilt.Times, b.Rebuilt.Green, b.Rebuilt.Last))
+	}
+	return attention
 }

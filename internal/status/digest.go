@@ -300,6 +300,9 @@ func RenderDigest(w io.Writer, d Digest) {
 			}
 		}
 	}
+	for _, r := range d.Report.Repos {
+		other = append(other, trainAttention(r.Repo, r.Train)...)
+	}
 	other = append(other, d.Problems...)
 	if len(other) > 0 {
 		fmt.Fprintf(w, "\nAlso needs you: %d\n", len(other))
