@@ -133,6 +133,20 @@ func TestParsePRs(t *testing.T) {
 	}
 }
 
+func TestAPullRequestWhoseEveryCheckWasSkippedOrCancelledHasNoCI(t *testing.T) {
+	prs, err := parsePRs([]byte(`[
+		{"number": 1, "headRefOid": "c0ffee1", "mergeable": "MERGEABLE", "statusCheckRollup": [{"name": "test", "conclusion": "SKIPPED"}, {"name": "test", "conclusion": "CANCELLED"}]},
+		{"number": 2, "mergeable": "MERGEABLE", "statusCheckRollup": [{"name": "test", "conclusion": "SUCCESS"}, {"name": "docs", "conclusion": "SKIPPED"}]},
+		{"number": 3, "mergeable": "MERGEABLE", "statusCheckRollup": []}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prs[1].NoCI || prs[1].Head != "c0ffee1" || prs[2].NoCI || prs[3].NoCI {
+		t.Fatalf("no CI = %v, %v, %v (head %q), want only #1", prs[1].NoCI, prs[2].NoCI, prs[3].NoCI, prs[1].Head)
+	}
+}
+
 func TestOwnersAnswerAfterAHandBackSendsTheIssueBack(t *testing.T) {
 	const sentBack = "the owner answered in the issue (Owner ruling) after pull request #41 was handed back; read the answer and apply it; if it asks for no change, hand back again and say so"
 	laterHandBack := "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** nothing\n**Decisions needed:** none\nApplied Owner ruling 1."

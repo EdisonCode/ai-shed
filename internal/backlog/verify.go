@@ -105,7 +105,8 @@ func Verification(issue Issue, signals []config.Signal) VerificationState {
 	case open.Problem != "":
 		// A failed check is rework; no verifier looks at it.
 		return VerificationState{}
-	case open.Pending:
+	case open.Pending, open.NoCI:
+		// A head its CI skipped has passed nothing yet.
 		v.State = VerifyPending
 	default:
 		v.State = VerifyDue

@@ -43,6 +43,14 @@ func TestAVerificationWaitsForTheChecks(t *testing.T) {
 	}
 }
 
+func TestAHeadItsCIDidNotRunOnIsNotDueAVerifier(t *testing.T) {
+	i := verifying(handedBack)
+	i.OpenPRs[41] = PR{NoCI: true}
+	if v := Verification(i, config.DefaultSignals()); v.State != VerifyPending {
+		t.Fatalf("state = %q, want pending: nothing has passed on its head", v.State)
+	}
+}
+
 func TestTheVerifiersCommentPassesOrFailsTheLastHandBack(t *testing.T) {
 	passed := Verification(verifying(handedBack, "**Verified (high):** ran the suite, tried a refund of 0"), config.DefaultSignals())
 	if passed.State != VerifyPassed || passed.Tier != "high" {

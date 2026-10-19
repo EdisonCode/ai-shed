@@ -1518,3 +1518,13 @@ func TestAVerifiedPullRequestTakenOffTheTrainIsReworkNotTheOwnersReview(t *testi
 		}
 	}
 }
+
+func TestAPullRequestItsCISkippedShowsAsNoCIOnHead(t *testing.T) {
+	i := issue(12, "## Hand-back\n**PR:** #41 (ready)")
+	i.OpenPRs = map[int]backlog.PR{41: {NoCI: true}}
+	i.Verify = true
+	r := Assess(config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}, signals, now, healthy(), []backlog.Issue{i})
+	if st := r.Issues[0]; st.State != Verifying || !strings.HasPrefix(st.Held, "no CI on head: every check of pull request #41 was skipped or cancelled") {
+		t.Fatalf("issue = %+v", st)
+	}
+}

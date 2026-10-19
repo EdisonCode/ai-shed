@@ -57,6 +57,12 @@ type PR struct {
 	// AutoMerge is set when the pull request merges by itself once its
 	// checks pass, or waits in a merge queue.
 	AutoMerge bool
+	// NoCI is set when checks were reported on its head and every one was
+	// skipped or cancelled: its CI did not run on it, as when its last
+	// commit came while it was a draft that CI skips.
+	NoCI bool
+	// Head is the pull request's head commit.
+	Head string
 }
 
 type Label struct {
@@ -286,7 +292,7 @@ func (GH) Claim(ctx context.Context, repo string, number int, add, remove string
 
 func openPRs(ctx context.Context, repo string) (map[int]PR, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000",
-		"--json", "number,mergeable,isDraft,statusCheckRollup,autoMergeRequest")
+		"--json", "number,headRefOid,mergeable,isDraft,statusCheckRollup,autoMergeRequest")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -310,6 +316,7 @@ type check struct {
 func parsePRs(data []byte) (map[int]PR, error) {
 	var prs []struct {
 		Number    int       `json:"number"`
+		Head      string    `json:"headRefOid"`
 		Mergeable string    `json:"mergeable"`
 		Draft     bool      `json:"isDraft"`
 		Checks    []check   `json:"statusCheckRollup"`
@@ -320,7 +327,7 @@ func parsePRs(data []byte) (map[int]PR, error) {
 	}
 	open := make(map[int]PR, len(prs))
 	for _, pr := range prs {
-		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks), Draft: pr.Draft, Pending: pending(pr.Checks), AutoMerge: pr.AutoMerge != nil}
+		open[pr.Number] = PR{Problem: prProblem(pr.Mergeable, pr.Checks), Draft: pr.Draft, Pending: pending(pr.Checks), AutoMerge: pr.AutoMerge != nil, NoCI: noCI(pr.Checks), Head: pr.Head}
 	}
 	return open, nil
 }
@@ -334,6 +341,32 @@ func pending(checks []check) bool {
 		}
 	}
 	return false
+}
+
+// noCI reports whether checks were reported and every one was skipped or
+// cancelled: nothing ran.
+func noCI(checks []check) bool {
+	for _, c := range checks {
+		if c.Conclusion != "SKIPPED" && c.Conclusion != "CANCELLED" {
+			return false
+		}
+	}
+	return len(checks) > 0
+}
+
+// RestartCI starts the pull request's CI on its head again: it is made a
+// draft and ready again, which fires the ready_for_review event that CI
+// built to skip drafts runs on.
+func (GH) RestartCI(ctx context.Context, repo string, pr int) error {
+	for _, args := range [][]string{{"--undo"}, nil} {
+		cmd := exec.CommandContext(ctx, "gh", append([]string{"pr", "ready", strconv.Itoa(pr), "--repo", repo}, args...)...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("gh pr ready %s#%d %s: %w: %s", repo, pr, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		}
+	}
+	return nil
 }
 
 var failed = map[string]bool{"FAILURE": true, "TIMED_OUT": true, "STARTUP_FAILURE": true, "ERROR": true}
