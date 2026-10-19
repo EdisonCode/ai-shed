@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
+	"github.com/edisoncode/ai-shed/internal/agent"
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/deploy"
 	"github.com/edisoncode/ai-shed/internal/probe"
@@ -18,7 +20,7 @@ import (
 	"github.com/edisoncode/ai-shed/internal/supervisor"
 )
 
-// loginReport is what `shed login -here -json` prints on a machine.
+// loginReport is what `shed login -here` prints on a machine, as JSON.
 type loginReport struct {
 	Version string `json:"version"`
 	// URL is set by the first step: where the owner signs in.
@@ -43,10 +45,7 @@ var (
 // The owner opens it, signs in, and gives the code the page shows to
 // `shed login -code <code> <machine>`.
 func cmdLogin(args []string) int {
-	fs := flag.NewFlagSet("login", flag.ContinueOnError)
-	code := fs.String("code", "", "the code the sign-in page gave")
-	here := fs.Bool("here", false, "run the step on this machine (shed runs this over ssh)")
-	machine := fs.String("machine", "", "with -here: this machine's name in the fleet file")
+	fs, code, here, machine := loginFlags()
 	cfg, path, err := loadConfig(fs, args)
 	if err != nil {
 		return fail(err)
@@ -66,10 +65,10 @@ func cmdLogin(args []string) int {
 	if !ok {
 		return fail(fmt.Errorf("machine %q is not in %s", fs.Arg(0), path))
 	}
-	command := `"$HOME/` + deploy.RemoteBinary + `" login -here -json`
-	if *code != "" {
+	command := `"$HOME/` + deploy.RemoteBinary + `"`
+	for _, arg := range remoteLoginArgs(*code) {
 		// The code was checked: it has no character a shell reads.
-		command += " -code '" + *code + "'"
+		command += " '" + arg + "'"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -110,6 +109,26 @@ func cmdLogin(args []string) int {
 	return exitOK
 }
 
+// loginFlags are the flags of `shed login`, on the owner's machine and on
+// the machine it signs in.
+func loginFlags() (fs *flag.FlagSet, code *string, here *bool, machine *string) {
+	fs = flag.NewFlagSet("login", flag.ContinueOnError)
+	code = fs.String("code", "", "the code the sign-in page gave")
+	here = fs.Bool("here", false, "run the step on this machine (shed runs this over ssh)")
+	machine = fs.String("machine", "", "with -here: this machine's name in the fleet file")
+	return fs, code, here, machine
+}
+
+// remoteLoginArgs are the arguments the owner's machine runs `shed` with on
+// the machine it signs in: one step of the login, which reports as JSON.
+func remoteLoginArgs(code string) []string {
+	args := []string{"login", "-here"}
+	if code != "" {
+		args = append(args, "-code", code)
+	}
+	return args
+}
+
 // loginHere runs one step of the login on this machine and prints the
 // report as JSON. A step that fails says so in the report, so the owner's
 // machine can show why.
@@ -127,6 +146,21 @@ func loginHere(cfg *config.Config, path, machine, code string) int {
 	return exitOK
 }
 
+// loginStart is the command that starts the tool for the login, and the
+// folder it starts in: a worker's, which the tool already trusts, so it
+// does not stop to ask. With no worker, the home folder.
+func loginStart(m config.Machine, home string) (command, dir string) {
+	if len(m.Workers) == 0 {
+		return config.DefaultWorkerCommand, home
+	}
+	w := m.Workers[0]
+	dir = w.Dir
+	if rest, ok := strings.CutPrefix(dir, "~/"); ok {
+		dir = filepath.Join(home, rest)
+	}
+	return w.CommandOrDefault(), dir
+}
+
 func loginStep(cfg *config.Config, path, machine, code string, report *loginReport) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -140,13 +174,13 @@ func loginStep(cfg *config.Config, path, machine, code string, report *loginRepo
 	if !ok {
 		return fmt.Errorf("machine %q is not in %s", name, path)
 	}
+	// Over ssh the shell may not have run the machine's init line, and tmux
+	// and the tool are on the PATH it sets.
+	agent.AdoptPath(m)
 	term := supervisor.Tmux{}
 	if code == "" {
-		command := config.DefaultWorkerCommand
-		if len(m.Workers) > 0 {
-			command = m.Workers[0].CommandOrDefault()
-		}
-		report.URL, err = supervisor.StartLogin(term, command, home, time.Now, time.Sleep)
+		command, dir := loginStart(m, home)
+		report.URL, err = supervisor.StartLogin(term, command, dir, time.Now, time.Sleep)
 		return err
 	}
 	if _, err := supervisor.FinishLogin(term, code, time.Now, time.Sleep); err != nil {

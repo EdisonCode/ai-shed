@@ -1790,8 +1790,12 @@ shed login -code 'aBc123...#xyz' mac-mini
 ```
 
 The first step starts the machine's tool in a throwaway `login-account`
-window, types `/login`, takes the subscription login, and prints the URL as
-one line. Open it, sign in with the account the machine should use, and give
+window, in the folder of the machine's first worker (one the tool already
+trusts, so it does not stop to ask), with the PATH the machine's `init`
+sets. It types `/login`, takes the subscription login, and prints the URL as
+one line. If the tool asks whether to trust the folder anyway, the step
+stops and says so instead of answering: start the tool there once and trust
+it. Open it, sign in with the account the machine should use, and give
 the code the page shows to the second step, which types it into that window.
 It then prints the account the machine is logged in as, ends the usage-limit
 holds of its workers (as `shed resume` does), and types `/remote-control`

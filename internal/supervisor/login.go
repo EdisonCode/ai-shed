@@ -30,6 +30,7 @@ var (
 	loginMethodRE = regexp.MustCompile(`(?i)login method`)
 	loginOKRE     = regexp.MustCompile(`(?i)login successful|logged in as|successfully logged in`)
 	loginFailRE   = regexp.MustCompile(`(?i)invalid|error|failed|expired|denied`)
+	trustRE       = regexp.MustCompile(`(?i)trust this folder|do you trust`)
 	loginCodeRE   = regexp.MustCompile(`^[A-Za-z0-9#._~-]+$`)
 )
 
@@ -54,6 +55,12 @@ func StartLogin(term LoginTerminal, command, dir string, now func() time.Time, s
 		if screen, err = typeAndRead(term, text, now, sleep); err != nil {
 			term.Close(LoginWindow)
 			return "", err
+		}
+		// Typed into the question, /login would answer it: the tool is
+		// stopped where the owner's choice is needed, not shed's.
+		if trustRE.MatchString(screen) {
+			term.Close(LoginWindow)
+			return "", fmt.Errorf("the tool asks whether to trust %s, so it was not started there for the login: start it there once and trust the folder, or list a worker whose folder it trusts first. Its screen:\n%s", dir, indent(screen))
 		}
 	}
 	if loginMethodRE.MatchString(screen) {
