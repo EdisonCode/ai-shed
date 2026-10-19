@@ -269,6 +269,14 @@ func (c Collector) collectRepo(parent context.Context, cfg *config.Config, repo 
 	}
 	if repo.Trains() {
 		report.Train = readTrain(open, cfg.Signals, report.Now, report.Lookers > 0, repo.Verify.MergeHigh)
+		if c.Batches != nil {
+			base, err := c.Batches.BaseChecks(ctx, repo.Name, "")
+			if err != nil {
+				report.Error = err.Error()
+				return report
+			}
+			report.Train.Base = &base
+		}
 		if repo.Batches() && c.Batches != nil {
 			if err := readBatches(ctx, c.Batches, repo.Name, report.Train); err != nil {
 				report.Error = err.Error()
@@ -299,7 +307,7 @@ func (r RepoReport) Attention() []string {
 	if r.Unchecked != "" {
 		attention = append(attention, "cannot tell which merged work staging serves, so none is counted as on staging: "+r.Unchecked)
 	}
-	attention = append(attention, trainAttention(r.Repo, r.Train)...)
+	attention = append(attention, trainAttention(r.Repo, r.Train, r.Now)...)
 	if due := r.count(looks.Due); due > 0 && r.Lookers == 0 {
 		attention = append(attention, fmt.Sprintf("%d eye check(s) are due on staging and no worker does eye checks: they are yours", due))
 	}

@@ -1501,3 +1501,20 @@ func TestThePromotionBriefListsTheHighRiskMergesShedQueuedApart(t *testing.T) {
 		t.Fatalf("want the high-risk merge in its own group, first:\n%s", out.String())
 	}
 }
+
+func TestAVerifiedPullRequestTakenOffTheTrainIsReworkNotTheOwnersReview(t *testing.T) {
+	i := issue(12, "## Hand-back\n**PR:** #41 (ready)", "Verified (low): ran the tests",
+		backlog.QueuedPhrase+" pull request #41, verified at low risk.",
+		backlog.OffTrainPhrase+" pull request #41, at c0ffee4, tested by itself on the base branch in batch pull request #103, has a failed check (test). "+backlog.ReworkPhrase+", and boards again once its next hand-back is verified.")
+	i.OpenPRs = map[int]backlog.PR{41: {}}
+	i.Verify = true
+	r := Assess(config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}, signals, now, healthy(), []backlog.Issue{i})
+	if st := r.Issues[0]; st.State != Rework || !strings.Contains(st.Rework, "off the merge train") {
+		t.Fatalf("issue = %+v, want rework with the take-off named", st)
+	}
+	for _, a := range r.Attention {
+		if strings.Contains(a, "waits on you") {
+			t.Fatalf("attention %q: a pull request off the train is not the owner's", a)
+		}
+	}
+}

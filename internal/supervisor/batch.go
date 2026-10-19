@@ -49,6 +49,8 @@ type batchTrain struct {
 	// apart is how many commits the base had moved under the batch in hand
 	// when they were found to touch none of its files; 0 for not yet.
 	apart int
+	// red is the base commit last found red, so that it is told once.
+	red string
 	// next is when the train moves again.
 	next time.Time
 	// looked is set once the train looked on GitHub for a batch and pull
@@ -283,6 +285,10 @@ func (bt *batchTrain) group(size int) []batchCar {
 // buildBatch opens the next batch as a draft pull request.
 func (s *Supervisor) buildBatch(ctx context.Context, repo config.Repo, bt *batchTrain) {
 	group := bt.group(repo.Verify.BatchSizeOrDefault())
+	if s.baseRed(ctx, repo.Name, group[0].base, &bt.red) {
+		// Every batch would fail on the base's own red check.
+		return
+	}
 	var cars []backlog.Car
 	for _, c := range group {
 		cars = append(cars, c.Car)
@@ -365,6 +371,20 @@ func (s *Supervisor) driveBatch(ctx context.Context, repo config.Repo, bt *batch
 		// tested: it goes on, and merges when it is green.
 		s.Logf("merge train %s: the base moved under batch #%d outside the train, %d commit(s) to %s touching none of its files; it goes on", repo.Name, bt.draft, h.Behind, short(last))
 		bt.apart = h.Behind
+	}
+	if h.Problem != "" {
+		explains, err := s.baseExplains(ctx, repo.Name, &bt.red, h)
+		if err != nil {
+			s.Logf("merge train %s: read the checks of %s: %v", repo.Name, h.Base, err)
+			return
+		}
+		if explains {
+			// The base is red on the same checks: the batch's pull requests
+			// are not to blame. They stay on the train, and the next batch
+			// is built once the base is green.
+			s.dropBatch(ctx, repo.Name, bt)
+			return
+		}
 	}
 	switch {
 	case h.Problem != "" && bt.testing == 1:

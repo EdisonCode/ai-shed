@@ -301,7 +301,7 @@ func RenderDigest(w io.Writer, d Digest) {
 		}
 	}
 	for _, r := range d.Report.Repos {
-		other = append(other, trainAttention(r.Repo, r.Train)...)
+		other = append(other, trainAttention(r.Repo, r.Train, d.Now)...)
 	}
 	other = append(other, d.Problems...)
 	if len(other) > 0 {

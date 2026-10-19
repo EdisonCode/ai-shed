@@ -17,6 +17,12 @@ type fakeTrain struct {
 	comments []string
 	updated  []string
 	merged   []string
+	// base is where the base branch's checks stand.
+	base backlog.BaseState
+}
+
+func (f *fakeTrain) BaseChecks(context.Context, string, string) (backlog.BaseState, error) {
+	return f.base, nil
 }
 
 func (f *fakeTrain) ReadHead(_ context.Context, _ string, pr int) (backlog.Head, error) {
@@ -166,5 +172,42 @@ func TestAPullRequestAnotherMachinePutOnTheTrainLatelyHoldsItBack(t *testing.T) 
 	f.step(t)
 	if len(train.comments) != 1 {
 		t.Fatalf("comments = %q: the train does not wait for a machine that is gone", train.comments)
+	}
+}
+
+func TestAPullRequestRedOnlyWhereTheBaseIsRedStaysInHandAndIsTestedAgainOnTheFix(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, _ := withTrain(t, f, "")
+	f.lister.issues = []backlog.Issue{boarded()}
+	red := redOnHead
+	red.Failed = []string{"test"}
+	train.heads[41] = red
+	train.base = backlog.BaseState{Branch: "main", SHA: "ba5e1", Failed: []string{"test"}}
+	f.step(t)
+	f.step(t)
+	if len(train.comments) != 0 || len(train.merged) != 0 {
+		t.Fatalf("comments = %q, merged = %q: want #41 kept in hand while the base is red", train.comments, train.merged)
+	}
+	// The base gets its fix and goes green; #41 is now behind it.
+	train.base = backlog.BaseState{Branch: "main", SHA: "f1xed"}
+	red.Behind = 1
+	train.heads[41] = red
+	f.step(t)
+	if len(train.comments) != 0 || !slices.Equal(train.updated, []string{"#41 rebase=false"}) {
+		t.Fatalf("comments = %q, updated = %q: want #41 brought up to date with the fix, not taken off", train.comments, train.updated)
+	}
+}
+
+func TestAPullRequestRedOnACheckTheBaseIsGreenOnIsTakenOff(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, _ := withTrain(t, f, "")
+	f.lister.issues = []backlog.Issue{boarded()}
+	red := redOnHead
+	red.Failed = []string{"test", "lint"}
+	train.heads[41] = red
+	train.base = backlog.BaseState{Branch: "main", SHA: "ba5e1", Failed: []string{"test"}}
+	f.step(t)
+	if len(train.comments) != 1 || !strings.HasPrefix(train.comments[0], "#12 "+backlog.OffTrainPhrase) {
+		t.Fatalf("comments = %q: lint fails on #41 alone, want it taken off", train.comments)
 	}
 }

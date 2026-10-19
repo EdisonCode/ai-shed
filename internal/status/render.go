@@ -22,6 +22,12 @@ const workerSession = "shed"
 func Render(w io.Writer, reports []MachineReport, repos []RepoReport) {
 	markSharedAccounts(reports)
 	total := 0
+	// A red base stops every merge on the train: it comes first.
+	for _, r := range repos {
+		if alert := baseAlert(r.Repo, r.Train, r.Now); alert != "" {
+			fmt.Fprintf(w, "! %s\n\n", alert)
+		}
+	}
 	for _, r := range reports {
 		renderMachine(w, r)
 		total += len(r.Attention)
@@ -93,7 +99,9 @@ func renderRepo(w io.Writer, r RepoReport) {
 		}
 	}
 	for _, a := range r.Attention() {
-		fmt.Fprintf(w, "  ! %s\n", a)
+		if a != baseAlert(r.Repo, r.Train, r.Now) {
+			fmt.Fprintf(w, "  ! %s\n", a)
+		}
 	}
 }
 

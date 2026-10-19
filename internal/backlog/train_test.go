@@ -1,6 +1,7 @@
 package backlog
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -99,5 +100,34 @@ func TestAPullRequestTakenOffForAFailureIsReworkWithTheReason(t *testing.T) {
 	}
 	if v := Verification(i, config.DefaultSignals()); v.State != VerifyPassed {
 		t.Fatalf("verification = %+v: a failure on the train is a builder's, not a verifier's", v)
+	}
+}
+
+func TestTheBaseBranchsFailedChecksAreReadWithWhenTheFirstFailed(t *testing.T) {
+	data := `{"name":"main","target":{"oid":"ba5e1","statusCheckRollup":{"contexts":{"nodes":[
+		{"name":"test","conclusion":"FAILURE","completedAt":"2026-10-19T10:30:00Z"},
+		{"name":"lint","conclusion":"SUCCESS","completedAt":"2026-10-19T10:00:00Z"},
+		{"context":"ci/legacy","state":"ERROR","createdAt":"2026-10-19T10:10:00Z"}]}}}}`
+	b, err := parseBase([]byte(data))
+	if err != nil || b.Branch != "main" || b.SHA != "ba5e1" || !slices.Equal(b.Failed, []string{"test", "ci/legacy"}) {
+		t.Fatalf("base = %+v, %v", b, err)
+	}
+	if want := time.Date(2026, 10, 19, 10, 10, 0, 0, time.UTC); !b.Since.Equal(want) || !b.Red() {
+		t.Fatalf("since = %s, red = %v, want red since %s", b.Since, b.Red(), want)
+	}
+	if b, _ := parseBase([]byte(`{"name":"main","target":{"oid":"ba5e1","statusCheckRollup":null}}`)); b.Red() {
+		t.Fatal("a base with no checks reads as red")
+	}
+}
+
+func TestARedBaseExplainsAHeadOnlyWhenEveryFailedCheckFailedOnItToo(t *testing.T) {
+	base := BaseState{Failed: []string{"test", "e2e"}}
+	for _, tc := range []struct {
+		failed []string
+		want   bool
+	}{{[]string{"test"}, true}, {[]string{"test", "e2e"}, true}, {[]string{"test", "lint"}, false}, {nil, false}} {
+		if got := base.Explains(Head{Failed: tc.failed}); got != tc.want {
+			t.Errorf("failed %v: explains = %v, want %v", tc.failed, got, tc.want)
+		}
 	}
 }
