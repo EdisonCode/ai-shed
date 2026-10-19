@@ -2,11 +2,13 @@ package backlog
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -140,6 +142,8 @@ type Head struct {
 	Pending bool
 	// Problem says why the pull request cannot merge at this head, as PR's.
 	Problem string
+	// Failed names the checks that failed on the head.
+	Failed []string
 }
 
 // Green reports whether every check of the head passed, and some did.
@@ -197,7 +201,107 @@ func parseHead(data []byte) (Head, string, error) {
 			skipped++
 		}
 	}
-	return Head{Open: pr.State == "OPEN", SHA: pr.SHA, Base: pr.Base, Checks: len(pr.Checks) - skipped, Skipped: skipped, Pending: pending(pr.Checks), Problem: prProblem(pr.Mergeable, pr.Checks)}, pr.Base, nil
+	return Head{Open: pr.State == "OPEN", SHA: pr.SHA, Base: pr.Base, Checks: len(pr.Checks) - skipped, Skipped: skipped, Pending: pending(pr.Checks),
+		Problem: prProblem(pr.Mergeable, pr.Checks), Failed: failedChecks(pr.Checks)}, pr.Base, nil
+}
+
+func failedChecks(checks []check) []string {
+	var names []string
+	for _, c := range checks {
+		if failed[c.Conclusion] || failed[c.State] {
+			names = append(names, cmp.Or(c.Name, c.Context))
+		}
+	}
+	return names
+}
+
+// BaseState is where the checks of a base branch's latest commit stand.
+type BaseState struct {
+	Branch string   `json:"branch"`
+	SHA    string   `json:"sha"`
+	Failed []string `json:"failed,omitempty"`
+	// Since is when the first of its failed checks finished.
+	Since time.Time `json:"since,omitzero"`
+}
+
+// Red reports whether a check failed on the base branch's latest commit.
+func (b BaseState) Red() bool {
+	return len(b.Failed) > 0
+}
+
+// Explains reports whether every check that failed on a head also failed
+// on the base branch: the base is red, and the head is not to blame.
+func (b BaseState) Explains(h Head) bool {
+	if len(h.Failed) == 0 {
+		return false
+	}
+	for _, name := range h.Failed {
+		if !slices.Contains(b.Failed, name) {
+			return false
+		}
+	}
+	return true
+}
+
+// BaseChecks reads the checks of the latest commit of the base branch; of
+// the repository's default branch when base is empty.
+func (GH) BaseChecks(ctx context.Context, repo, base string) (BaseState, error) {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		return BaseState{}, fmt.Errorf("repository %q is not owner/name", repo)
+	}
+	const commit = `name target { ... on Commit { oid statusCheckRollup { contexts(first: 100) { nodes {
+		... on CheckRun { name conclusion completedAt }
+		... on StatusContext { context state createdAt } } } } } }`
+	query := `query($owner: String!, $name: String!, $ref: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: $ref) { ` + commit + ` } } }`
+	args := []string{"api", "graphql", "-f", "owner=" + owner, "-f", "name=" + name, "-f", "ref=refs/heads/" + base, "--jq", ".data.repository.ref"}
+	if base == "" {
+		query = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { ` + commit + ` } } }`
+		args = []string{"api", "graphql", "-f", "owner=" + owner, "-f", "name=" + name, "--jq", ".data.repository.defaultBranchRef"}
+	}
+	out, err := gh(ctx, append(args, "-f", "query="+query)...)
+	if err != nil {
+		return BaseState{}, err
+	}
+	return parseBase(out)
+}
+
+func parseBase(data []byte) (BaseState, error) {
+	var ref struct {
+		Name   string `json:"name"`
+		Target struct {
+			OID    string `json:"oid"`
+			Rollup *struct {
+				Contexts struct {
+					Nodes []struct {
+						check
+						CompletedAt time.Time `json:"completedAt"`
+						CreatedAt   time.Time `json:"createdAt"`
+					} `json:"nodes"`
+				} `json:"contexts"`
+			} `json:"statusCheckRollup"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(data, &ref); err != nil {
+		return BaseState{}, fmt.Errorf("parse the base branch's checks: %w", err)
+	}
+	if ref.Name == "" {
+		return BaseState{}, fmt.Errorf("no base branch in %s", data)
+	}
+	b := BaseState{Branch: ref.Name, SHA: ref.Target.OID}
+	if ref.Target.Rollup == nil {
+		return b, nil
+	}
+	for _, n := range ref.Target.Rollup.Contexts.Nodes {
+		if !failed[n.Conclusion] && !failed[n.State] {
+			continue
+		}
+		b.Failed = append(b.Failed, cmp.Or(n.Name, n.Context))
+		if at := cmp.Or(n.CompletedAt, n.CreatedAt); !at.IsZero() && (b.Since.IsZero() || at.Before(b.Since)) {
+			b.Since = at
+		}
+	}
+	return b, nil
 }
 
 // UpdateBranch brings the pull request up to date with its base branch: a

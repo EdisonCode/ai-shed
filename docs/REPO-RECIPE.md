@@ -152,6 +152,14 @@ merge that draft yourself.
   requests together, so that what merges is what was tested. A running
   batch is never thrown away for a pull request verified while it runs:
   that one waits for the next batch.
+- **A red base branch** is not the pull requests' fault. Before shed takes
+  anything off, it reads the checks of the base branch's latest commit.
+  When every check that failed also fails there, nothing comes off and the
+  batch is not split: the train holds, builds nothing while the base is
+  red, and goes on once it is green. `shed status` shows `merge train:
+  held: main is red for 12m (test)`, and after 30 minutes it puts a `!`
+  line at the top: every merge waits on that fix. The one-at-a-time train
+  holds the same way, and brings its pull request up to date with the fix.
 - **One merger per base.** Each rebuild is counted on the batch, and
   `shed status` shows it (`built again 2 time(s) for the base moving outside
   the train`). From the second, the batch waits on you in `shed status` and

@@ -22,7 +22,14 @@ type Train struct {
 	// Batches are the open batches of a batch train: one, unless two
 	// machines each opened one at once.
 	Batches []TrainBatch `json:"batches,omitempty"`
+	// Base is where the checks of the base branch's latest commit stand;
+	// nil when they were not read. While it is red the train holds.
+	Base *backlog.BaseState `json:"base,omitempty"`
 }
+
+// baseRedTooLong is how long the base branch is red before the owner hears
+// of it at the top of status: every merge on the train waits on it.
+const baseRedTooLong = 30 * time.Minute
 
 // TrainBatch is a batch of a batch train: a draft pull request that tests
 // several pull requests together.
@@ -43,11 +50,12 @@ type TrainBatch struct {
 // train.
 const rebuiltTooOften = 2
 
-// BatchReader reads the open batches of a batch train, and where the checks
-// of each stand.
+// BatchReader reads the open batches of a batch train, where the checks of
+// each stand, and where the base branch's stand.
 type BatchReader interface {
 	Batches(ctx context.Context, repo string) ([]backlog.Batch, error)
 	ReadHead(ctx context.Context, repo string, pr int) (backlog.Head, error)
+	BaseChecks(ctx context.Context, repo, base string) (backlog.BaseState, error)
 }
 
 // readBatches reads the repository's open batches into the train.
@@ -120,11 +128,14 @@ func readTrain(open []backlog.Issue, signals []config.Signal, now time.Time, loo
 
 // renderTrain writes the pull request in hand and the ones next.
 func renderTrain(w io.Writer, t *Train, now time.Time) {
-	if len(t.InHand) == 0 && len(t.Next) == 0 && len(t.Batches) == 0 {
+	var parts []string
+	if b := t.Base; b != nil && b.Red() {
+		parts = append(parts, fmt.Sprintf("held: %s is red%s (%s)", b.Branch, redFor(b, now), strings.Join(b.Failed, ", ")))
+	}
+	if len(parts) == 0 && len(t.InHand) == 0 && len(t.Next) == 0 && len(t.Batches) == 0 {
 		fmt.Fprintln(w, "  merge train: empty")
 		return
 	}
-	var parts []string
 	batched := map[int]bool{}
 	for _, b := range t.Batches {
 		var cars []string
@@ -158,13 +169,33 @@ func renderTrain(w io.Writer, t *Train, now time.Time) {
 	fmt.Fprintf(w, "  merge train: %s\n", strings.Join(parts, "; "))
 }
 
-// trainAttention says what of the train needs the owner: a batch the base
-// moved under from outside the train so often that it may never land.
-func trainAttention(repo string, t *Train) []string {
+func redFor(b *backlog.BaseState, now time.Time) string {
+	if b.Since.IsZero() {
+		return ""
+	}
+	return " for " + Short(now.Sub(b.Since))
+}
+
+// baseAlert says, once the base branch has been red for baseRedTooLong,
+// that every merge on the train waits on it; "" otherwise.
+func baseAlert(repo string, t *Train, now time.Time) string {
+	if t == nil || t.Base == nil || !t.Base.Red() || t.Base.Since.IsZero() || now.Sub(t.Base.Since) < baseRedTooLong {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s is red%s at %s (%s): every merge on the train waits until it is green", repo, t.Base.Branch, redFor(t.Base, now), short(t.Base.SHA), strings.Join(t.Base.Failed, ", "))
+}
+
+// trainAttention says what of the train needs the owner: a base branch red
+// too long, and a batch the base moved under from outside the train so
+// often that it may never land.
+func trainAttention(repo string, t *Train, now time.Time) []string {
 	if t == nil {
 		return nil
 	}
 	var attention []string
+	if alert := baseAlert(repo, t, now); alert != "" {
+		attention = append(attention, alert)
+	}
 	for _, b := range t.Batches {
 		if b.Rebuilt.Times < rebuiltTooOften {
 			continue

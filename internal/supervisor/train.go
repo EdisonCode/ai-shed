@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
@@ -19,6 +20,7 @@ type Trainer interface {
 	UpdateBranch(ctx context.Context, repo string, pr int, rebase bool) error
 	MergeHead(ctx context.Context, repo string, pr int, method, sha string) error
 	Comment(ctx context.Context, repo string, issue int, body string) error
+	BaseChecks(ctx context.Context, repo, base string) (backlog.BaseState, error)
 }
 
 // trainEvery is how often a repository's merge train moves.
@@ -38,6 +40,8 @@ type train struct {
 	// looked is set once the train looked for a pull request this machine
 	// put on it before the agent started.
 	looked bool
+	// red is the base commit last found red, so that it is told once.
+	red string
 }
 
 // boardable is a pull request ready for the train, with when its
@@ -122,6 +126,34 @@ func (s *Supervisor) drive(ctx context.Context, repo config.Repo, t *train) {
 		s.Logf("merge train %s: read #%d: %v", repo.Name, t.pr, err)
 		return
 	}
+	if h.Open && h.Problem != "" {
+		explains, err := s.baseExplains(ctx, repo.Name, &t.red, h)
+		if err != nil {
+			s.Logf("merge train %s: read the checks of %s: %v", repo.Name, h.Base, err)
+			return
+		}
+		if explains {
+			// The base is red on the same checks: the pull request is not
+			// to blame. It stays in hand, and is brought up to date once the
+			// base has a fix.
+			if h.Behind > 0 {
+				if err := s.Train.UpdateBranch(ctx, repo.Name, t.pr, method == "rebase"); err != nil {
+					s.Logf("merge train %s: bring #%d up to date: %v", repo.Name, t.pr, err)
+				}
+			}
+			return
+		}
+		if t.red != "" && h.Behind > 0 {
+			// It failed on a red base that has moved since, to its fix:
+			// it is tested again on it before anything is blamed on it.
+			t.red = ""
+			if err := s.Train.UpdateBranch(ctx, repo.Name, t.pr, method == "rebase"); err != nil {
+				s.Logf("merge train %s: bring #%d up to date: %v", repo.Name, t.pr, err)
+			}
+			return
+		}
+		t.red = ""
+	}
 	switch {
 	case !h.Open:
 		s.Logf("merge train %s: #%d is no longer open", repo.Name, t.pr)
@@ -150,4 +182,44 @@ func (s *Supervisor) drive(ctx context.Context, repo config.Repo, t *train) {
 		s.Logf("merge train %s: #%d merged at %s", repo.Name, t.pr, short(h.SHA))
 		t.issue, t.pr = 0, 0
 	}
+}
+
+// baseExplains reports whether the checks that failed on a head failed on
+// its base branch too: the base is red, and the pull request is not to
+// blame. red is the base commit last told of, so a red base is logged once.
+func (s *Supervisor) baseExplains(ctx context.Context, repo string, red *string, h backlog.Head) (bool, error) {
+	base, err := s.Train.BaseChecks(ctx, repo, h.Base)
+	if err != nil {
+		return false, err
+	}
+	if !base.Explains(h) {
+		return false, nil
+	}
+	if *red != base.SHA {
+		*red = base.SHA
+		s.Logf("merge train %s: %s is red at %s (%s): the train holds until it is green", repo, base.Branch, short(base.SHA), strings.Join(base.Failed, ", "))
+	}
+	return true, nil
+}
+
+// baseRed reports whether the base branch's latest commit has a failed
+// check: a batch built on it would fail on it.
+func (s *Supervisor) baseRed(ctx context.Context, repo, branch string, red *string) bool {
+	base, err := s.Train.BaseChecks(ctx, repo, branch)
+	if err != nil {
+		s.Logf("merge train %s: read the checks of %s: %v", repo, branch, err)
+		return true
+	}
+	if !base.Red() {
+		if *red != "" {
+			s.Logf("merge train %s: %s is green again at %s: the train moves", repo, branch, short(base.SHA))
+			*red = ""
+		}
+		return false
+	}
+	if *red != base.SHA {
+		*red = base.SHA
+		s.Logf("merge train %s: %s is red at %s (%s): the train holds until it is green", repo, branch, short(base.SHA), strings.Join(base.Failed, ", "))
+	}
+	return true
 }

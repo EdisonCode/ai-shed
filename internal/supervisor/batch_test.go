@@ -378,3 +378,29 @@ func TestABatchThisMachineOpenedBeforeARestartIsTakenInHandAgain(t *testing.T) {
 		t.Fatalf("built = %v, merged = %q, want the open batch merged", batcher.built, train.merged)
 	}
 }
+
+func TestARedBaseHoldsTheBatchTrainWithoutSplittingOrTakingAnythingOff(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{}, 12, 13)
+	f.ride(t, train) // #101: #41, #42
+	red := batchRed
+	red.Failed = []string{"test"}
+	train.heads[101] = red
+	train.base = backlog.BaseState{Branch: "main", SHA: "ba5e1", Failed: []string{"test"}}
+	f.ride(t, train)
+	f.ride(t, train)
+	f.ride(t, train)
+	if len(batcher.built) != 1 || !slices.Equal(batcher.closed, []int{101}) {
+		t.Fatalf("built = %v, closed = %v: want the batch closed and none built while the base is red", batcher.built, batcher.closed)
+	}
+	for _, c := range train.comments {
+		if strings.Contains(c, backlog.OffTrainPhrase) {
+			t.Fatalf("comment %q: nothing is to blame on the pull requests", c)
+		}
+	}
+	train.base = backlog.BaseState{Branch: "main", SHA: "f1xed"}
+	f.ride(t, train)
+	if len(batcher.built) != 2 || !slices.Equal(batcher.built[1], []int{41, 42}) {
+		t.Fatalf("built = %v, want the whole batch built again once the base is green", batcher.built)
+	}
+}

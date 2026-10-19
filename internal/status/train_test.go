@@ -61,6 +61,11 @@ func TestARepositoryWithoutATrainShowsNone(t *testing.T) {
 type fakeBatches struct {
 	batches []backlog.Batch
 	heads   map[int]backlog.Head
+	base    backlog.BaseState
+}
+
+func (f fakeBatches) BaseChecks(context.Context, string, string) (backlog.BaseState, error) {
+	return f.base, nil
 }
 
 func (f fakeBatches) Batches(context.Context, string) ([]backlog.Batch, error) { return f.batches, nil }
@@ -136,5 +141,29 @@ func TestTheDigestNamesABatchTheBaseKeepsMovingUnder(t *testing.T) {
 	RenderDigest(&out, d)
 	if want := "! merge train org/app: batch PR #103 waits on you (base moved outside the train): built again 3 time(s), 2 of them after its checks passed"; !strings.Contains(out.String(), want) {
 		t.Fatalf("digest lacks %q:\n%s", want, out.String())
+	}
+}
+
+func TestARedBaseHoldsTheTrainAndAfterHalfAnHourComesFirstInStatus(t *testing.T) {
+	cfg := withTrain()
+	cfg.Repos[0].Verify.MergeTrain = config.TrainBatch
+	batches := fakeBatches{base: backlog.BaseState{Branch: "main", SHA: "ba5e1234", Failed: []string{"test"}, Since: time.Now().Add(-10 * time.Minute)}}
+	c := Collector{Lister: fakeLister{}, Looks: &fakeLooks{}, Batches: batches}
+	repos := c.CollectRepos(context.Background(), cfg)
+	var out bytes.Buffer
+	Render(&out, nil, repos)
+	if want := "merge train: held: main is red for 10m (test)"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out.String())
+	}
+	if got := repos[0].Attention(); len(got) != 0 {
+		t.Fatalf("attention = %q after 10m, want none yet", got)
+	}
+	batches.base.Since = time.Now().Add(-45 * time.Minute)
+	c.Batches = batches
+	out.Reset()
+	Render(&out, nil, c.CollectRepos(context.Background(), cfg))
+	want := "! org/app: main is red for 45m at ba5e123 (test): every merge on the train waits until it is green"
+	if !strings.HasPrefix(out.String(), want) || strings.Count(out.String(), want) != 1 {
+		t.Fatalf("output does not start with %q, once:\n%s", want, out.String())
 	}
 }
