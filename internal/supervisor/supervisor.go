@@ -1501,10 +1501,14 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	items = s.withVerifies(ctx, w, items, open, checkins)
 	s.queueMerges(ctx, open, checkins)
 	s.restartSkippedCI(ctx, open, checkins)
+	// The holds come first: the reserve is offered when nothing beside it
+	// can be acted on, held work included. Then they apply to the reserve.
+	elsewhere := s.inFlightElsewhere(ctx, w)
+	s.applyHolds(w, items, open, elsewhere, checkins)
 	if items, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
 	}
-	s.applyHolds(w, items, open, s.inFlightElsewhere(ctx, w), checkins)
+	s.applyHolds(w, items, open, elsewhere, checkins)
 	s.applyPace(w, items, checkins)
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
@@ -1554,6 +1558,9 @@ func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []ru
 		if v.Since != "" {
 			item.Blocked = fmt.Sprintf("pull request #%d had new commits since %s, the head a verifier passed: it waits for a verifier again", v.PR, v.Since)
 		}
+	}
+	if red := backlog.HandedBackRed(i, s.Signals); red != "" {
+		item.Blocked = red
 	}
 	for _, ask := range backlog.Asks(i, s.Signals) {
 		if grace := s.signal(ask.Name).GraceOrDefault(); grace > 0 && !ask.Since.IsZero() {
@@ -1610,7 +1617,7 @@ func capitalize(s string) string {
 // label that puts it in a queue of the fleet is left where it is.
 func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []QueueItem, taken map[int]bool, checkins []runlog.Checkin) ([]QueueItem, error) {
 	sources := s.Machine.BackfillFor(w)
-	if len(sources) == 0 || s.Claimer == nil || slices.ContainsFunc(items, QueueItem.Workable) || runlog.BackfillSpent(checkins, w.Name, s.Now()) {
+	if len(sources) == 0 || s.Claimer == nil || slices.ContainsFunc(items, QueueItem.actionable) || runlog.BackfillSpent(checkins, w.Name, s.Now()) {
 		return items, nil
 	}
 	for _, src := range sources {

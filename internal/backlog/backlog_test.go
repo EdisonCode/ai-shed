@@ -540,3 +540,23 @@ func TestRemainingReadsTheListAfterTheHandBacksPhrase(t *testing.T) {
 		t.Fatalf("Remaining = %q", got)
 	}
 }
+
+func TestAFailedCheckThatFinishedBeforeTheHandBackIsNotRework(t *testing.T) {
+	handed := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	i := Issue{Comments: []Comment{{Body: "## Hand-back\n**PR:** #41 (ready)", CreatedAt: handed}}}
+	i.OpenPRs = map[int]PR{41: {Problem: "has a failed check (test)", ProblemAt: handed.Add(-10 * time.Minute)}}
+	if got := Rework(i, config.DefaultSignals()); got != "" {
+		t.Fatalf("rework = %q: the worker handed back with the failure in front of it", got)
+	}
+	if got := HandedBackRed(i, config.DefaultSignals()); got != "pull request #41 has a failed check (test) before its last hand-back: it waits for the check to run again" {
+		t.Fatalf("handed back red = %q", got)
+	}
+	i.OpenPRs[41] = PR{Problem: "has a failed check (test)", ProblemAt: handed.Add(10 * time.Minute)}
+	if got := Rework(i, config.DefaultSignals()); got == "" || HandedBackRed(i, config.DefaultSignals()) != "" {
+		t.Fatalf("rework = %q: a check that failed after the hand-back is the worker's", got)
+	}
+	i.OpenPRs[41] = PR{Problem: "conflicts with the base branch", ProblemAt: handed.Add(-10 * time.Minute)}
+	if got := Rework(i, config.DefaultSignals()); got == "" {
+		t.Fatal("a conflict is rework, whenever the checks ran")
+	}
+}

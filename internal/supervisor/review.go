@@ -110,12 +110,23 @@ type QueueItem struct {
 	unclaim string
 	// rank is the issue's place in its source's priority order.
 	rank int
+	// overlaps is set on rework that touches the same code as an issue
+	// another worker has in hand: it is not held, but waits on that one.
+	overlaps string
 }
 
 // Workable reports whether a worker can act on the item: it needs a worker
 // again, it is an eye check, or it does not wait on the owner.
 func (q QueueItem) Workable() bool {
 	return q.Rework != "" || q.Look != "" || q.Verify != "" || (len(q.Waiting) == 0 && q.Paced == "" && q.Blocked == "")
+}
+
+// actionable reports whether a worker can act on the item now: it is
+// workable, and it is not rework on code another worker has in hand. Rework
+// is never held, but the reviewer leaves such an item for later; only an
+// actionable item keeps the reserve from being offered.
+func (q QueueItem) actionable() bool {
+	return q.Workable() && (q.Rework == "" || q.overlaps == "")
 }
 
 // resumes reports whether the item is started work that came back to a
