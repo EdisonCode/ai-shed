@@ -135,7 +135,7 @@ func (a Agent) read() (*config.Config, config.Machine, time.Time, error) {
 // start runs a scheduler for the machine's tasks and a supervisor for its
 // workers.
 func (a Agent) start(ctx context.Context, cfg *config.Config, m config.Machine) loaded {
-	adoptPath(m)
+	AdoptPath(m)
 
 	// A task that is still running when its next time comes is skipped.
 	scheduler := cron.New(cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)))
@@ -285,10 +285,10 @@ func Notify(command, machine, worker, message string) error {
 	return nil
 }
 
-// adoptPath gives the agent the PATH that the machine's init line sets, so
+// AdoptPath gives the process the PATH that the machine's init line sets, so
 // tmux, gh and the reviewer resolve as they do in checks and tasks. A service
 // manager starts the agent with a much shorter PATH.
-func adoptPath(m config.Machine) {
+func AdoptPath(m config.Machine) {
 	if m.Init == "" {
 		return
 	}

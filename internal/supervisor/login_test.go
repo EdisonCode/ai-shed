@@ -68,6 +68,18 @@ func TestStartLoginWithNoURLClosesTheWindowAndShowsTheScreen(t *testing.T) {
 	}
 }
 
+func TestStartLoginStopsAtAFolderTrustQuestionWithoutAnsweringIt(t *testing.T) {
+	term := newLoginTerm("Accessing workspace: /home/owner\nQuick safety check: Is this a project you created or one you trust?\n❯ No, exit\n  Yes, I trust this folder")
+	now, sleep := term.clock()
+	_, err := StartLogin(term, "claude", "/home/owner", now, sleep)
+	if err == nil || !strings.Contains(err.Error(), "asks whether to trust /home/owner") {
+		t.Fatalf("err = %v, want the trust question named", err)
+	}
+	if !slices.Equal(term.sent, []string{"claude"}) || !slices.Equal(term.closed, []string{LoginWindow}) {
+		t.Fatalf("typed %q, closed %q: /login must not be typed into the question", term.sent, term.closed)
+	}
+}
+
 func TestFinishLoginPastesTheCodeAndClosesTheWindowOnSuccess(t *testing.T) {
 	term := newLoginTerm("Login successful. Press Enter to continue")
 	term.windows[LoginWindow] = Observation{Exists: true, Command: "2.1.296", LastActivity: term.now}
