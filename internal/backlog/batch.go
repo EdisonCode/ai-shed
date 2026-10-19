@@ -37,6 +37,19 @@ type Batch struct {
 	Branch  string    `json:"branch"`
 	Created time.Time `json:"created"`
 	Cars    []Car     `json:"cars"`
+	// Rebuilt counts the batches of these pull requests before this one that
+	// were closed because the base moved under them.
+	Rebuilt Rebuilt `json:"rebuilt,omitzero"`
+}
+
+// Rebuilt counts how often a batch was built again because its base branch
+// moved under it from outside the train, a change to the files it touches.
+type Rebuilt struct {
+	Times int `json:"times"`
+	// Green counts the times its checks had passed: a merge thrown away.
+	Green int `json:"green"`
+	// Last is the base commit that moved it last.
+	Last string `json:"last"`
 }
 
 // BatchBranch is the name of a new batch branch of the machine.
@@ -50,15 +63,33 @@ func BatchOf(branch, machine string) bool {
 }
 
 // BatchBody is the description of a batch's draft pull request: what it is
-// for, and each pull request in it at the head that was batched. shed reads
-// the batch from it again after a restart, and shed status shows it.
-func BatchBody(cars []Car) string {
+// for, each pull request in it at the head that was batched, and how often
+// it was built again. shed reads the batch from it again after a restart,
+// and shed status shows it.
+func BatchBody(cars []Car, r Rebuilt) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s the base branch with each pull request below merged in, in order, so that one CI run tests them together. Do not merge this pull request: shed merges each pull request below when these checks pass, and closes this one.\n\n", BatchPhrase)
 	for _, c := range cars {
 		fmt.Fprintf(&b, "- #%d at %s (issue #%d)\n", c.PR, c.SHA, c.Issue)
 	}
+	if r.Times > 0 {
+		fmt.Fprintf(&b, "\nBuilt again %d time(s): the base branch moved under the batch outside the train, touching its files; %d of those batches had passed their checks. Last moved by %s.\n", r.Times, r.Green, r.Last)
+	}
 	return b.String()
+}
+
+var rebuiltRE = regexp.MustCompile(`(?m)^Built again (\d+) time\(s\): .*; (\d+) of those batches had passed their checks\. Last moved by ([0-9a-f]+)\.`)
+
+// ParseRebuilt reads from a batch's description how often it was built
+// again.
+func ParseRebuilt(body string) Rebuilt {
+	m := rebuiltRE.FindStringSubmatch(body)
+	if m == nil {
+		return Rebuilt{}
+	}
+	times, _ := strconv.Atoi(m[1])
+	green, _ := strconv.Atoi(m[2])
+	return Rebuilt{Times: times, Green: green, Last: m[3]}
 }
 
 var carRE = regexp.MustCompile(`(?m)^- #(\d+) at ([0-9a-f]+) \(issue #(\d+)\)\s*$`)
@@ -134,7 +165,7 @@ func strictRules(data []byte) (bool, error) {
 // pull request, so that the repository's own CI runs on it. A pull request
 // that does not merge cleanly comes back as a *MergeConflict, and the branch
 // is deleted.
-func (GH) BuildBatch(ctx context.Context, repo, base, branch string, cars []Car) (int, error) {
+func (GH) BuildBatch(ctx context.Context, repo, base, branch string, cars []Car, rebuilt Rebuilt) (int, error) {
 	out, err := gh(ctx, "api", fmt.Sprintf("repos/%s/git/ref/heads/%s", repo, base), "--jq", ".object.sha")
 	if err != nil {
 		return 0, err
@@ -158,7 +189,7 @@ func (GH) BuildBatch(ctx context.Context, repo, base, branch string, cars []Car)
 		return 0, err
 	}
 	out, err = gh(ctx, "api", "-X", "POST", fmt.Sprintf("repos/%s/pulls", repo), "-f", "title="+batchTitle(cars), "-f", "head="+branch, "-f", "base="+base,
-		"-f", "body="+BatchBody(cars), "-F", "draft=true", "--jq", ".number")
+		"-f", "body="+BatchBody(cars, rebuilt), "-F", "draft=true", "--jq", ".number")
 	if err != nil {
 		return 0, err
 	}
@@ -203,9 +234,47 @@ func parseBatches(data []byte) ([]Batch, error) {
 		if !strings.HasPrefix(p.Branch, BatchBranchPrefix) || !strings.HasPrefix(strings.TrimSpace(p.Body), BatchPhrase) {
 			continue
 		}
-		batches = append(batches, Batch{PR: p.Number, Branch: p.Branch, Created: p.Created, Cars: ParseBatchBody(p.Body)})
+		batches = append(batches, Batch{PR: p.Number, Branch: p.Branch, Created: p.Created, Cars: ParseBatchBody(p.Body), Rebuilt: ParseRebuilt(p.Body)})
 	}
 	return batches, nil
+}
+
+// Comparison is what one commit has that another does not: the commits, and
+// the files they change.
+type Comparison struct {
+	// Commits are the commits, oldest first, as their full SHAs.
+	Commits []string
+	Files   []string
+	// Partial is set when GitHub listed only some of the files: a large
+	// change, whose files cannot be told apart from another's.
+	Partial bool
+}
+
+// compareFiles is the most files GitHub lists in a comparison.
+const compareFiles = 300
+
+// Compare reads what the commit to has that the commit from does not, from
+// the commit where their histories meet: the files of a renamed one under
+// both names.
+func (GH) Compare(ctx context.Context, repo, from, to string) (Comparison, error) {
+	out, err := gh(ctx, "api", fmt.Sprintf("repos/%s/compare/%s...%s", repo, from, to),
+		"--jq", `{commits: [.commits[].sha], files: [.files[]? | .filename, (.previous_filename // empty)], listed: (.files // [] | length)}`)
+	if err != nil {
+		return Comparison{}, err
+	}
+	return parseComparison(out)
+}
+
+func parseComparison(data []byte) (Comparison, error) {
+	var c struct {
+		Commits []string `json:"commits"`
+		Files   []string `json:"files"`
+		Listed  int      `json:"listed"`
+	}
+	if err := json.Unmarshal(data, &c); err != nil {
+		return Comparison{}, fmt.Errorf("parse the comparison: %w", err)
+	}
+	return Comparison{Commits: c.Commits, Files: c.Files, Partial: c.Listed >= compareFiles}, nil
 }
 
 // CloseBatch closes a batch's draft pull request and deletes its branch.

@@ -299,6 +299,7 @@ func (r RepoReport) Attention() []string {
 	if r.Unchecked != "" {
 		attention = append(attention, "cannot tell which merged work staging serves, so none is counted as on staging: "+r.Unchecked)
 	}
+	attention = append(attention, trainAttention(r.Repo, r.Train)...)
 	if due := r.count(looks.Due); due > 0 && r.Lookers == 0 {
 		attention = append(attention, fmt.Sprintf("%d eye check(s) are due on staging and no worker does eye checks: they are yours", due))
 	}

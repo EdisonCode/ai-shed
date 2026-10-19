@@ -19,9 +19,10 @@ import (
 // requests that test several verified pull requests together.
 type Batcher interface {
 	RequiresUpToDate(ctx context.Context, repo, base string) (bool, error)
-	BuildBatch(ctx context.Context, repo, base, branch string, cars []backlog.Car) (int, error)
+	BuildBatch(ctx context.Context, repo, base, branch string, cars []backlog.Car, rebuilt backlog.Rebuilt) (int, error)
 	Batches(ctx context.Context, repo string) ([]backlog.Batch, error)
 	CloseBatch(ctx context.Context, repo string, pr int) error
+	Compare(ctx context.Context, repo, from, to string) (backlog.Comparison, error)
 }
 
 // strictEvery is how often a batch train reads again whether a base branch
@@ -42,6 +43,12 @@ type batchTrain struct {
 	// failed, once a batch failed, says which and how: the pull request the
 	// split finds is told what it failed with first.
 	failed string
+	// rebuilt counts how often the batch in hand, or the next, was built
+	// again because the base moved under it.
+	rebuilt backlog.Rebuilt
+	// apart is how many commits the base had moved under the batch in hand
+	// when they were found to touch none of its files; 0 for not yet.
+	apart int
 	// next is when the train moves again.
 	next time.Time
 	// looked is set once the train looked on GitHub for a batch and pull
@@ -125,7 +132,7 @@ func (s *Supervisor) recoverBatch(ctx context.Context, repo config.Repo, bt *bat
 			s.closeBatch(ctx, repo.Name, b.PR)
 			continue
 		}
-		bt.draft, bt.testing = b.PR, len(b.Cars)
+		bt.draft, bt.testing, bt.rebuilt = b.PR, len(b.Cars), b.Rebuilt
 		for _, c := range b.Cars {
 			// The batch tested the head it names; the base is read again.
 			h, err := s.Train.ReadHead(ctx, repo.Name, c.PR)
@@ -281,7 +288,7 @@ func (s *Supervisor) buildBatch(ctx context.Context, repo config.Repo, bt *batch
 		cars = append(cars, c.Car)
 	}
 	branch := backlog.BatchBranch(s.Machine.Name, s.Now())
-	pr, err := s.Batch.BuildBatch(ctx, repo.Name, group[0].base, branch, cars)
+	pr, err := s.Batch.BuildBatch(ctx, repo.Name, group[0].base, branch, cars, bt.rebuilt)
 	var conflict *backlog.MergeConflict
 	switch {
 	case errors.As(err, &conflict):
@@ -333,12 +340,33 @@ func (s *Supervisor) driveBatch(ctx context.Context, repo config.Repo, bt *batch
 		s.dropBatch(ctx, repo.Name, bt)
 		return
 	}
+	if h.Behind > 0 && bt.apart != h.Behind {
+		apart, last, err := s.apart(ctx, repo.Name, h)
+		if err != nil {
+			s.Logf("merge train %s: read what moved the base under batch #%d: %v", repo.Name, bt.draft, err)
+			return
+		}
+		if !apart {
+			// What the batch tested is not what would land, and a failure
+			// may be the base's. It is built again, its pull requests
+			// together.
+			rebuilt := bt.rebuilt
+			rebuilt.Times++
+			if h.Green() {
+				rebuilt.Green++
+			}
+			rebuilt.Last = short(last)
+			s.Logf("merge train %s: the base moved under batch #%d outside the train, %d commit(s) to %s touching its files; it is built again (%d time(s), %d of them green)", repo.Name, bt.draft, h.Behind, short(last), rebuilt.Times, rebuilt.Green)
+			s.dropBatch(ctx, repo.Name, bt)
+			bt.rebuilt = rebuilt
+			return
+		}
+		// Commits that touch none of its files cannot change what the batch
+		// tested: it goes on, and merges when it is green.
+		s.Logf("merge train %s: the base moved under batch #%d outside the train, %d commit(s) to %s touching none of its files; it goes on", repo.Name, bt.draft, h.Behind, short(last))
+		bt.apart = h.Behind
+	}
 	switch {
-	case h.Behind > 0:
-		// The base moved under the batch: what it tested is not what would
-		// land, and a failure may be the base's. It is built again.
-		s.Logf("merge train %s: the base moved under batch #%d, %d commit(s); it is built again", repo.Name, bt.draft, h.Behind)
-		s.dropBatch(ctx, repo.Name, bt)
 	case h.Problem != "" && bt.testing == 1:
 		c, draft := bt.cars[0], bt.draft
 		why := fmt.Sprintf("tested by itself on the base branch in batch pull request #%d, %s", draft, h.Problem)
@@ -393,7 +421,34 @@ func (s *Supervisor) mergeBatch(ctx context.Context, repo config.Repo, bt *batch
 // dropBatch closes the batch in hand. Its pull requests stay on the train.
 func (s *Supervisor) dropBatch(ctx context.Context, repo string, bt *batchTrain) {
 	s.closeBatch(ctx, repo, bt.draft)
-	bt.draft, bt.testing = 0, 0
+	bt.draft, bt.testing, bt.apart, bt.rebuilt = 0, 0, 0, backlog.Rebuilt{}
+}
+
+// apart reports whether the commits the base branch has that the batch
+// does not touch none of the files the batch changes, with the last of
+// them.
+func (s *Supervisor) apart(ctx context.Context, repo string, h backlog.Head) (bool, string, error) {
+	moved, err := s.Batch.Compare(ctx, repo, h.SHA, h.Base)
+	if err != nil {
+		return false, "", err
+	}
+	last := ""
+	if len(moved.Commits) > 0 {
+		last = moved.Commits[len(moved.Commits)-1]
+	}
+	batch, err := s.Batch.Compare(ctx, repo, h.Base, h.SHA)
+	if err != nil {
+		return false, "", err
+	}
+	if moved.Partial || batch.Partial {
+		return false, last, nil
+	}
+	for _, f := range moved.Files {
+		if slices.Contains(batch.Files, f) {
+			return false, last, nil
+		}
+	}
+	return true, last, nil
 }
 
 func (s *Supervisor) closeBatch(ctx context.Context, repo string, pr int) {
