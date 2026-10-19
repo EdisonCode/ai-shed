@@ -39,6 +39,9 @@ type batchTrain struct {
 	// half, once a batch failed, is how many pull requests the next batch
 	// tests: the first half of the one that failed. 0 tests a full batch.
 	half int
+	// failed, once a batch failed, says which and how: the pull request the
+	// split finds is told what it failed with first.
+	failed string
 	// next is when the train moves again.
 	next time.Time
 	// looked is set once the train looked on GitHub for a batch and pull
@@ -322,7 +325,7 @@ func (s *Supervisor) driveBatch(ctx context.Context, repo config.Repo, bt *batch
 			bt.remove(c.PR)
 			changed = true
 		case ch.SHA != c.SHA:
-			s.takeOff(ctx, repo.Name, bt, c, fmt.Sprintf("had new commits (%s, was %s) while batch pull request #%d tested it", short(ch.SHA), short(c.SHA), bt.draft))
+			s.reverify(ctx, repo.Name, bt, c, fmt.Sprintf("had new commits (%s, was %s) while batch pull request #%d tested it", short(ch.SHA), short(c.SHA), bt.draft))
 			changed = true
 		}
 	}
@@ -338,12 +341,23 @@ func (s *Supervisor) driveBatch(ctx context.Context, repo config.Repo, bt *batch
 		s.dropBatch(ctx, repo.Name, bt)
 	case h.Problem != "" && bt.testing == 1:
 		c, draft := bt.cars[0], bt.draft
+		why := fmt.Sprintf("tested by itself on the base branch in batch pull request #%d, %s", draft, h.Problem)
+		if bt.failed != "" {
+			why += "; the split began when " + bt.failed
+		}
 		s.dropBatch(ctx, repo.Name, bt)
-		bt.half = 0
-		s.takeOff(ctx, repo.Name, bt, c, fmt.Sprintf("tested by itself on the base branch in batch pull request #%d, %s", draft, h.Problem))
+		bt.half, bt.failed = 0, ""
+		s.takeOff(ctx, repo.Name, bt, c, why)
 	case h.Problem != "":
 		half := bt.testing / 2
 		s.Logf("merge train %s: batch #%d %s; testing the first %d of its %d pull requests", repo.Name, bt.draft, h.Problem, half, bt.testing)
+		if bt.failed == "" {
+			var cars []backlog.Car
+			for _, c := range bt.cars[:bt.testing] {
+				cars = append(cars, c.Car)
+			}
+			bt.failed = fmt.Sprintf("batch pull request #%d of %s %s", bt.draft, prList(cars), h.Problem)
+		}
 		s.dropBatch(ctx, repo.Name, bt)
 		bt.half = half
 	case !h.Green():
@@ -371,6 +385,9 @@ func (s *Supervisor) mergeBatch(ctx context.Context, repo config.Repo, bt *batch
 	}
 	s.dropBatch(ctx, repo.Name, bt)
 	bt.half = 0
+	if len(bt.cars) == 0 {
+		bt.failed = ""
+	}
 }
 
 // dropBatch closes the batch in hand. Its pull requests stay on the train.
@@ -389,7 +406,18 @@ func (s *Supervisor) closeBatch(ctx context.Context, repo string, pr int) {
 // that says why. It goes back to a worker, and boards again once its next
 // hand-back is verified.
 func (s *Supervisor) takeOff(ctx context.Context, repo string, bt *batchTrain, c batchCar, why string) {
-	comment := fmt.Sprintf("%s pull request #%d, at %s, %s. It goes back to a worker, and boards again once its next hand-back is verified.", backlog.OffTrainPhrase, c.PR, short(c.SHA), why)
+	s.leave(ctx, repo, bt, c, why, backlog.ReworkPhrase+", and boards again once its next hand-back is verified.")
+}
+
+// reverify takes a pull request whose head moved off the train. Its
+// verification was of the head that boarded: a verifier looks at the new
+// one, ahead of new work, and it boards again once that passes.
+func (s *Supervisor) reverify(ctx context.Context, repo string, bt *batchTrain, c batchCar, why string) {
+	s.leave(ctx, repo, bt, c, why, fmt.Sprintf("%s at its new head, ahead of new work, and can judge what changed since %s; it boards again once that passes.", backlog.ReverifyPhrase, short(c.SHA)))
+}
+
+func (s *Supervisor) leave(ctx context.Context, repo string, bt *batchTrain, c batchCar, why, next string) {
+	comment := fmt.Sprintf("%s pull request #%d, at %s, %s. %s", backlog.OffTrainPhrase, c.PR, short(c.SHA), why, next)
 	if err := s.Train.Comment(ctx, repo, c.Issue, comment); err != nil {
 		s.Logf("merge train %s: take #%d off: %v", repo, c.PR, err)
 		return

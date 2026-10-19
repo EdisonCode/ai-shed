@@ -428,8 +428,9 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 
 // Rework says why an issue that was handed back needs a worker again while
 // its pull request is still open: the owner answered after the hand-back with
-// something other than an acceptance, or the pull request cannot merge as it
-// stands. Empty when it does not.
+// something other than an acceptance, the pull request cannot merge as it
+// stands, or shed took it off a merge train for a failure. Empty when it
+// does not.
 func Rework(issue Issue, signals []config.Signal) string {
 	handBack, pr := lastHandBack(issue, signals)
 	open, isOpen := issue.OpenPRs[pr]
@@ -450,6 +451,11 @@ func Rework(issue Issue, signals []config.Signal) string {
 	}
 	if open.Problem != "" {
 		reasons = append(reasons, fmt.Sprintf("pull request #%d %s", pr, open.Problem))
+	}
+	if off, _, reverify := offTrain(issue, handBack, pr); off >= 0 && !reverify {
+		why, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(issue.Comments[off].Body), OffTrainPhrase), ReworkPhrase)
+		why = strings.TrimSuffix(strings.TrimSpace(why), ".")
+		reasons = append(reasons, fmt.Sprintf("shed took it off the merge train: %s; fix what it found and hand back again", why))
 	}
 	if v := Verification(issue, signals); v.State == VerifyFailed {
 		reasons = append(reasons, fmt.Sprintf("the verifier sent pull request #%d back: %s; fix what it found and hand back again", pr, v.Note))

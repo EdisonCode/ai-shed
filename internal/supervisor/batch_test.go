@@ -166,6 +166,12 @@ func TestARedBatchIsSplitUntilThePullRequestThatFailsIsFound(t *testing.T) {
 	if !strings.HasPrefix(last, "#13 "+backlog.OffTrainPhrase+" pull request #42,") || !strings.Contains(last, "has a failed check (test)") {
 		t.Fatalf("last comment = %q, want #42 taken off with its failing check named", last)
 	}
+	if !strings.Contains(last, "the split began when batch pull request #101 of #41, #42 has a failed check (test)") {
+		t.Fatalf("last comment = %q, want the batch that failed first named with its pull requests", last)
+	}
+	if reason := backlog.Rework(f.lister.issues[1], f.Signals); !strings.Contains(reason, "off the merge train") {
+		t.Fatalf("rework = %q, want #42 back with a worker", reason)
+	}
 	if !slices.Equal(batcher.closed, []int{101, 102, 103}) {
 		t.Fatalf("closed = %v", batcher.closed)
 	}
@@ -219,6 +225,11 @@ func TestAPullRequestWhoseHeadMovesLeavesTheBatchAndTheBatchIsBuiltAgain(t *test
 	last := train.comments[len(train.comments)-1]
 	if !strings.HasPrefix(last, "#12 "+backlog.OffTrainPhrase+" pull request #41,") {
 		t.Fatalf("last comment = %q, want #41 taken off", last)
+	}
+	reboard := f.lister.issues[0]
+	reboard.Verify = true
+	if v := backlog.Verification(reboard, f.Signals); v.State != backlog.VerifyDue || v.Since != "c0ffee4" {
+		t.Fatalf("verification = %+v, want #41 due a verifier again, since the head that boarded", v)
 	}
 	f.ride(t, train)
 	if len(batcher.built) != 2 || !slices.Equal(batcher.built[1], []int{42}) {

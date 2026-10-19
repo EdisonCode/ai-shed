@@ -82,6 +82,9 @@ func (s *Supervisor) withVerifies(ctx context.Context, w config.Worker, items []
 			continue
 		}
 		words := tier
+		if v.Since != "" {
+			reasons = append(reasons, "re-verify: a verifier passed it at "+v.Since+" and it had new commits since")
+		}
 		if len(reasons) > 0 {
 			words += " (" + strings.Join(reasons, "; ") + ")"
 		}
@@ -143,6 +146,10 @@ and starts you with an empty context: judge the work on its own evidence.
 - High tier: try to break it. Wrong and empty input, the failure paths,
   concurrent use, what the change does to the code it did not touch. Run
   the full suite.
+- Re-verify (a verifier passed an earlier head, then new commits came):
+  read what changed since that head (`+"`git diff <head>..HEAD`"+`). When
+  it touches only tests or docs, judge that change alone; otherwise verify
+  the whole pull request at its tier.
 - Change no code. Commit nothing, push nothing, approve or merge nothing.
 - When it does what the issue asks, post a comment on the issue that starts
   with `+"`Verified (<tier>):`"+` and gives your evidence: the commands you ran

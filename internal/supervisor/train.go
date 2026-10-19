@@ -127,7 +127,7 @@ func (s *Supervisor) drive(ctx context.Context, repo config.Repo, t *train) {
 		s.Logf("merge train %s: #%d is no longer open", repo.Name, t.pr)
 		t.issue, t.pr = 0, 0
 	case h.Problem != "":
-		comment := fmt.Sprintf("%s pull request #%d, brought up to date with its base branch, %s at %s. It goes back to a worker, and boards again once its next hand-back is verified.", backlog.OffTrainPhrase, t.pr, h.Problem, short(h.SHA))
+		comment := fmt.Sprintf("%s pull request #%d, at %s, brought up to date with its base branch, %s. %s, and boards again once its next hand-back is verified.", backlog.OffTrainPhrase, t.pr, short(h.SHA), h.Problem, backlog.ReworkPhrase)
 		if err := s.Train.Comment(ctx, repo.Name, t.issue, comment); err != nil {
 			s.Logf("merge train %s: take #%d off: %v", repo.Name, t.pr, err)
 			return

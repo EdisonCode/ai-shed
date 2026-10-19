@@ -132,12 +132,20 @@ merge that draft yourself.
   Then it closes the draft and deletes its branch.
 - **Red.** shed closes the draft and tests the first half of the batch, and
   so on, until a batch of one fails. That pull request comes off the train
-  with a comment that names the failed check and goes back to a worker; the
+  with a comment that names the failed check and the batch that failed
+  first, with its pull requests, and goes back to a worker as rework; the
   rest merge.
-- **A pull request that changes** while it is in a batch (new commits, a
-  conflict with the ones before it) comes off the train, and the batch is
-  built again without it. A batch whose base moved is built again, so that
-  what merges is what was tested.
+- **A pull request that conflicts** with the ones before it comes off the
+  train and goes back to a worker, and the batch is built again without it.
+- **A pull request that gets new commits** while it is on the train (a fix
+  after a red batch, say) comes off it too, but needs no worker: its
+  verification was of the head that boarded, so a verifier looks at the new
+  head, ahead of new work, and it boards again once that passes. `shed
+  status` shows it as `re-verify`. The verifier is told the head it passed
+  before, and judges only what changed since when that touches only tests
+  or docs.
+- **A batch whose base moved** is built again, so that what merges is what
+  was tested.
 - **`merge_train_alone`** paths, named as in `areas`: a pull request that
   touches one is tested in a batch of its own.
 

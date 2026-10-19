@@ -1233,6 +1233,11 @@ func TestAPullRequestWaitingForItsVerificationIsNotTheOwners(t *testing.T) {
 	if st := r.Issues[0]; st.State != Waiting {
 		t.Fatalf("issue after it was verified = %+v, want it waiting on the owner's review", st)
 	}
+	i.Comments = append(i.Comments, backlog.Comment{Body: backlog.OffTrainPhrase + " pull request #41, at c0ffee4, had new commits (f1x, was c0ffee4) while batch pull request #101 tested it. " + backlog.ReverifyPhrase + " at its new head."})
+	r = Assess(config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}}}, signals, now, healthy(), []backlog.Issue{i})
+	if st := r.Issues[0]; st.State != Verifying || !strings.HasPrefix(st.Held, "re-verify: pull request #41 had new commits since c0ffee4") {
+		t.Fatalf("issue after new commits on the train = %+v, want it waiting to be verified again", st)
+	}
 }
 
 func TestAPullRequestTheVerifierSentBackIsNotTheOwnersWhileItIsADraftForRework(t *testing.T) {

@@ -48,6 +48,10 @@ type VerificationState struct {
 	// OwnerMerges is set when the verifier passed the work and left its
 	// merge to the owner.
 	OwnerMerges bool `json:"owner_merges,omitempty"`
+	// Since is set when a verifier passed an earlier head and the pull
+	// request had new commits after it: that head, from which a
+	// re-verification may judge only what changed.
+	Since string `json:"since,omitempty"`
 }
 
 // ShedMerges reports whether shed may queue the merge of a pass at this
@@ -63,7 +67,8 @@ func ShedMerges(issue Issue, v VerificationState) bool {
 
 // Verification reads where the verification of the issue's last hand-back
 // stands. Only the comments after that hand-back count: a new hand-back
-// needs a new verification.
+// needs a new verification. So does a pull request shed took off a merge
+// train for new commits: only the verdicts after that count.
 func Verification(issue Issue, signals []config.Signal) VerificationState {
 	if !issue.Verify {
 		return VerificationState{}
@@ -74,6 +79,9 @@ func Verification(issue Issue, signals []config.Signal) VerificationState {
 		return VerificationState{}
 	}
 	v := VerificationState{PR: pr}
+	if off, sha, reverify := offTrain(issue, index, pr); reverify {
+		index, v.Since = off, sha
+	}
 	for _, c := range issue.Comments[index+1:] {
 		m := verdictRE.FindStringSubmatch(c.Body)
 		if m == nil {
@@ -85,6 +93,7 @@ func Verification(issue Issue, signals []config.Signal) VerificationState {
 		}
 		v.Tier, v.Note, v.At = strings.ToLower(m[2]), strings.TrimSpace(strings.Trim(m[4], "*_ ")), c.CreatedAt
 		v.OwnerMerges = m[3] != ""
+		v.Since = ""
 	}
 	switch {
 	case v.State != "":

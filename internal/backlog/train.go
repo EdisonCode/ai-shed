@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,20 @@ import (
 // took off a merge train: its checks failed on the head shed brought up to
 // date, or the update did not apply.
 const OffTrainPhrase = "Off the merge train by shed:"
+
+// ReverifyPhrase is in shed's take-off comment when the pull request left
+// the train only because it had new commits: its verification was of an
+// earlier head, so a verifier looks again before it boards. Any other
+// take-off sends it back to a worker as rework.
+const ReverifyPhrase = "A verifier looks at it again"
+
+// ReworkPhrase follows the reason in shed's take-off comment when the pull
+// request goes back to a worker.
+const ReworkPhrase = "It goes back to a worker"
+
+// offRE reads the pull request and the head that was on the train from a
+// take-off comment.
+var offRE = regexp.MustCompile(`^` + regexp.QuoteMeta(OffTrainPhrase) + ` pull request #(\d+), at ([0-9a-f]+),`)
 
 // Boarded returns the pull request of the issue's last hand-back when shed
 // queued it for merge after that hand-back and has not taken it off a merge
@@ -35,8 +50,9 @@ func boarded(issue Issue, signals []config.Signal) bool {
 }
 
 // TakenOff reports whether shed took the pull request of the issue's last
-// hand-back off a merge train. It boards again only after a new hand-back
-// is verified.
+// hand-back off a merge train since its last verification. It boards again
+// once a verifier passes it again: after new commits, at its new head; after
+// a failure, at the worker's next hand-back.
 func TakenOff(issue Issue, signals []config.Signal) bool {
 	_, _, _, off := train(issue, signals)
 	return off
@@ -57,9 +73,27 @@ func train(issue Issue, signals []config.Signal) (pr int, on bool, at time.Time,
 			on, at = true, c.CreatedAt
 		case strings.HasPrefix(body, OffTrainPhrase) && strings.Contains(body, want):
 			on, off = false, true
+		case verdictRE.MatchString(body):
+			off = false
 		}
 	}
 	return pr, on, at, off
+}
+
+// offTrain reads the last take-off of the pull request after the comment at
+// index: where it is, the head that was on the train, and whether it only
+// needs a verifier again. at is -1 for none.
+func offTrain(issue Issue, index, pr int) (at int, sha string, reverify bool) {
+	at = -1
+	for j := index + 1; j < len(issue.Comments); j++ {
+		body := strings.TrimSpace(issue.Comments[j].Body)
+		m := offRE.FindStringSubmatch(body)
+		if m == nil || m[1] != strconv.Itoa(pr) {
+			continue
+		}
+		at, sha, reverify = j, m[2], strings.Contains(body, ReverifyPhrase)
+	}
+	return at, sha, reverify
 }
 
 // MergeReady reports whether shed may queue the issue's pull request for
