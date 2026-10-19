@@ -178,6 +178,14 @@ was skipped`. Let such a CI run on the train's branches:
 if: ${{ !github.event.pull_request.draft || startsWith(github.head_ref, 'shed-train/') }}
 ```
 
+The same draft guard can leave a worker's pull request with no CI on its
+head: its last commit came while it was a draft, and the run for "ready for
+review" went to the commit before. Such a head is neither red nor pending,
+so nothing would wait for it. `shed status` shows it as `no CI on head`,
+and the machine that built it starts its CI again once per head (it makes
+the pull request a draft and ready again). The brief tells workers to mark
+a pull request ready only once their last push is its head.
+
 A batch train merges each pull request as it stands, so the base must not
 require branches to be up to date before merging (the branch protection or
 ruleset option "Require branches to be up to date before merging"). Where it
