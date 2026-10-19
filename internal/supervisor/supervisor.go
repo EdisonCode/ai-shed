@@ -1541,6 +1541,9 @@ func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []ru
 		item.Blocked = fmt.Sprintf("pull request #%d waits for its checks, then for a verifier", v.PR)
 	case backlog.VerifyDue:
 		item.Blocked = fmt.Sprintf("pull request #%d waits for a verifier", v.PR)
+		if v.Since != "" {
+			item.Blocked = fmt.Sprintf("pull request #%d had new commits since %s, the head a verifier passed: it waits for a verifier again", v.PR, v.Since)
+		}
 	}
 	for _, ask := range backlog.Asks(i, s.Signals) {
 		if grace := s.signal(ask.Name).GraceOrDefault(); grace > 0 && !ask.Since.IsZero() {

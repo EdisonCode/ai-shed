@@ -163,3 +163,23 @@ func TestAHandOverAfterAHandBackSaysWhatTheWorkerHadAndWhyNothingIsLeftInIt(t *t
 		t.Fatalf("check-in = %+v, want #13 handed over with reason %q", c, want)
 	}
 }
+
+func TestAPullRequestTakenOffTheTrainForNewCommitsGoesToAVerifierAgain(t *testing.T) {
+	f := started(t, config.Supervisor{}, done, assign(12))
+	withVerifier(t, f)
+	built(t, f, 12)
+	reboard := handedBackWith(12, "")
+	reboard.Comments = append(reboard.Comments,
+		backlog.Comment{Body: "Verified (low): ran the export tests"},
+		backlog.Comment{Body: backlog.OffTrainPhrase + " pull request #41, at c0ffee4, had new commits (f1x, was c0ffee4) while batch pull request #101 tested it. " + backlog.ReverifyPhrase + " at its new head."})
+	f.lister.issues = []backlog.Issue{reboard}
+	f.tick(2 * time.Minute)
+	f.tick(10 * time.Minute)
+	c := lastOf(t, f, "rev")
+	if c.Issue != 12 || !c.Verify {
+		t.Fatalf("rev's check-in = %+v, want #12 verified again", c)
+	}
+	if !strings.Contains(c.Message, "re-verify: a verifier passed it at c0ffee4") {
+		t.Fatalf("message = %q, want the head it was verified at named", c.Message)
+	}
+}

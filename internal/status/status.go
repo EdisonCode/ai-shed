@@ -954,6 +954,9 @@ func verifyState(issue backlog.Issue, signals []config.Signal) string {
 	case backlog.VerifyPending:
 		return fmt.Sprintf("pull request #%d waits for its checks", v.PR)
 	case backlog.VerifyDue:
+		if v.Since != "" {
+			return fmt.Sprintf("re-verify: pull request #%d had new commits since %s, the head a verifier passed; it waits for a verifier", v.PR, v.Since)
+		}
 		return fmt.Sprintf("pull request #%d waits for a verifier", v.PR)
 	}
 	return ""
