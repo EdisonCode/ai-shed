@@ -182,6 +182,13 @@ type Verify struct {
 	// batch of its own, such as a schema, the migrations or a lockfile. A
 	// path names a file or a directory, as in areas.
 	MergeTrainAlone []string `yaml:"merge_train_alone"`
+	// MergeTrainMin is the smallest batch a batch train builds. Fewer
+	// pull requests than this merge one by one at their own green, verified
+	// heads, untested with each other: where the base branch does not
+	// require an up-to-date branch, a small batch costs a full run of the
+	// checks and catches little that each one's checks and the base's own
+	// do not. 0 or 1 builds every batch.
+	MergeTrainMin int `yaml:"merge_train_min"`
 }
 
 // TrainMode is how a merge train merges: one pull request at a time, or in
@@ -949,8 +956,11 @@ func (c *Config) validateVerify() error {
 		if r.Verify.MergeTrain != "" && !r.Verify.MergeLow {
 			fail("repos: %s: verify.merge_train merges what merge_low queues: turn on merge_low too", r.Name)
 		}
-		if r.Verify.MergeTrain != TrainBatch && (r.Verify.BatchSize != 0 || len(r.Verify.MergeTrainAlone) > 0) {
-			fail("repos: %s: verify.batch_size and verify.merge_train_alone are for merge_train: batch", r.Name)
+		if r.Verify.MergeTrain != TrainBatch && (r.Verify.BatchSize != 0 || len(r.Verify.MergeTrainAlone) > 0 || r.Verify.MergeTrainMin != 0) {
+			fail("repos: %s: verify.batch_size, verify.merge_train_alone and verify.merge_train_min are for merge_train: batch", r.Name)
+		}
+		if r.Verify.MergeTrainMin < 0 || (r.Verify.MergeTrainMin > r.Verify.BatchSizeOrDefault()) {
+			fail("repos: %s: verify.merge_train_min must be between 1 and batch_size (%d)", r.Name, r.Verify.BatchSizeOrDefault())
 		}
 		if r.Verify.BatchSize < 0 {
 			fail("repos: %s: verify.batch_size must be 1 or more", r.Name)
