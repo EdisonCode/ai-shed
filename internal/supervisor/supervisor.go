@@ -419,6 +419,20 @@ func (st *workerState) lastVerdict() string {
 	return st.recent[len(st.recent)-1].Verdict
 }
 
+// lastSent returns the last message typed into the worker; "" for none. The
+// command that starts its session is not one: the tool was not running yet.
+func (st *workerState) lastSent() string {
+	for _, c := range slices.Backward(st.recent) {
+		if c.Sent {
+			if c.Verdict == runlog.VerdictStarted {
+				return ""
+			}
+			return c.Message
+		}
+	}
+	return ""
+}
+
 // submittedSinceSent reports whether Enter was already pressed for the last
 // message sent to the worker.
 func (st *workerState) submittedSinceSent() bool {
@@ -758,6 +772,12 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	// A reviewer that was limited and reads this is past its limit.
 	if st.reviewerLimited && st.limitOver == "" {
 		st.limitOver = reviewerAnswers
+	}
+	if msg := st.lastSent(); msg != "" && unsentInput(terminal, msg) {
+		// The supervisor knows what it typed: no reviewer is needed to see
+		// that it was not sent. A message still there after one Enter
+		// needs the owner.
+		return s.act(ctx, w, st, obs, now, kind, queue, Verdict{Verdict: runlog.VerdictUnsent, Reason: "the message it was sent sits typed in its input box, and no turn started"})
 	}
 	in := ReviewInput{Worker: w.Name, Brief: s.scope(w), Queue: queue, Recent: st.recent, Terminal: terminal, Now: now, LimitedUntil: st.limitedUntil, LimitOver: st.limitOver, InHand: st.issue}
 	if st.task != "" {
