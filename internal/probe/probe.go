@@ -39,6 +39,9 @@ type Result struct {
 	Recycle []string `json:"-"`
 	// Marks is what each worker's tool last reported about itself, by worker.
 	Marks map[string]runlog.Mark `json:"-"`
+	// Queues are each worker's queue as the agent last computed it, with why
+	// it holds what it does not hand over, by worker.
+	Queues map[string]runlog.QueueView `json:"queues,omitempty"`
 	// Tasks are the one-off tasks on the machine, waiting or handed over.
 	Tasks []Task `json:"-"`
 	// PausedUntil is when the owner's pause of the machine ends, by the
@@ -119,6 +122,7 @@ for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(b
 [ -f "$s/` + runlog.PauseFile + `" ] && echo "@@pause $(cat "$s/` + runlog.PauseFile + `")"
 for f in "$s/` + runlog.BumpsDir + `"/*; do [ -f "$f" ] && echo "@@bump $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
+for f in "$s/` + runlog.QueuesDir + `"/*; do [ -f "$f" ] && echo "@@queue $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.ContextDir + `"/*; do [ -f "$f" ] && echo "@@context $(basename "$f") $(cat "$f")"; done
 ` + usageScript + `echo "@@end"
 `
@@ -266,6 +270,15 @@ func Parse(out string, checks []config.Check) (Result, error) {
 					res.Marks = map[string]runlog.Mark{}
 				}
 				res.Marks[worker] = m
+			}
+		case "@@queue":
+			// A queue the agent was still writing has another name.
+			worker, line, _ := strings.Cut(rest, " ")
+			if v, err := runlog.ParseQueue(line); err == nil {
+				if res.Queues == nil {
+					res.Queues = map[string]runlog.QueueView{}
+				}
+				res.Queues[worker] = v
 			}
 		case "@@pane":
 			pid, window, _ := strings.Cut(strings.TrimSpace(rest), " ")

@@ -187,6 +187,20 @@ func TestParseReadsWhatEachWorkersToolReported(t *testing.T) {
 	}
 }
 
+func TestParseReadsEachWorkersQueueAsTheAgentComputedIt(t *testing.T) {
+	out := "@@now 1790000000\n" +
+		`@@queue app {"time":"2026-10-04T12:00:00Z","worker":"app","items":[{"repo":"acme/app","number":7,"title":"Fix","hold":"paced: ahead"}],"reserve":"not listed: #3 can be acted on"}` + "\n" +
+		"@@queue docs not json\n@@end\n"
+	res, err := Parse(out, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := res.Queues["app"]
+	if len(res.Queues) != 1 || len(v.Items) != 1 || v.Items[0].Hold != "paced: ahead" || v.Reserve == "" {
+		t.Fatalf("queues = %+v", res.Queues)
+	}
+}
+
 func TestParseReadsTheOneOffTasksOnTheMachine(t *testing.T) {
 	res, err := Parse("@@now 1790000000\n@@task app 20261004-120000\n@@task _taken 20261004-110000\n@@end\n", nil)
 	if err != nil {

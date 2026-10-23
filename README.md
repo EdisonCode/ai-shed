@@ -263,7 +263,8 @@ machines:
   label, with or without `backfill`.
 - The reserve is listed only when the sources beside it have nothing the
   worker can act on. Its issues come after everything else, in its own
-  `priority` order and then oldest first. `shed status` does not list them.
+  `priority` order and then oldest first. `shed status` does not list them;
+  `shed queue` does, with what the reserve left out and why.
 - An issue that is handed over gets the label of the first labelled source
   of the same repository in that list, here `machine:linux-box`. That is the
   one thing shed changes on GitHub. From then on the issue is in the
@@ -337,6 +338,31 @@ of `risky` are in each worker's brief and in front of the reviewer, so write
 them for both.
 
 ### Putting an issue first
+
+### Why a worker has no work
+
+`shed status` reads the issues from where you run it. The agent on the
+machine knows more: its weekly pace, which issue each worker has in hand,
+what the reserve offered. Each time it reads a worker's queue, it keeps that
+queue with why it holds each item, and `shed queue` prints it:
+
+```sh
+$ shed queue linux-box
+linux-box worker app: 0 of 3 item(s) workable, read 2m ago
+  my-org/my-app#41          Add export         paced: the account is ahead of its weekly pace (...); only priority work is handed out
+  my-org/my-app#44  rework  Fix login          rework that waits: it overlaps #40, which docs has in hand: both are area:auth
+  my-org/my-app#47          Retry the import   waits on the owner: decision
+  reserve: listed: 0 issue(s) offered; left out: 12 labelled machine:mac-mini, a queue of the fleet (#50, #52, #53, ...)
+```
+
+- `shed queue <machine> <worker>` prints one worker's queue, and `-json`
+  prints the queues as the agent wrote them.
+- The reserve line says why it was not listed (`not listed: #41 can be acted
+  on`, or the four-an-hour limit), or what it offered and what it left out,
+  by reason.
+- `shed status` takes the agent's word: an issue that every worker's queue
+  holds is `held` with `agent:` and the agent's reason, and a machine with
+  idle workers beside such issues says so, with what the reserve did.
 
 A priority label orders a queue. It cannot help an urgent issue that sits in
 the queue of a worker with hours of work in hand while another worker on the

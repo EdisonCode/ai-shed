@@ -1505,7 +1505,8 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	// can be acted on, held work included. Then they apply to the reserve.
 	elsewhere := s.inFlightElsewhere(ctx, w)
 	s.applyHolds(w, items, open, elsewhere, checkins)
-	if items, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
+	var reserve string
+	if items, reserve, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
 	}
 	s.applyHolds(w, items, open, elsewhere, checkins)
@@ -1535,7 +1536,22 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		}
 		return x.Number < y.Number
 	})
+	s.keepQueue(w, items, reserve)
 	return items, nil
+}
+
+// keepQueue writes the worker's queue as this reading found it, with why
+// each held item is held, for `shed status` and `shed queue`. The owner
+// otherwise sees only the queue the watcher computes, which cannot know the
+// machine's own state: its pace, its log of what is in hand.
+func (s *Supervisor) keepQueue(w config.Worker, items []QueueItem, reserve string) {
+	v := runlog.QueueView{Time: s.Now(), Worker: w.Name, Items: make([]runlog.QueueEntry, 0, len(items)), Reserve: reserve}
+	for _, q := range items {
+		v.Items = append(v.Items, runlog.QueueEntry{Repo: q.Repo, Number: q.Number, Title: q.Title, Kind: q.kind(), Hold: q.hold(), Backfill: q.Backfill})
+	}
+	if err := runlog.WriteQueue(s.StateDir, v); err != nil {
+		s.Logf("worker %s: %v", w.Name, err)
+	}
 }
 
 // item is the queue item of an open issue from this source.
@@ -1615,32 +1631,98 @@ func capitalize(s string) string {
 // queue has nothing it can act on. They are listed only then. An issue that
 // waits on the owner, that another worker has in hand, or that carries a
 // label that puts it in a queue of the fleet is left where it is.
-func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []QueueItem, taken map[int]bool, checkins []runlog.Checkin) ([]QueueItem, error) {
+//
+// It also says what became of the reserve, for the queue the agent keeps for
+// the owner: why it was not listed, or what it offered and what it left.
+func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []QueueItem, taken map[int]bool, checkins []runlog.Checkin) ([]QueueItem, string, error) {
 	sources := s.Machine.BackfillFor(w)
-	if len(sources) == 0 || s.Claimer == nil || slices.ContainsFunc(items, QueueItem.actionable) || runlog.BackfillSpent(checkins, w.Name, s.Now()) {
-		return items, nil
+	if len(sources) == 0 {
+		return items, "", nil
 	}
+	if s.Claimer == nil {
+		return items, "not listed: this agent cannot label an issue it takes", nil
+	}
+	if n := slices.IndexFunc(items, QueueItem.actionable); n >= 0 {
+		return items, fmt.Sprintf("not listed: #%d can be acted on", items[n].Number), nil
+	}
+	if runlog.BackfillSpent(checkins, w.Name, s.Now()) {
+		return items, fmt.Sprintf("not listed: the worker took %d issues from it in the last %s", runlog.BackfillLimit, spell(runlog.BackfillWindow)), nil
+	}
+	offered := 0
+	var skipped skips
 	for _, src := range sources {
 		issues, err := s.Lister.List(ctx, src)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		for _, i := range issues {
 			_, queued := find(items, i.Number)
-			if queued || taken[i.Number] || backlog.Finished(i, s.Signals) != 0 || slices.ContainsFunc(i.LabelNames(), func(l string) bool { return slices.Contains(s.QueueLabels, l) }) {
+			label := slices.IndexFunc(i.LabelNames(), func(l string) bool { return slices.Contains(s.QueueLabels, l) })
+			switch {
+			case queued:
+				skipped.add("already in the queue", i.Number)
+				continue
+			case taken[i.Number]:
+				skipped.add("another worker has it", i.Number)
+				continue
+			case backlog.Finished(i, s.Signals) != 0:
+				skipped.add("its work is merged", i.Number)
+				continue
+			case label >= 0:
+				skipped.add(fmt.Sprintf("labelled %s, a queue of the fleet", i.LabelNames()[label]), i.Number)
 				continue
 			}
 			item := s.item(i, src, checkins)
 			if !item.Workable() {
+				skipped.add(item.hold(), i.Number)
 				continue
 			}
 			item.Backfill, item.claim = true, s.Machine.ClaimLabel(w, i.Repo)
 			// A labelled backfill source is a pool: what is taken leaves it.
 			item.unclaim, item.ReleasedBy = src.Label, backlog.ReleasedBy(i)
 			items = append(items, item)
+			offered++
 		}
 	}
-	return items, nil
+	return items, fmt.Sprintf("listed: %d issue(s) offered%s", offered, skipped.words()), nil
+}
+
+// skips counts the issues a listing left out, by reason, with the first few
+// numbers of each.
+type skips struct {
+	reasons []string
+	numbers map[string][]int
+}
+
+func (k *skips) add(reason string, number int) {
+	if k.numbers == nil {
+		k.numbers = map[string][]int{}
+	}
+	if _, seen := k.numbers[reason]; !seen {
+		k.reasons = append(k.reasons, reason)
+	}
+	k.numbers[reason] = append(k.numbers[reason], number)
+}
+
+// words says the skips as "; left out: 3 already in the queue (#4, #5, #9)".
+func (k skips) words() string {
+	if len(k.reasons) == 0 {
+		return ""
+	}
+	parts := make([]string, len(k.reasons))
+	for n, reason := range k.reasons {
+		numbers := k.numbers[reason]
+		shown := make([]string, 0, 3)
+		for _, number := range numbers[:min(len(numbers), 3)] {
+			shown = append(shown, fmt.Sprintf("#%d", number))
+		}
+		more := ""
+		if len(numbers) > 3 {
+			more = ", ..."
+		}
+		parts[n] = fmt.Sprintf("%d %s (%s%s)", len(numbers), reason, strings.Join(shown, ", "), more)
+	}
+	return "; left out: " + strings.Join(parts, "; ")
 }
 
 // bumps returns the issues the owner put first in line, each with the worker

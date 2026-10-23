@@ -129,6 +129,43 @@ func (q QueueItem) actionable() bool {
 	return q.Workable() && (q.Rework == "" || q.overlaps == "")
 }
 
+// hold says why a worker cannot act on the item now, in the words the owner
+// reads in `shed queue`; "" when it can.
+func (q QueueItem) hold() string {
+	switch {
+	case q.actionable():
+		return ""
+	case q.overlaps != "":
+		return "rework that waits: it " + q.overlaps
+	case len(q.Waiting) > 0:
+		return "waits on the owner: " + strings.Join(q.Waiting, ", ")
+	case q.Blocked != "":
+		return "held: " + q.Blocked
+	case q.Paced != "":
+		return "paced: " + q.Paced
+	}
+	return "not workable"
+}
+
+// kind says what the item is when it is not new work.
+func (q QueueItem) kind() string {
+	switch {
+	case q.Bumped:
+		return "bumped"
+	case q.Rework != "":
+		return "rework"
+	case q.Look != "":
+		return "look"
+	case q.Verify != "":
+		return "verify"
+	case q.Stack != "":
+		return "stack"
+	case q.Ruled:
+		return "resume"
+	}
+	return ""
+}
+
 // resumes reports whether the item is started work that came back to a
 // worker: its pull request needs one, or the owner answered its question.
 func (q QueueItem) resumes() bool {
