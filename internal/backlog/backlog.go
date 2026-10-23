@@ -259,8 +259,53 @@ func issueList(ctx context.Context, src config.IssueSource, filter ...string) ([
 	}
 	for i := range issues {
 		issues[i].Repo = src.Repo
+		if len(issues[i].Comments) < listedComments {
+			continue
+		}
+		// The list has the first comments only, and the signals are read from
+		// the last ones: a look answered since would stay asked.
+		all, err := allComments(ctx, src.Repo, issues[i].Number)
+		if err != nil {
+			return nil, err
+		}
+		issues[i].Comments = all
 	}
 	return issues, nil
+}
+
+// listedComments is how many comments `gh issue list` gives an issue at the
+// most: the first ones, oldest first.
+const listedComments = 100
+
+// allComments reads every comment of the issue, oldest first.
+func allComments(ctx context.Context, repo string, number int) ([]Comment, error) {
+	cmd := exec.CommandContext(ctx, "gh", "api", "--paginate", fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repo, number),
+		"--jq", ".[] | {body, createdAt: .created_at}")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh api %s#%d comments: %w: %s", repo, number, err, strings.TrimSpace(stderr.String()))
+	}
+	comments, err := parseComments(out)
+	if err != nil {
+		return nil, fmt.Errorf("gh api %s#%d comments: %w", repo, number, err)
+	}
+	return comments, nil
+}
+
+// parseComments reads comments given one JSON object per line.
+func parseComments(out []byte) ([]Comment, error) {
+	var comments []Comment
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for dec.More() {
+		var c Comment
+		if err := dec.Decode(&c); err != nil {
+			return nil, fmt.Errorf("parse comments: %w", err)
+		}
+		comments = append(comments, c)
+	}
+	return comments, nil
 }
 
 // withSearch adds a search to the arguments. gh takes one --search: a second
