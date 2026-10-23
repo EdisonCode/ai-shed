@@ -257,3 +257,17 @@ func TestTheKeptQueueSaysWhatTheReserveOfferedAndWhatItLeftOut(t *testing.T) {
 		}
 	}
 }
+
+func TestTheReserveIsOfferedWhenThePaceHoldsTheQueue(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	paced(f, 200) // half the week gone: the pace line is $100
+	spent(t, f, 120)
+	withBackfill(f, labeled(5))
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	for _, want := range []string{"org/app#5 Issue [held: the account is ahead of its weekly pace", "#50 Issue [backlog]"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+}

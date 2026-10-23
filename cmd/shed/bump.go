@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -66,7 +67,22 @@ func cmdBump(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	reserve := false
 	if !open {
+		// An issue in no queue yet may be in the machine's reserve: the
+		// worker it is handed to claims it.
+		inReserve, ok, err := backlog.Find(ctx, backlog.GH{}, m.ReserveSources(), issue)
+		if err != nil {
+			return fail(err)
+		}
+		if ok {
+			if label := queueLabel(cfg.QueueLabels(), inReserve); label != "" {
+				return fail(fmt.Errorf("%s#%d is in the reserve of machine %s, but its label %s puts it in a queue of the fleet; change that label to move it", inReserve.Repo, issue, m.Name, label))
+			}
+			found, reserve = inReserve, true
+		}
+	}
+	if !open && !reserve {
 		return fail(fmt.Errorf("%s: an issue is bumped on the machine whose `issues` select it", notInQueue(m.Name, issue, found)))
 	}
 	if err := deploy.Bump(ctx, runner, m, issue, *worker); err != nil {
@@ -76,6 +92,9 @@ func cmdBump(args []string) int {
 		fmt.Printf("%s: #%d (%s) is first in line for worker %s, and out of the other workers' queues.\n", m.Name, issue, found.Title, *worker)
 	} else {
 		fmt.Printf("%s: #%d (%s) is first in its queue.\n", m.Name, issue, found.Title)
+	}
+	if reserve {
+		fmt.Println("It is in the machine's reserve: the worker it is handed to puts its queue label on it.")
 	}
 	fmt.Println("It is handed over when a worker has nothing in progress. Nobody is interrupted, and an issue a worker already has in hand stays with it.")
 	fmt.Printf("To take it back: shed bump -undo %s %d\n", m.Name, issue)
@@ -93,4 +112,15 @@ func notInQueue(machine string, issue int, seen backlog.Issue) string {
 		labels = strings.Join(names, ", ")
 	}
 	return fmt.Sprintf("%s#%d is open, but no queue of machine %s selects it; its labels now: %s", seen.Repo, issue, machine, labels)
+}
+
+// queueLabel returns the label of the issue that puts it in a queue of the
+// fleet; "" for none.
+func queueLabel(queueLabels []string, i backlog.Issue) string {
+	for _, l := range i.LabelNames() {
+		if slices.Contains(queueLabels, l) {
+			return l
+		}
+	}
+	return ""
 }

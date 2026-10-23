@@ -1354,6 +1354,22 @@ func (m Machine) sources(w Worker, backfill bool) []IssueSource {
 	return sources
 }
 
+// ReserveSources returns every backfill source on the machine, each once:
+// the machine's and its workers'.
+func (m Machine) ReserveSources() []IssueSource {
+	var all []IssueSource
+	seen := map[IssueSourceKey]bool{}
+	for _, w := range m.Builders() {
+		for _, src := range m.BackfillFor(w) {
+			if !seen[src.Key()] {
+				seen[src.Key()] = true
+				all = append(all, src)
+			}
+		}
+	}
+	return all
+}
+
 // ClaimLabel is the label a backfill issue of the repository gets when this
 // worker takes it.
 func (m Machine) ClaimLabel(w Worker, repo string) string {

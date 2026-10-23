@@ -262,7 +262,8 @@ machines:
 - `query` is a GitHub issue search. A source may have one in place of a
   label, with or without `backfill`.
 - The reserve is listed only when the sources beside it have nothing the
-  worker can act on. Its issues come after everything else, in its own
+  worker can act on, counting what the weekly pace holds: ahead of pace, the
+  reserve's own `priority` work is handed out. Its issues come after everything else, in its own
   `priority` order and then oldest first. `shed status` does not list them;
   `shed queue` does, with what the reserve left out and why.
 - An issue that is handed over gets the label of the first labelled source
@@ -388,7 +389,11 @@ shed bump -undo linux-box 41          # back to its usual place
 - **It lasts as long as the issue is open**, so a moved issue that comes back
   as rework comes back to the worker that built it. A move ends by itself
   once the issue is closed or leaves the machine's queues.
-- The issue must be open in one of the machine's queues. To send an issue to
+- The issue must be open in one of the machine's queues, or in its reserve.
+  A bumped reserve issue is handed over like any bumped issue, and gets the
+  worker's queue label as a reserve issue does. One with the queue label of
+  another machine is that machine's: change the label to move it.
+- To send an issue to
   another machine, change its label; a bump right after it works, as the
   issue is read by number when GitHub's issue lists have not caught up with
   the label yet. A refusal names the labels the issue has now.

@@ -1501,10 +1501,12 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	items = s.withVerifies(ctx, w, items, open, checkins)
 	s.queueMerges(ctx, open, checkins)
 	s.restartSkippedCI(ctx, open, checkins)
-	// The holds come first: the reserve is offered when nothing beside it
-	// can be acted on, held work included. Then they apply to the reserve.
+	// The holds and the pace come first: the reserve is offered when nothing
+	// beside it can be acted on, held and paced work included. Then they
+	// apply to the reserve, whose priority work the pace lets through.
 	elsewhere := s.inFlightElsewhere(ctx, w)
 	s.applyHolds(w, items, open, elsewhere, checkins)
+	s.applyPace(w, items, checkins)
 	var reserve string
 	if items, reserve, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
@@ -1742,13 +1744,15 @@ func (s *Supervisor) bumps() (map[int]string, error) {
 }
 
 // withMoved adds the issues the owner moved to this worker from the queue
-// of another. The other sources of the machine are listed only when there is
-// such an issue. A bump whose issue is in none of the machine's queues is
-// over: the issue was closed, or lost its label.
+// of another, and the bumped issues that are in no queue yet but in the
+// machine's reserve. The other sources of the machine are listed only when
+// there is such an issue. A bump whose issue is in none of the machine's
+// queues and not in its reserve is over: the issue was closed, or lost its
+// label.
 func (s *Supervisor) withMoved(ctx context.Context, w config.Worker, items []QueueItem, bumps map[int]string, taken map[int]bool, checkins []runlog.Checkin) ([]QueueItem, error) {
 	missing := map[int]bool{}
 	for issue, to := range bumps {
-		if _, here := find(items, issue); to == w.Name && !here && !taken[issue] {
+		if _, here := find(items, issue); (to == w.Name || to == "") && !here && !taken[issue] {
 			missing[issue] = true
 		}
 	}
@@ -1765,18 +1769,62 @@ func (s *Supervisor) withMoved(ctx context.Context, w config.Worker, items []Que
 			return nil, err
 		}
 		for _, i := range issues {
-			if missing[i.Number] {
-				delete(missing, i.Number)
+			if !missing[i.Number] {
+				continue
+			}
+			// A bump for the workers whose queue it is in stays there.
+			delete(missing, i.Number)
+			if bumps[i.Number] == w.Name {
 				item := s.item(i, src, checkins)
 				item.Bumped = true
 				items = append(items, item)
 			}
 		}
 	}
+	if len(missing) > 0 {
+		var err error
+		if items, err = s.bumpedReserve(ctx, w, items, missing, checkins); err != nil {
+			return nil, err
+		}
+	}
 	for issue := range missing {
-		s.Logf("worker %s: #%d is open in no queue of this machine; its bump is dropped", w.Name, issue)
+		if bumps[issue] != w.Name {
+			// Another worker's reserve may have it.
+			continue
+		}
+		s.Logf("worker %s: #%d is open in no queue of this machine and not in its reserve; its bump is dropped", w.Name, issue)
 		if err := runlog.RemoveBump(s.StateDir, issue); err != nil {
 			return nil, err
+		}
+	}
+	return items, nil
+}
+
+// bumpedReserve adds the bumped issues that are in the machine's reserve and
+// in no queue yet, and takes them off missing. The worker claims such an
+// issue when it is handed over, as it claims one from its own reserve. An
+// issue with the queue label of another machine is that machine's: a bump
+// here does not take it.
+func (s *Supervisor) bumpedReserve(ctx context.Context, w config.Worker, items []QueueItem, missing map[int]bool, checkins []runlog.Checkin) ([]QueueItem, error) {
+	for _, src := range s.Machine.ReserveSources() {
+		issues, err := s.Lister.List(ctx, src)
+		if err != nil {
+			return nil, err
+		}
+		for _, i := range issues {
+			if !missing[i.Number] || slices.ContainsFunc(i.LabelNames(), func(l string) bool { return slices.Contains(s.QueueLabels, l) }) {
+				continue
+			}
+			claim := s.Machine.ClaimLabel(w, i.Repo)
+			if claim == "" {
+				// This worker has no queue of the repository to put it in.
+				continue
+			}
+			delete(missing, i.Number)
+			item := s.item(i, src, checkins)
+			item.Bumped, item.Backfill, item.claim = true, true, claim
+			item.unclaim, item.ReleasedBy = src.Label, backlog.ReleasedBy(i)
+			items = append(items, item)
 		}
 	}
 	return items, nil
