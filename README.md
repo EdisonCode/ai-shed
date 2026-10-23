@@ -104,7 +104,7 @@ one verdict:
 | `held` | (set by the agent, not the reviewer) its next issue waits for the machine to have room | delivers it when there is room, or after `max_wait` |
 | `limited` | it reached a usage limit and must wait for the reset | types nothing, looks again just after the reset (every 15 minutes when the screen names no time), then tells it to continue. The time on the screen is the latest: see below for a limit that ends sooner |
 | `tool_error` | its tool stopped on an API error (a 403, a 429, a 5xx, "overloaded"), not on its work | tells it to continue after 5 minutes, then 15, then 45; `needs_owner` only when the third retry fails |
-| `unsent` | a message the supervisor sent sits typed in the worker's input and was not sent | presses Enter once (a carriage return, `C-m`) and looks again; `needs_owner` when the message is still there |
+| `unsent` | a message the supervisor sent sits typed in the worker's input and was not sent | presses Enter once (a carriage return, `C-m`) and looks again; `needs_owner` when the message is still there. The supervisor sees this itself, without a reviewer, when the input box between the screen's last two rules starts with the message it typed |
 
 The terminal is captured with its styles. Text that the worker's tool draws
 faint, such as a placeholder or a suggestion of what to type next in an empty
