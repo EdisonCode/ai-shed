@@ -2268,6 +2268,38 @@ func TestBumpOfAnIssueThatLeftEveryQueueIsDropped(t *testing.T) {
 	}
 }
 
+func TestBumpOfAnIssueInTheReserveIsHandedOverAndClaimed(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(51))
+	claimer := withBackfill(f, labeled(12))
+	f.bump(t, 51, "")
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if got := queueShown(t, prompt); !slices.Equal(got, []int{51, 12}) {
+		t.Fatalf("queue = %v, want the bumped reserve issue first, beside the queue the reserve is not listed for", got)
+	}
+	if !strings.Contains(prompt, "org/app#51 Issue [the owner put this first] [backlog]") {
+		t.Fatalf("the reviewer was not told #51 is bumped from the reserve:\n%s", prompt)
+	}
+	if !slices.Equal(claimer.claimed, []string{"org/app#51 machine:box"}) {
+		t.Fatalf("claimed = %q, want #51 put in this machine's queue", claimer.claimed)
+	}
+}
+
+func TestBumpDoesNotTakeAReserveIssueInAnotherMachinesQueue(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	withBackfill(f, labeled(12))
+	path := f.bump(t, 52, "app") // labelled machine:other
+	f.tick(2 * time.Minute)
+
+	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
+		t.Fatalf("queue = %v; #52 is another machine's", got)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the bump of #52 is still on the machine: %v", err)
+	}
+}
+
 func TestBumpToAWorkerTheMachineDoesNotHaveMovesNothing(t *testing.T) {
 	f := started(t, config.Supervisor{}, onTrack)
 	f.lister.issues = []backlog.Issue{labeled(12), labeled(30)}

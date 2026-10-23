@@ -99,6 +99,8 @@ type into a worker. Bump it:
   nothing in hand. Say in the issue anything that worker needs and its brief
   does not give it.
 - `shed bump -undo <machine> <issue>` takes it back.
+- An issue in the machine's reserve (a `backfill` source) can be bumped too:
+  the worker it is handed to puts its queue label on it.
 
 Nobody is interrupted: the issue is handed over when the worker next has
 nothing in progress, and a resting worker takes it within five minutes. An

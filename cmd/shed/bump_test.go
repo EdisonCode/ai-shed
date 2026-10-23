@@ -15,3 +15,13 @@ func TestARefusedBumpSaysWhatLabelsTheIssueHasNow(t *testing.T) {
 		t.Errorf("not open: %q, want %q", got, want)
 	}
 }
+
+func TestABumpNamesTheQueueLabelThatKeepsAReserveIssueElsewhere(t *testing.T) {
+	i := backlog.Issue{Repo: "org/app", Number: 41, Labels: []backlog.Label{{Name: "p1"}, {Name: "machine:other"}}}
+	if got := queueLabel([]string{"machine:box", "machine:other"}, i); got != "machine:other" {
+		t.Errorf("queue label = %q, want machine:other", got)
+	}
+	if got := queueLabel([]string{"machine:box"}, i); got != "" {
+		t.Errorf("queue label = %q, want none", got)
+	}
+}
