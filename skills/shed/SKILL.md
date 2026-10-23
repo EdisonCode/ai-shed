@@ -76,6 +76,16 @@ counts only inside a worker's hand-back comment. An answer (`Owner ruling`,
 begins a line: start a line with one only when you mean it. Do not head your
 own comment with the hand-back phrase.
 
+## Why a worker has no work
+
+When `shed status` shows idle workers beside queued issues, or an issue sits
+in the reserve while a machine has room, run `shed queue <machine>`. It
+prints each worker's queue as the agent on that machine last computed it:
+what it would hand over, why it holds each other item (pace, overlap, the
+PR limit, a dependency, what waits on the owner), and why the reserve was
+not listed or what it left out. Trust it over your own reading of the
+issues: the agent knows the machine's pace and what each worker has in hand.
+
 ## Put an issue first
 
 When an urgent issue waits behind other work, do not relabel it and do not

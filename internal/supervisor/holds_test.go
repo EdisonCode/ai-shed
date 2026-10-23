@@ -1,6 +1,8 @@
 package supervisor
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -199,5 +201,59 @@ func TestTheReserveIsNotOfferedBesideReworkAWorkerCanDo(t *testing.T) {
 	f.tick(2 * time.Minute)
 	if prompt := f.reviewer.prompts[0]; strings.Contains(prompt, "[backlog]") {
 		t.Fatalf("the reserve is offered beside rework a worker can do:\n%s", prompt)
+	}
+}
+
+// keptQueue reads the queue the agent kept for the worker.
+func keptQueue(t *testing.T, f *fixture, worker string) runlog.QueueView {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(f.StateDir, runlog.QueuesDir, worker))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := runlog.ParseQueue(string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestTheAgentKeepsEachWorkersQueueWithWhyItHoldsAnItem(t *testing.T) {
+	f := started(t, config.Supervisor{OverlapLabels: "area:"}, done)
+	f.Machine.Workers = append(f.Machine.Workers, config.Worker{Name: "docs", Dir: t.TempDir(), Brief: "b"})
+	appendCheckin(t, f, runlog.Checkin{Time: f.now, Worker: "docs", Kind: KindIdle, Verdict: runlog.VerdictNudge, Sent: true, Issue: 12})
+	f.lister.issues = []backlog.Issue{labeled(11, "area:billing"), labeled(12, "area:billing"), labeled(14)}
+	f.tick(2 * time.Minute)
+	v := keptQueue(t, f, "app")
+	holds := map[int]string{}
+	for _, e := range v.Items {
+		holds[e.Number] = e.Hold
+	}
+	if holds[11] != "held: overlaps #12, which docs has in hand: both are area:billing" || holds[14] != "" || v.Workable() != 1 {
+		t.Fatalf("kept queue = %+v, want #11 held for its overlap and #14 workable", v)
+	}
+}
+
+func TestTheKeptQueueSaysWhyTheReserveWasNotListed(t *testing.T) {
+	f := started(t, config.Supervisor{OverlapLabels: "area:"}, done)
+	withBackfill(f, labeled(13))
+	f.tick(2 * time.Minute)
+	if v := keptQueue(t, f, "app"); v.Reserve != "not listed: #13 can be acted on" {
+		t.Fatalf("reserve = %q", v.Reserve)
+	}
+}
+
+func TestTheKeptQueueSaysWhatTheReserveOfferedAndWhatItLeftOut(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	withBackfill(f, asksADecision(12, t0.Add(-time.Hour)))
+	f.tick(2 * time.Minute)
+	v := keptQueue(t, f, "app")
+	if want := "listed: 2 issue(s) offered; left out: 1 labelled machine:other, a queue of the fleet (#52)"; v.Reserve != want {
+		t.Fatalf("reserve = %q, want %q", v.Reserve, want)
+	}
+	for _, e := range v.Items {
+		if e.Number == 50 && !e.Backfill {
+			t.Fatalf("#50 is not marked as from the reserve: %+v", v)
+		}
 	}
 }

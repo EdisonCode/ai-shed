@@ -130,7 +130,9 @@ type IssueStatus struct {
 	Bumped   bool   `json:"bumped,omitempty"`
 	BumpedTo string `json:"bumped_to,omitempty"`
 	// Held says why a queued issue is not handed out: an issue it depends on
-	// is open, or one in a worker's hands touches the same code.
+	// is open, or one in a worker's hands touches the same code. "agent: "
+	// starts the reason the machine's agent gave, which outweighs the
+	// watcher's own reading.
 	Held string `json:"held,omitempty"`
 	// ReturnsTo is the worker an answer hands the issue back to, when it
 	// returns to one, and ReturnsIdle says that worker has no work now.
@@ -408,6 +410,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 
 	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
 	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels, cfg.Repos, cfg.Signals)
+	MarkAgentHolds(&report)
 	if res != nil {
 		AssessContext(&report, m, *res, cfg.Supervisor.ContextBudget)
 	}

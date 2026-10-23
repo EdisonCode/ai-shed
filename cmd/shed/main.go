@@ -27,6 +27,9 @@ Usage:
   shed bump [-worker name] <machine> <issue>
                                     put an open issue first in its queue, or in that worker's
   shed bump -undo <machine> <issue> put it back in its usual place
+  shed queue [-json] <machine> [worker]
+                                    each worker's queue as its agent sees it: what it hands
+                                    over, why it holds the rest, what the reserve offered
   shed pause [-for 30m] <machine>   hand out nothing and nudge nobody for a while
   shed resume <machine> [worker]    end a pause early, and a hold at a usage limit that is over
   shed recycle [-now] <machine> <worker>
@@ -96,6 +99,8 @@ func main() {
 		code = cmdResume(args)
 	case "bump":
 		code = cmdBump(args)
+	case "queue":
+		code = cmdQueue(args)
 	case "login":
 		code = cmdLogin(args)
 	case "promote":

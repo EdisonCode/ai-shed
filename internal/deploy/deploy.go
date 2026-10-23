@@ -390,3 +390,26 @@ func Hook(ctx context.Context, command string, m config.Machine, stdout, stderr 
 	}
 	return nil
 }
+
+// Queues returns each worker's queue as the machine's agent last computed
+// it, by worker. A worker the agent has not read a queue for is missing.
+func Queues(ctx context.Context, r probe.Runner, m config.Machine) (map[string]runlog.QueueView, error) {
+	script := fmt.Sprintf(`for f in "$HOME/%s/%s"/*; do [ -f "$f" ] && echo "$(basename "$f") $(cat "$f")"; done; exit 0`, runlog.StateDir, runlog.QueuesDir)
+	out, err := r.Run(ctx, m, "sh -s", strings.NewReader(script))
+	if err != nil {
+		return nil, fmt.Errorf("read the queues on %s: %w", m.Name, err)
+	}
+	queues := map[string]runlog.QueueView{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		worker, data, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		v, err := runlog.ParseQueue(data)
+		if err != nil {
+			return nil, fmt.Errorf("read the queue of %s on %s: %w", worker, m.Name, err)
+		}
+		queues[worker] = v
+	}
+	return queues, nil
+}
