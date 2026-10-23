@@ -560,3 +560,16 @@ func TestAFailedCheckThatFinishedBeforeTheHandBackIsNotRework(t *testing.T) {
 		t.Fatal("a conflict is rework, whenever the checks ran")
 	}
 }
+
+func TestCommentsReadPastTheListsFirstHundredKeepTheirOrderAndTime(t *testing.T) {
+	out := []byte(`{"body":"## Hand-back\n**Needs eyes:** open the page","createdAt":"2026-10-15T10:00:00Z"}
+{"body":"Eyes checked: it exports","createdAt":"2026-10-20T09:00:00Z"}
+`)
+	got, err := parseComments(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[1].Body != "Eyes checked: it exports" || !got[1].CreatedAt.Equal(time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("comments = %+v", got)
+	}
+}
