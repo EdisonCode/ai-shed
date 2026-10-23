@@ -460,3 +460,34 @@ func TestAPullRequestAloneOnTheTrainWhoseChecksStillRunIsNotMergedDirectly(t *te
 		t.Fatalf("merged = %q, built = %v: want a batch, its own checks not passed", train.merged, batcher.built)
 	}
 }
+
+func TestFewerPullRequestsThanTheMinimumMergeEachOnItsOwnChecksWithoutABatch(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{MergeTrainMin: 3}, 12, 13)
+	movedUnder(train, batcher, 41, 42) // the base moved in their files: the minimum still merges them
+	f.ride(t, train)
+	if len(batcher.built) != 0 || !slices.Equal(train.merged, []string{"#41 merge at c0ffee41", "#42 merge at c0ffee42"}) {
+		t.Fatalf("built = %v, merged = %q: want both merged on their own checks", batcher.built, train.merged)
+	}
+}
+
+func TestAsManyPullRequestsAsTheMinimumAreTestedInABatch(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{MergeTrainMin: 2}, 12, 13)
+	f.ride(t, train)
+	if len(train.merged) != 0 || len(batcher.built) != 1 || !slices.Equal(batcher.built[0], []int{41, 42}) {
+		t.Fatalf("merged = %q, built = %v: want one batch of both", train.merged, batcher.built)
+	}
+}
+
+func TestBelowTheMinimumAPullRequestWhoseChecksStillRunIsBatchedWhenNothingMerges(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{MergeTrainMin: 3}, 12)
+	h := train.heads[41]
+	h.Pending = true
+	train.heads[41] = h
+	f.ride(t, train)
+	if len(train.merged) != 0 || len(batcher.built) != 1 {
+		t.Fatalf("merged = %q, built = %v: want a batch, its own checks not passed", train.merged, batcher.built)
+	}
+}

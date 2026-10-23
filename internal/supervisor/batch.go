@@ -289,8 +289,13 @@ func (s *Supervisor) buildBatch(ctx context.Context, repo config.Repo, bt *batch
 		// Every batch would fail on the base's own red check.
 		return
 	}
-	if len(group) == 1 && bt.failed == "" && s.mergeAlone(ctx, repo, bt, group[0]) {
-		return
+	if bt.failed == "" {
+		if len(group) < repo.Verify.MergeTrainMin && !group[0].alone && s.mergeEach(ctx, repo, bt, group) {
+			return
+		}
+		if len(group) == 1 && s.mergeAlone(ctx, repo, bt, group[0], false) {
+			return
+		}
 	}
 	var cars []backlog.Car
 	for _, c := range group {
@@ -320,7 +325,10 @@ func (s *Supervisor) buildBatch(ctx context.Context, repo config.Repo, bt *batch
 // reports whether it merged. While a split looks for the pull request that
 // failed, the batch tests it: the failure may be one it makes together with
 // another.
-func (s *Supervisor) mergeAlone(ctx context.Context, repo config.Repo, bt *batchTrain, c batchCar) bool {
+//
+// Below merge_train_min, the owner chose not to test it with the base: it
+// merges on its own green checks, wherever the base moved.
+func (s *Supervisor) mergeAlone(ctx context.Context, repo config.Repo, bt *batchTrain, c batchCar, belowMin bool) bool {
 	h, err := s.Train.ReadHead(ctx, repo.Name, c.PR)
 	if err != nil {
 		s.Logf("merge train %s: read #%d: %v", repo.Name, c.PR, err)
@@ -330,7 +338,10 @@ func (s *Supervisor) mergeAlone(ctx context.Context, repo config.Repo, bt *batch
 		return false
 	}
 	how := "its head has the whole base branch"
-	if h.Behind > 0 {
+	switch {
+	case belowMin:
+		how = fmt.Sprintf("fewer pull requests wait than merge_train_min (%d)", repo.Verify.MergeTrainMin)
+	case h.Behind > 0:
 		apart, last, err := s.apart(ctx, repo.Name, h)
 		if err != nil {
 			s.Logf("merge train %s: read what moved the base under #%d: %v", repo.Name, c.PR, err)
@@ -345,9 +356,24 @@ func (s *Supervisor) mergeAlone(ctx context.Context, repo config.Repo, bt *batch
 		s.Logf("merge train %s: merge #%d at %s directly: %v; a batch tests it instead", repo.Name, c.PR, short(c.SHA), err)
 		return false
 	}
-	s.Logf("merge train %s: #%d merged at %s directly, without a batch of one: its own checks passed and %s", repo.Name, c.PR, short(c.SHA), how)
+	s.Logf("merge train %s: #%d merged at %s directly, without a batch: its own checks passed and %s", repo.Name, c.PR, short(c.SHA), how)
 	bt.remove(c.PR)
 	return true
+}
+
+// mergeEach merges each pull request of a group smaller than
+// merge_train_min on its own, and reports whether any merged. One that
+// cannot merge yet stays on the train: the next build tries again, and
+// batches it when nothing beside it merged.
+func (s *Supervisor) mergeEach(ctx context.Context, repo config.Repo, bt *batchTrain, group []batchCar) bool {
+	merged := false
+	// Each merge takes its pull request off the train, under the group.
+	for _, c := range slices.Clone(group) {
+		if s.mergeAlone(ctx, repo, bt, c, true) {
+			merged = true
+		}
+	}
+	return merged
 }
 
 // driveBatch moves the batch in hand: it waits for its checks, then merges

@@ -116,6 +116,7 @@ repos:
       merge_low: true
       merge_train: batch
       batch_size: 5                 # the default
+      merge_train_min: 3            # optional: fewer than this merge one by one, without a batch
       merge_train_alone:            # optional: a change here is tested by itself
         - db/migrations
         - package-lock.json
@@ -139,8 +140,17 @@ merge that draft yourself.
   already tested what would land: its head has the whole base branch, or
   the base moved since only in files it does not touch. shed merges it
   directly, at its verified head, and the agent log says `merged at <sha>
-  directly, without a batch of one`. While a red batch is split, a batch of
+  directly, without a batch`. While a red batch is split, a batch of
   one is still built: the failure may come from two pull requests together.
+- **`merge_train_min`** is the smallest batch shed builds (default 1: every
+  batch). Fewer verified pull requests than that merge one by one, each at
+  its own verified head once its own checks are green, wherever the base
+  moved since: where the base does not require an up-to-date branch, a
+  batch of one or two costs a full CI run and catches little that each
+  one's checks and the base's own CI do not. The agent log says `fewer pull
+  requests wait than merge_train_min`. One whose checks still run waits;
+  when none of them can merge, the batch is built as usual. A pull request
+  on a `merge_train_alone` path still gets a batch of its own.
 - **A pull request that conflicts** with the ones before it comes off the
   train and goes back to a worker, and the batch is built again without it.
 - **A pull request that gets new commits** while it is on the train (a fix

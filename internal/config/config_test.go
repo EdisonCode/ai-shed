@@ -587,9 +587,11 @@ func TestABatchTrainTakesItsSizeAndThePathsThatGoAlone(t *testing.T) {
 		t.Fatalf("repo = %+v", r.Verify)
 	}
 	for yaml, want := range map[string]string{
-		"{merge_low: true, merge_train: fast}":                  "must be true, false or batch",
-		"{merge_low: true, merge_train: true, batch_size: 3}":   "are for merge_train: batch",
-		"{merge_low: true, merge_train: batch, batch_size: -1}": "must be 1 or more",
+		"{merge_low: true, merge_train: fast}":                                     "must be true, false or batch",
+		"{merge_low: true, merge_train: true, batch_size: 3}":                      "are for merge_train: batch",
+		"{merge_low: true, merge_train: batch, batch_size: -1}":                    "must be 1 or more",
+		"{merge_low: true, merge_train: true, merge_train_min: 2}":                 "are for merge_train: batch",
+		"{merge_low: true, merge_train: batch, batch_size: 3, merge_train_min: 4}": "must be between 1 and batch_size (3)",
 	} {
 		_, err := Parse([]byte(queue + "repos: [{repo: org/app, verify: " + yaml + "}]\n"))
 		if err == nil || !strings.Contains(err.Error(), want) {
