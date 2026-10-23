@@ -473,6 +473,29 @@ repos:
   that reason is an `!` line: `1 of 3 workers have no work: 4 queued
   issue(s) are held: ...`.
 
+When your CI is the bottleneck and not the workers, hold the CI and not the
+work. A draft runs no CI, so count only the pull requests that are ready:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    max_open_prs: 3
+    max_open_prs_count: ready   # the default is all
+```
+
+- **At the limit, work goes on.** New issues are still handed out. The
+  worker is told `my-org/my-app has 3 ready pull requests, at or over its
+  limit of 3: open the pull request of #12 as a draft and do not mark it
+  ready`, and names it in its hand-back as `#41 (draft, parked)`.
+- **A parked draft is nobody's yet.** It is not a review that waits on you,
+  and `shed status` lists it as `draft #41 (parked)`.
+- **shed unparks it.** Each time a machine reads its queue and the ready
+  count is under the limit, its agent marks its oldest parked draft ready
+  (`gh pr ready`), which starts its CI, and says so on the issue:
+  `Unparked: pull request #41 is marked ready, so its CI runs`. Only the
+  machine that built the work unparks it; two machines with room at the same
+  moment may each unpark one.
+
 ### Verification before your review
 
 A second reader catches work that does not do what its issue asked. A

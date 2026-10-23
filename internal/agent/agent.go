@@ -245,6 +245,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		Claimer:     backlog.GH{},
 		Releaser:    backlog.GH{},
 		Merger:      backlog.GH{},
+		Readier:     backlog.GH{},
 		Train:       backlog.GH{},
 		Batch:       backlog.GH{},
 		CI:          backlog.GH{},

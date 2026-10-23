@@ -1477,6 +1477,16 @@ func TestStatusShowsANewIssueHeldAtItsRepositorysOpenPullRequestLimit(t *testing
 	}
 }
 
+func TestStatusDoesNotHoldANewIssueWhereTheLimitParksIt(t *testing.T) {
+	queued := issue(11, "")
+	queued.OpenPRs = map[int]backlog.PR{41: {}, 42: {}}
+	report := MachineReport{Issues: []IssueStatus{{Repo: "org/app", Number: 11, State: Queued}}}
+	MarkHeld(&report, []backlog.Issue{queued}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2, MaxOpenPRsCount: config.PRCountReady}}, config.DefaultSignals())
+	if got := report.Issues[0]; got.State != Queued {
+		t.Fatalf("#11 = %s %q, want queued: a worker takes it and parks its pull request", got.State, got.Held)
+	}
+}
+
 func TestStatusSaysWorkersHaveNoWorkBecauseTheRepositoryIsAtItsOpenPullRequestLimit(t *testing.T) {
 	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app"}, {Name: "docs"}}}
 	res := healthy()

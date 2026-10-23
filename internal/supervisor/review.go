@@ -86,6 +86,10 @@ type QueueItem struct {
 	// on that is still open, or an issue in another worker's hands that
 	// touches the same code.
 	Blocked string
+	// Park says why the item's pull request is to be opened as a draft and
+	// left one: its repository is at its limit of ready pull requests. The
+	// agent marks it ready when there is room.
+	Park string
 	// StackOn says which ready pull request of an issue it depends on the
 	// item is built on, with StackDep and StackPR naming them.
 	StackOn  string
@@ -290,6 +294,9 @@ func Prompt(in ReviewInput) string {
 		}
 		if q.StackOn != "" {
 			fmt.Fprintf(&b, " [stack on: %s; build this on a new branch from it]", q.StackOn)
+		}
+		if q.Park != "" {
+			fmt.Fprintf(&b, " [park: %s; its pull request is opened as a draft and left one]", q.Park)
 		}
 		if q.Stack != "" {
 			fmt.Fprintf(&b, " [stack: %s; build what is still to do on a branch from it: %s]", q.Stack, strings.Join(q.Remaining, "; "))

@@ -430,6 +430,23 @@ func (GH) RestartCI(ctx context.Context, repo string, pr int) error {
 	return nil
 }
 
+// MarkReady marks a draft pull request ready for review, which starts its
+// CI, and says so on its issue.
+func (GH) MarkReady(ctx context.Context, repo string, issue, pr int, comment string) error {
+	for _, args := range [][]string{
+		{"pr", "ready", strconv.Itoa(pr), "--repo", repo},
+		{"issue", "comment", strconv.Itoa(issue), "--repo", repo, "--body", comment},
+	} {
+		cmd := exec.CommandContext(ctx, "gh", args...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("gh %s %s %s#%s: %w: %s", args[0], args[1], repo, args[2], err, strings.TrimSpace(stderr.String()))
+		}
+	}
+	return nil
+}
+
 var failed = map[string]bool{"FAILURE": true, "TIMED_OUT": true, "STARTUP_FAILURE": true, "ERROR": true}
 
 // prProblem says what stops a pull request from merging: a conflict first,

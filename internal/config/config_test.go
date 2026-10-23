@@ -640,6 +640,24 @@ func TestARepositoryCanLimitItsOpenPullRequests(t *testing.T) {
 	}
 }
 
+func TestALimitOfReadyPullRequestsParksAtTheLimit(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + "repos: [{repo: org/app, max_open_prs: 3, max_open_prs_count: ready}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := cfg.Repo("org/app"); !r.ParksAtPRLimit() {
+		t.Fatalf("repo = %+v, want it to park at its limit", r)
+	}
+	for yaml, want := range map[string]string{
+		"{repo: org/app, max_open_prs: 3, max_open_prs_count: drafts}":       "must be all or ready",
+		"{repo: org/app, gates: {command: make}, max_open_prs_count: ready}": "max_open_prs_count needs max_open_prs",
+	} {
+		if _, err := Parse([]byte(minimal + "repos: [" + yaml + "]\n")); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", yaml, err, want)
+		}
+	}
+}
+
 func TestMergeHighNeedsMergeLow(t *testing.T) {
 	queue := minimal + "    issues: [{repo: org/app, label: x}]\n    workers: [{name: w, dir: /tmp, brief: b, verifies: true}]\n"
 	cfg, err := Parse([]byte(queue + "repos: [{repo: org/app, verify: {merge_low: true, merge_high: true}}]\n"))

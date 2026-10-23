@@ -4,6 +4,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/edisoncode/ai-shed/internal/config"
 )
 
 func TestDependenciesAreReadFromTheBodyAndTheComments(t *testing.T) {
@@ -124,19 +127,34 @@ func TestANewIssueIsHeldWhileItsRepositoryIsAtItsOpenPullRequestLimit(t *testing
 		}
 		return i
 	}
-	if got, want := PRLimitHold(open(9), 8), "org/app has 9 open pull requests, at or over its limit of 8: they are finished first"; got != want {
+	if got, want := PRLimitHold(open(9), 8, false), "org/app has 9 open pull requests, at or over its limit of 8: they are finished first"; got != want {
 		t.Errorf("over the limit: hold = %q, want %q", got, want)
 	}
-	if got := PRLimitHold(open(8), 8); !strings.Contains(got, "8 open pull requests") {
+	if got := PRLimitHold(open(8), 8, false); !strings.Contains(got, "8 open pull requests") {
 		t.Errorf("at the limit: hold = %q, want it held", got)
 	}
-	if got := PRLimitHold(open(7), 8); got != "" {
+	if got := PRLimitHold(open(7), 8, false); got != "" {
 		t.Errorf("under the limit: hold = %q, want none", got)
 	}
-	if got := PRLimitHold(open(50), 0); got != "" {
+	if got := PRLimitHold(open(50), 0, false); got != "" {
 		t.Errorf("no limit: hold = %q, want none", got)
 	}
-	if got := PRLimitHold(Issue{Repo: "org/app", Number: 20}, 8); got != "" {
+	if got := PRLimitHold(Issue{Repo: "org/app", Number: 20}, 8, false); got != "" {
 		t.Errorf("pull requests not looked up: hold = %q, want none", got)
+	}
+}
+
+func TestAParkedDraftIsReadFromItsHandBack(t *testing.T) {
+	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	i := Issue{Repo: "org/app", Number: 12, Comments: []Comment{{Body: "## Hand-back\n**PR:** #61 (draft, parked)", CreatedAt: at}}, OpenPRs: map[int]PR{61: {Draft: true}, 41: {}}}
+	if pr, since := Parked(i, config.DefaultSignals()); pr != 61 || !since.Equal(at) {
+		t.Fatalf("parked = #%d at %v, want #61 at %v", pr, since, at)
+	}
+	i.OpenPRs[61] = PR{}
+	if pr, _ := Parked(i, config.DefaultSignals()); pr != 0 {
+		t.Fatalf("parked = #%d, want none once the pull request is ready", pr)
+	}
+	if got := ReadyPRs(i); got != 2 {
+		t.Fatalf("ready = %d, want 2", got)
 	}
 }

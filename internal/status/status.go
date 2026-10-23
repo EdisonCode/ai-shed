@@ -926,9 +926,9 @@ func deployWords(d runlog.Deploy) string {
 // of open pull requests, or an issue a worker has in hand that touches the
 // same code. It reads what the supervisor reads.
 func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels string, repos []config.Repo, signals []config.Signal) {
-	limits := map[string]int{}
+	limits, parks := map[string]int{}, map[string]bool{}
 	for _, r := range repos {
-		limits[r.Name] = r.MaxOpenPRs
+		limits[r.Name], parks[r.Name] = r.MaxOpenPRs, r.ParksAtPRLimit()
 	}
 	atLimit, limitWhy := 0, ""
 	byKey := map[string]backlog.Issue{}
@@ -947,7 +947,7 @@ func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels strin
 		}
 		// A bumped issue and one whose question the owner answered go
 		// ahead, as the supervisor hands them out.
-		if hold := backlog.PRLimitHold(issue, limits[issue.Repo]); hold != "" && !st.Bumped && !backlog.Ruled(issue, signals) {
+		if hold := backlog.PRLimitHold(issue, limits[issue.Repo], parks[issue.Repo]); hold != "" && !st.Bumped && !backlog.Ruled(issue, signals) {
 			st.State, st.Held = Held, hold
 			atLimit++
 			limitWhy = cmp.Or(limitWhy, hold)
