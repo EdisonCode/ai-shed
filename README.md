@@ -547,7 +547,9 @@ repos:
   `merge train: PR #41 (#12) in hand 8m, waiting for its checks; next PR #44 (#13)`.
   With `merge_train: batch`, shed tests up to `batch_size` (5) pull requests
   together on one draft pull request, merges each when its checks pass, and
-  splits a batch that fails until it finds the pull request that fails:
+  splits a batch that fails until it finds the pull request that fails. A
+  pull request alone on the train whose own green checks already tested the
+  base merges directly, without a batch:
   `merge train: batch PR #101 of PR #41 (#12), PR #44 (#13) 25m, checks running`. See
   [the repository recipe](docs/REPO-RECIPE.md#a-merge-train-where-there-is-no-merge-queue).
 - **It leaves your list.** A pull request on its way to the merge is not in

@@ -135,6 +135,12 @@ merge that draft yourself.
   with a comment that names the failed check and the batch that failed
   first, with its pull requests, and goes back to a worker as rework; the
   rest merge.
+- **A batch of one** is not built when its pull request's own green checks
+  already tested what would land: its head has the whole base branch, or
+  the base moved since only in files it does not touch. shed merges it
+  directly, at its verified head, and the agent log says `merged at <sha>
+  directly, without a batch of one`. While a red batch is split, a batch of
+  one is still built: the failure may come from two pull requests together.
 - **A pull request that conflicts** with the ones before it comes off the
   train and goes back to a worker, and the batch is built again without it.
 - **A pull request that gets new commits** while it is on the train (a fix

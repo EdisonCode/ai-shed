@@ -106,6 +106,21 @@ func (f *fixture) ride(t *testing.T, train *fakeTrain) {
 	}
 }
 
+// movedUnder puts the pull requests' heads behind a base that moved in
+// files they change, unless the test said how the base moved: by itself,
+// each is tested in a batch, not merged directly.
+func movedUnder(train *fakeTrain, batcher *fakeBatcher, prs ...int) {
+	if batcher.moved.Commits == nil {
+		batcher.moved = backlog.Comparison{Commits: []string{"d00d0000000"}, Files: []string{"export.go"}}
+		batcher.batchFiles = []string{"export.go"}
+	}
+	for _, pr := range prs {
+		h := train.heads[pr]
+		h.Behind = 1
+		train.heads[pr] = h
+	}
+}
+
 func headAt(pr int) backlog.Head {
 	return backlog.Head{Open: true, SHA: fmt.Sprintf("c0ffee%d", pr), Base: "main", Checks: 1}
 }
@@ -213,6 +228,7 @@ func TestAPullRequestTouchingAnAlonePathIsABatchOfItsOwn(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	train, batcher := withBatches(t, f, config.Verify{MergeTrainAlone: []string{"db/migrations"}}, 12, 13, 14)
 	f.Diffs = &fakeDiffs{diffs: map[int]risk.Diff{42: {Files: []string{"db/migrations/0042_orders.sql"}}}}
+	movedUnder(train, batcher, 41, 42)
 	f.ride(t, train)
 	if !slices.Equal(batcher.built[0], []int{41}) {
 		t.Fatalf("built = %v, want #41 alone, before the migration", batcher.built)
@@ -228,6 +244,7 @@ func TestAPullRequestTouchingAnAlonePathIsABatchOfItsOwn(t *testing.T) {
 func TestAPullRequestWhoseHeadMovesLeavesTheBatchAndTheBatchIsBuiltAgain(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	train, batcher := withBatches(t, f, config.Verify{}, 12, 13)
+	movedUnder(train, batcher, 42)
 	f.ride(t, train)
 	train.heads[101] = batchGreen
 	train.heads[41] = backlog.Head{Open: true, SHA: "f1x", Base: "main", Checks: 1}
@@ -255,6 +272,7 @@ func TestABatchWhoseBaseMovedInItsFilesIsBuiltAgainAndCountsIt(t *testing.T) {
 	train, batcher := withBatches(t, f, config.Verify{}, 12)
 	batcher.batchFiles = []string{"export.go", "export_test.go"}
 	batcher.moved = backlog.Comparison{Commits: []string{"d00d1230000", "d00d4560000"}, Files: []string{"export.go"}}
+	movedUnder(train, batcher, 41)
 	f.ride(t, train)
 	moved := batchGreen
 	moved.Behind = 2
@@ -306,6 +324,7 @@ func TestABatchIsBuiltAgainWhenTheBaseMovedByMoreThanGitHubLists(t *testing.T) {
 	train, batcher := withBatches(t, f, config.Verify{}, 12)
 	batcher.batchFiles = []string{"export.go"}
 	batcher.moved = backlog.Comparison{Commits: []string{"d00d1230000"}, Files: []string{"vendor/a.go"}, Partial: true}
+	movedUnder(train, batcher, 41)
 	f.ride(t, train)
 	moved := batchGreen
 	moved.Behind = 1
@@ -319,11 +338,13 @@ func TestABatchIsBuiltAgainWhenTheBaseMovedByMoreThanGitHubLists(t *testing.T) {
 func TestARunningBatchFinishesBeforeANewlyVerifiedPullRequestBoards(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	train, batcher := withBatches(t, f, config.Verify{}, 12)
+	movedUnder(train, batcher, 41)
 	f.ride(t, train) // #101: #41
 	train.heads[101] = batchRunning
 	built(t, f, 13)
 	f.lister.issues = append(f.lister.issues, verifiedAs(13, 42))
 	train.heads[42] = headAt(42)
+	movedUnder(train, batcher, 42)
 	f.ride(t, train)
 	f.ride(t, train)
 	if len(batcher.built) != 1 || len(batcher.closed) != 0 {
@@ -341,6 +362,7 @@ func TestAPullRequestThatConflictsWithTheBatchIsTakenOff(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	train, batcher := withBatches(t, f, config.Verify{}, 12, 13)
 	batcher.conflict = 42
+	movedUnder(train, batcher, 41)
 	f.ride(t, train)
 	last := train.comments[len(train.comments)-1]
 	if !strings.HasPrefix(last, "#13 "+backlog.OffTrainPhrase+" pull request #42,") || !strings.Contains(last, "does not merge cleanly") {
@@ -356,6 +378,7 @@ func TestAnotherMachinesBatchHoldsThisMachinesBack(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	train, batcher := withBatches(t, f, config.Verify{}, 12)
 	batcher.open = []backlog.Batch{{PR: 90, Branch: backlog.BatchBranch("other", f.now), Created: f.now}}
+	movedUnder(train, batcher, 41)
 	f.ride(t, train)
 	if len(train.comments) != 0 || len(batcher.built) != 0 {
 		t.Fatalf("comments = %q, built = %v while another machine's batch runs", train.comments, batcher.built)
@@ -402,5 +425,38 @@ func TestARedBaseHoldsTheBatchTrainWithoutSplittingOrTakingAnythingOff(t *testin
 	f.ride(t, train)
 	if len(batcher.built) != 2 || !slices.Equal(batcher.built[1], []int{41, 42}) {
 		t.Fatalf("built = %v, want the whole batch built again once the base is green", batcher.built)
+	}
+}
+
+func TestAPullRequestAloneOnTheTrainWhoseHeadHasTheBaseIsMergedWithoutABatch(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{MergeMethod: "squash"}, 12)
+	f.ride(t, train)
+	if len(batcher.built) != 0 || !slices.Equal(train.merged, []string{"#41 squash at c0ffee41"}) {
+		t.Fatalf("built = %v, merged = %q: want #41 merged at the head its own checks passed on", batcher.built, train.merged)
+	}
+}
+
+func TestAPullRequestAloneOnTheTrainIsMergedWithoutABatchWhenTheBaseMovedApartFromItsFiles(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{}, 12)
+	batcher.batchFiles = []string{"export.go"}
+	batcher.moved = backlog.Comparison{Commits: []string{"d00d1230000"}, Files: []string{"README.md"}}
+	movedUnder(train, batcher, 41)
+	f.ride(t, train)
+	if len(batcher.built) != 0 || !slices.Equal(train.merged, []string{"#41 merge at c0ffee41"}) {
+		t.Fatalf("built = %v, merged = %q: want #41 merged, the base's commits touching none of its files", batcher.built, train.merged)
+	}
+}
+
+func TestAPullRequestAloneOnTheTrainWhoseChecksStillRunIsNotMergedDirectly(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	train, batcher := withBatches(t, f, config.Verify{}, 12)
+	h := train.heads[41]
+	h.Pending = true
+	train.heads[41] = h
+	f.ride(t, train)
+	if len(train.merged) != 0 || len(batcher.built) != 1 {
+		t.Fatalf("merged = %q, built = %v: want a batch, its own checks not passed", train.merged, batcher.built)
 	}
 }

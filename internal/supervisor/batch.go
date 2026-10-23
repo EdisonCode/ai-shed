@@ -219,7 +219,7 @@ func (s *Supervisor) boardBatch(ctx context.Context, repo config.Repo, bt *batch
 			s.Logf("merge train %s: read what #%d changes: %v", repo.Name, next.v.PR, err)
 			continue
 		}
-		comment := fmt.Sprintf("%s pull request #%d, verified at %s risk with green checks. The verifier said: %s\n\nIt is on the merge train: shed tests it in a batch with other verified pull requests, on a draft pull request, and merges it when the batch's checks pass. The merge is no longer yours on this repository: shed promote lists it with what reaches production.", backlog.QueuedPhrase, next.v.PR, next.v.Tier, next.v.Note)
+		comment := fmt.Sprintf("%s pull request #%d, verified at %s risk with green checks. The verifier said: %s\n\nIt is on the merge train: shed tests it in a batch with other verified pull requests, on a draft pull request, and merges it when the batch's checks pass. When it would be a batch by itself and its own green checks already tested the base it would land on, shed merges it directly. The merge is no longer yours on this repository: shed promote lists it with what reaches production.", backlog.QueuedPhrase, next.v.PR, next.v.Tier, next.v.Note)
 		if err := s.Train.Comment(ctx, repo.Name, next.issue.Number, comment); err != nil {
 			s.Logf("merge train %s: board #%d: %v", repo.Name, next.v.PR, err)
 			return
@@ -289,6 +289,9 @@ func (s *Supervisor) buildBatch(ctx context.Context, repo config.Repo, bt *batch
 		// Every batch would fail on the base's own red check.
 		return
 	}
+	if len(group) == 1 && bt.failed == "" && s.mergeAlone(ctx, repo, bt, group[0]) {
+		return
+	}
 	var cars []backlog.Car
 	for _, c := range group {
 		cars = append(cars, c.Car)
@@ -308,6 +311,43 @@ func (s *Supervisor) buildBatch(ctx context.Context, repo config.Repo, bt *batch
 	}
 	bt.draft, bt.testing = pr, len(group)
 	s.Logf("merge train %s: batch #%d of %s opened on %s", repo.Name, pr, prList(cars), group[0].base)
+}
+
+// mergeAlone merges a pull request that would be a batch of its own at the
+// head it boarded with, when its own green checks already tested what would
+// land: its head has the whole base branch, or the base moved only in files
+// it does not touch. A batch of one would run the same checks again. It
+// reports whether it merged. While a split looks for the pull request that
+// failed, the batch tests it: the failure may be one it makes together with
+// another.
+func (s *Supervisor) mergeAlone(ctx context.Context, repo config.Repo, bt *batchTrain, c batchCar) bool {
+	h, err := s.Train.ReadHead(ctx, repo.Name, c.PR)
+	if err != nil {
+		s.Logf("merge train %s: read #%d: %v", repo.Name, c.PR, err)
+		return false
+	}
+	if !h.Open || h.SHA != c.SHA || !h.Green() {
+		return false
+	}
+	how := "its head has the whole base branch"
+	if h.Behind > 0 {
+		apart, last, err := s.apart(ctx, repo.Name, h)
+		if err != nil {
+			s.Logf("merge train %s: read what moved the base under #%d: %v", repo.Name, c.PR, err)
+			return false
+		}
+		if !apart {
+			return false
+		}
+		how = fmt.Sprintf("the base moved %d commit(s) since, to %s, touching none of its files", h.Behind, short(last))
+	}
+	if err := s.Train.MergeHead(ctx, repo.Name, c.PR, repo.Verify.MergeMethodOrDefault(), c.SHA); err != nil {
+		s.Logf("merge train %s: merge #%d at %s directly: %v; a batch tests it instead", repo.Name, c.PR, short(c.SHA), err)
+		return false
+	}
+	s.Logf("merge train %s: #%d merged at %s directly, without a batch of one: its own checks passed and %s", repo.Name, c.PR, short(c.SHA), how)
+	bt.remove(c.PR)
+	return true
 }
 
 // driveBatch moves the batch in hand: it waits for its checks, then merges
