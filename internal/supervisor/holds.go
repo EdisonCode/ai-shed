@@ -13,7 +13,8 @@ import (
 
 // applyHolds holds the items that would make work for another: an issue
 // that depends on one still open, an issue of a repository at its limit of
-// open pull requests, and an issue that touches the same code as one
+// open pull requests (or, where the limit counts ready ones, marks it to be
+// parked as a draft), and an issue that touches the same code as one
 // another worker of the machine has in hand. Two branches on the same
 // code go stale on each other's merge, and cost a rebase and a full run of
 // the checks. With stacking, an issue whose one open dependency has a ready
@@ -62,9 +63,13 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 			item.Blocked = hold
 			continue
 		}
-		if hold := backlog.PRLimitHold(issue, s.maxOpenPRs(issue.Repo)); hold != "" && item.Verify == "" && !item.Bumped && !item.resumes() {
+		limit, parks := s.prLimit(issue.Repo)
+		if hold := backlog.PRLimitHold(issue, limit, parks); hold != "" && item.Verify == "" && !item.Bumped && !item.resumes() {
 			item.Blocked = hold
 			continue
+		}
+		if park := backlog.PRLimitPark(issue, limit, parks); park != "" && item.Verify == "" && !item.resumes() {
+			item.Park = park
 		}
 		for _, number := range inFlight {
 			other, ok := byNumber[number]
@@ -90,14 +95,15 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 	}
 }
 
-// maxOpenPRs is the repository's limit of open pull requests; 0 for none.
-func (s *Supervisor) maxOpenPRs(repo string) int {
+// prLimit is the repository's limit of open pull requests, 0 for none, and
+// whether it counts ready ones only and parks new work at the limit.
+func (s *Supervisor) prLimit(repo string) (limit int, parks bool) {
 	for _, r := range s.Repos {
 		if r.Name == repo {
-			return r.MaxOpenPRs
+			return r.MaxOpenPRs, r.ParksAtPRLimit()
 		}
 	}
-	return 0
+	return 0, false
 }
 
 // stackOnDep lets an item go ahead on top of its one open dependency, when

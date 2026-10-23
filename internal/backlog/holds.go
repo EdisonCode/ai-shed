@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
 )
@@ -97,12 +98,59 @@ func DepHold(i Issue) string {
 
 // PRLimitHold says why a new issue waits while its repository has limit
 // open pull requests or more, or "" when it does not: there is no limit, or
-// the open pull requests were not looked up.
-func PRLimitHold(i Issue, limit int) string {
-	if limit <= 0 || i.OpenPRs == nil || len(i.OpenPRs) < limit {
+// the open pull requests were not looked up. Where the limit counts ready
+// pull requests only, nothing is held: the work is parked instead.
+func PRLimitHold(i Issue, limit int, readyOnly bool) string {
+	if readyOnly || limit <= 0 || i.OpenPRs == nil || len(i.OpenPRs) < limit {
 		return ""
 	}
 	return fmt.Sprintf("%s has %d open pull requests, at or over its limit of %d: they are finished first", i.Repo, len(i.OpenPRs), limit)
+}
+
+// ParkedNote is what a hand-back says in the brackets after a draft pull
+// request that was parked at its repository's limit: "#41 (draft, parked)".
+const ParkedNote = "parked"
+
+// PRLimitPark says, where the limit counts ready pull requests only, that a
+// new issue's pull request is to be parked as a draft: its repository has
+// limit ready pull requests or more. "" when there is room.
+func PRLimitPark(i Issue, limit int, readyOnly bool) string {
+	if !readyOnly || limit <= 0 || i.OpenPRs == nil {
+		return ""
+	}
+	if ready := ReadyPRs(i); ready >= limit {
+		return fmt.Sprintf("%s has %d ready pull requests, at or over its limit of %d", i.Repo, ready, limit)
+	}
+	return ""
+}
+
+// ReadyPRs counts the repository's open pull requests that are not drafts.
+// A draft runs no CI, and neither does a batch train's draft.
+func ReadyPRs(i Issue) int {
+	n := 0
+	for _, pr := range i.OpenPRs {
+		if !pr.Draft {
+			n++
+		}
+	}
+	return n
+}
+
+// Parked returns the draft pull request that the issue's last hand-back
+// parked at its repository's limit, and when it was handed back; 0 for
+// none. It is read from the hand-back itself: a parked draft runs no CI, so
+// no verifier passes it and no ask of the owner follows it.
+func Parked(issue Issue, signals []config.Signal) (pr int, since time.Time) {
+	index, pr := lastHandBack(issue, signals)
+	if index < 0 || pr == 0 || !issue.OpenPRs[pr].Draft {
+		return 0, time.Time{}
+	}
+	for _, s := range signals {
+		if s.FollowsPR && strings.EqualFold(draftNote(askLine(issue.Comments[index].Body, s.Ask)), ParkedNote) {
+			return pr, issue.Comments[index].CreatedAt
+		}
+	}
+	return 0, time.Time{}
 }
 
 // DepWords names dependencies: #12 in the issue's own repository, and

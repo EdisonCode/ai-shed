@@ -148,6 +148,24 @@ type Repo struct {
 	// started. Rework, verification and the issue a worker has in hand go
 	// on. 0, the default, holds nothing.
 	MaxOpenPRs int `yaml:"max_open_prs"`
+	// MaxOpenPRsCount is what counts toward MaxOpenPRs: every open pull
+	// request (all, the default), or only the ones that are not drafts
+	// (ready). A draft runs no CI. With ready, new issues are not held at
+	// the limit: a worker opens its pull request as a draft and parks it,
+	// and the agent marks the oldest parked draft ready when there is room.
+	MaxOpenPRsCount string `yaml:"max_open_prs_count"`
+}
+
+// What counts toward max_open_prs.
+const (
+	PRCountAll   = "all"
+	PRCountReady = "ready"
+)
+
+// ParksAtPRLimit reports whether the repository's limit counts ready pull
+// requests only, and parks new work as drafts at the limit.
+func (r Repo) ParksAtPRLimit() bool {
+	return r.MaxOpenPRs > 0 && r.MaxOpenPRsCount == PRCountReady
 }
 
 // Verify says how a repository's pull requests are tiered for verification.
@@ -1242,6 +1260,12 @@ func (c *Config) validate() error {
 		}
 		if r.MaxOpenPRs < 0 {
 			fail("%s: max_open_prs %d must not be negative", where, r.MaxOpenPRs)
+		}
+		switch c := r.MaxOpenPRsCount; {
+		case c != "" && c != PRCountAll && c != PRCountReady:
+			fail("%s: max_open_prs_count %q must be all or ready", where, c)
+		case c != "" && r.MaxOpenPRs == 0:
+			fail("%s: max_open_prs_count needs max_open_prs", where)
 		}
 		if r.Gates.Timeout != "" {
 			if d, err := time.ParseDuration(r.Gates.Timeout); err != nil || d <= 0 {

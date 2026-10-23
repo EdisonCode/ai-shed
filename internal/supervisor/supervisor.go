@@ -99,6 +99,10 @@ const (
 	// bumpTold goes with the hand-over of an issue the owner put first. It may
 	// come from another worker's queue, and a worker holds to its brief.
 	bumpTold = " The owner put #%d first in your queue: it is yours even where your brief does not cover it."
+	// parkTold goes with the hand-over of an issue whose repository is at
+	// its limit of ready pull requests. A draft runs no CI: the work goes
+	// on, and its CI waits for room.
+	parkTold = " %s: open the pull request of #%d as a draft and do not mark it ready. In the hand-back, name it as `#<number> (draft, " + backlog.ParkedNote + ")`. shed marks the oldest parked draft ready when there is room."
 	// backfillTold goes with the hand-over of an issue from a backfill
 	// source. Nobody prepared it for a worker.
 	backfillTold = " #%d is from the backlog: it is yours even where your brief does not cover it. Check first that it is ready, as the Queue section of " + BriefFile + " says."
@@ -144,6 +148,9 @@ type Supervisor struct {
 	Lister         backlog.Lister
 	// Merger queues a pull request for its merge. Nil queues nothing.
 	Merger Merger
+	// Readier marks a parked draft ready when its repository has room under
+	// its limit of ready pull requests. Nil leaves parked drafts parked.
+	Readier Readier
 	// Train runs the merge train of a repository with merge_train. Nil runs
 	// none. Batch builds and closes the batches of a repository with
 	// merge_train: batch; nil runs no batch train.
@@ -222,6 +229,9 @@ type Supervisor struct {
 	// ciRestarted holds the pull request heads whose CI was started again,
 	// as repo#pr@sha: each is started once.
 	ciRestarted map[string]bool
+	// unparked holds the parked drafts this agent marked ready, by
+	// "owner/repo#pr": the issue lists may show them as drafts a while yet.
+	unparked map[string]bool
 	// diffs keeps the pull request diffs read for a risk tier.
 	diffs map[string]keptDiff
 	// deploys holds where each repository's staging deploy stands.
@@ -1011,6 +1021,9 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	if newIssue && item.Bumped {
 		c.Message += fmt.Sprintf(bumpTold, verdict.Issue)
 	}
+	if newIssue && item.Park != "" {
+		c.Message += fmt.Sprintf(parkTold, item.Park, verdict.Issue)
+	}
 	switch {
 	case c.Backfill && item.ReleasedBy != "":
 		c.Message += fmt.Sprintf(releasedTold, verdict.Issue, item.ReleasedBy)
@@ -1521,6 +1534,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	items = s.withVerifies(ctx, w, items, open, checkins)
 	s.queueMerges(ctx, open, checkins)
 	s.restartSkippedCI(ctx, open, checkins)
+	s.unpark(ctx, open, checkins)
 	// The holds and the pace come first: the reserve is offered when nothing
 	// beside it can be acted on, held and paced work included. Then they
 	// apply to the reserve, whose priority work the pace lets through.
