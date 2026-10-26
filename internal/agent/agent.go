@@ -252,6 +252,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		Cost:        backlog.GH{},
 		Prices:      cfg.Prices(),
 		QueueLabels: cfg.QueueLabels(),
+		QueuesOf:    cfg.QueuesOf,
 		StateDir:    a.StateDir,
 		Now:         time.Now,
 		Sleep:       time.Sleep,

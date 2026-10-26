@@ -672,3 +672,42 @@ func TestMergeHighNeedsMergeLow(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+const twoQueues = `
+machines:
+  - name: linux-box
+    host: local
+    issues: [{repo: org/app, label: "machine:linux-box"}, {repo: org/app, label: "fleet:ready", backfill: true}]
+  - name: mac-mini
+    host: local
+    issues: [{repo: org/app, label: "machine:mac-mini"}, {repo: org/app, label: "area:ui", query: "is:issue -label:area:api"}]
+`
+
+func TestAnIssueInTwoMachinesQueuesGoesToTheFirstInTheFleetFile(t *testing.T) {
+	cfg, err := Parse([]byte(twoQueues))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		labels []string
+		want   string
+	}{
+		{[]string{"machine:mac-mini", "machine:linux-box"}, "linux-box mac-mini"},
+		{[]string{"machine:mac-mini"}, "mac-mini"},
+		{[]string{"machine:mac-mini", "fleet:ready"}, "mac-mini"}, // a backfill pool is no queue
+		{[]string{"machine:linux-box", "area:ui"}, "linux-box"},   // nor a source with a query
+	}
+	for _, c := range cases {
+		if got := strings.Join(cfg.QueuesOf("org/app", c.labels), " "); got != c.want {
+			t.Errorf("queues of %v = %q, want %q", c.labels, got, c.want)
+		}
+	}
+}
+
+func TestALabelThatIsTheQueueOfTwoMachinesIsRejected(t *testing.T) {
+	shared := strings.Replace(twoQueues, `label: "machine:mac-mini"}`, `label: "machine:linux-box"}`, 1)
+	_, err := Parse([]byte(shared))
+	if err == nil || !strings.Contains(err.Error(), `mac-mini: label "machine:linux-box" of org/app is the queue of machine "linux-box" too`) {
+		t.Fatalf("err = %v", err)
+	}
+}

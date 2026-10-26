@@ -66,6 +66,9 @@ machine in the fleet file (a label, an assignee, or both).
    machine label.
 5. When a machine has two workers, give each its own `issues` in the fleet
    file. An issue in hand for one worker is never handed to another.
+6. Give an issue one machine label. An issue in two machines' queues is
+   built on the first in the fleet file and held on the others; to move it,
+   swap the label, do not add a second.
 
 Check the result: `shed status` lists each machine's issues.
 

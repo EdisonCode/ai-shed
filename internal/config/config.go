@@ -906,7 +906,34 @@ func Parse(data []byte) (*Config, error) {
 	if err := cfg.validateOverflow(); err != nil {
 		return nil, err
 	}
+	if err := cfg.validateSharedQueues(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// validateSharedQueues checks that no label is the queue of two machines.
+// An issue is built on one machine only, so every issue of such a queue
+// would go to the first of them. Work that any machine may take belongs in
+// a backfill pool, such as an account's overflow.
+func (c *Config) validateSharedQueues() error {
+	var errs []error
+	queueOf := map[IssueSourceKey]string{}
+	for _, m := range c.Machines {
+		for _, src := range m.AllSources() {
+			// A query or an assignee may split a label between machines.
+			if src.Label == "" || src.Query != "" || src.Assignee != "" {
+				continue
+			}
+			key := src.Key()
+			if first, seen := queueOf[key]; seen && first != m.Name {
+				errs = append(errs, fmt.Errorf("machines: %s: label %q of %s is the queue of machine %q too; an issue is built on one machine only, so list it on one, or share it as a backfill source", m.Name, src.Label, src.Repo, first))
+				continue
+			}
+			queueOf[key] = m.Name
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // validateVerify checks that verification can happen where it is asked for:
@@ -1429,6 +1456,22 @@ func (m Machine) AllSources() []IssueSource {
 		add(w.Issues)
 	}
 	return all
+}
+
+// QueuesOf returns the machines whose queue an issue of the repository with
+// these labels is in, in fleet order. A backfill source is a pool, not a
+// queue: what a machine takes from it leaves it. Only a source that selects
+// by label alone is matched. Of two or more, the first takes the issue.
+func (c *Config) QueuesOf(repo string, labels []string) []string {
+	var machines []string
+	for _, m := range c.Machines {
+		if slices.ContainsFunc(m.AllSources(), func(src IssueSource) bool {
+			return src.Repo == repo && src.Label != "" && src.Query == "" && src.Assignee == "" && slices.Contains(labels, src.Label)
+		}) {
+			machines = append(machines, m.Name)
+		}
+	}
+	return machines
 }
 
 // QueueLabels returns the labels that put an issue in a queue of the fleet.

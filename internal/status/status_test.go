@@ -1569,3 +1569,18 @@ func TestALookOfWorkProductionServesSaysSo(t *testing.T) {
 		t.Fatalf("output lacks %q:\n%s", want, out.String())
 	}
 }
+
+func TestAnIssueInTwoMachinesQueuesIsToldOnceAndHeldOnTheLaterMachine(t *testing.T) {
+	queuesOf := func(string, []string) []string { return []string{"linux-box", "mac-mini"} }
+	shared := issue(12)
+	first := MachineReport{Issues: []IssueStatus{{Repo: "org/app", Number: 12, State: Queued}}}
+	MarkSharedQueues(&first, "linux-box", []backlog.Issue{shared, shared}, queuesOf)
+	if want := "org/app#12 is in the queues of machines linux-box, mac-mini: linux-box takes it; take the other label(s) off"; len(first.Attention) != 1 || first.Attention[0] != want {
+		t.Fatalf("attention = %q, want once %q", first.Attention, want)
+	}
+	later := MachineReport{Issues: []IssueStatus{{Repo: "org/app", Number: 12, State: Queued}}}
+	MarkSharedQueues(&later, "mac-mini", []backlog.Issue{shared}, queuesOf)
+	if st := later.Issues[0]; len(later.Attention) != 0 || st.State != Held || st.Held != "also in the queue of machine linux-box, which takes it" {
+		t.Fatalf("later machine: attention %q, issue %+v", later.Attention, st)
+	}
+}
