@@ -3099,3 +3099,40 @@ func TestALookOfWorkProductionServesIsHandedOutAfterTheFact(t *testing.T) {
 		t.Fatalf("sent = %q, want the look handed out, marked after the fact", f.term.sent)
 	}
 }
+
+// inTwoQueues puts an issue labelled machine:linux-box in that machine's
+// queue too, ahead of this one in the fleet file.
+func inTwoQueues(repo string, labels []string) []string {
+	if slices.Contains(labels, "machine:linux-box") {
+		return []string{"linux-box", "box"}
+	}
+	return []string{"box"}
+}
+
+func TestAnIssueAnEarlierMachineAlsoQueuesIsHeldHere(t *testing.T) {
+	f := started(t, config.Supervisor{}, onTrack)
+	f.QueuesOf = inTwoQueues
+	f.lister.issues = []backlog.Issue{labeled(12, "machine:linux-box"), labeled(13)}
+	f.tick(2 * time.Minute)
+
+	prompt := f.reviewer.prompts[0]
+	if !strings.Contains(prompt, "#12 Issue [held: also in the queue of machine linux-box, which takes it") {
+		t.Fatalf("#12 was not held for the earlier machine:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "#13 Issue [held") {
+		t.Fatalf("an issue of this machine's queue alone was held:\n%s", prompt)
+	}
+}
+
+func TestAnIssueInHandStaysWithItsWorkerWhenAnEarlierMachineAlsoQueuesIt(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12), onTrack)
+	f.lister.issues = []backlog.Issue{labeled(12)}
+	f.tick(2 * time.Minute) // #12 is handed over before the second label
+	f.QueuesOf = inTwoQueues
+	f.lister.issues = []backlog.Issue{labeled(12, "machine:linux-box")}
+	f.term.running(f.now)
+	f.tick(2 * time.Minute)
+	if prompt := f.reviewer.prompts[len(f.reviewer.prompts)-1]; !strings.Contains(prompt, "#12 Issue") || strings.Contains(prompt, "#12 Issue [held") {
+		t.Fatalf("the issue in hand was held:\n%s", prompt)
+	}
+}

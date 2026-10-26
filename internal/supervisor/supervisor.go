@@ -176,6 +176,10 @@ type Supervisor struct {
 	// tokens only.
 	Prices      pricing.Table
 	QueueLabels []string
+	// QueuesOf returns the machines whose queue an issue with these labels
+	// is in, in fleet order; the first takes it. Nil takes every issue of
+	// the machine's own queue.
+	QueuesOf func(repo string, labels []string) []string
 	// Repos is what the fleet file says about each repository's deploys, and
 	// Looks reads the eye checks that merged work still owes. Looks may be
 	// nil: then no worker is handed one.
@@ -1503,7 +1507,10 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		return nil, err
 	}
 	items := []QueueItem{}
-	var open []backlog.Issue
+	// own are the open issues this machine acts on: not the ones an
+	// earlier machine's queue takes.
+	var open, own []backlog.Issue
+	inHand := runlog.IssueInHand(checkins, w.Name)
 	for _, src := range s.Machine.SourcesFor(w) {
 		issues, err := s.Lister.List(ctx, src)
 		if err != nil {
@@ -1515,11 +1522,25 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		}
 		open = append(open, issues...)
 		for _, i := range issues {
+			first := ""
+			if i.Number != inHand {
+				first = s.firstQueue(i)
+			}
+			if first == "" {
+				own = append(own, i)
+			}
 			to, bumped := bumps[i.Number]
 			if taken[i.Number] || (to != "" && to != w.Name) {
 				continue
 			}
 			if backlog.Finished(i, s.Signals) != 0 {
+				continue
+			}
+			// An issue in the queue of an earlier machine too is built
+			// there, unless this worker already has it in hand.
+			if first != "" {
+				items = append(items, QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title,
+					Blocked: fmt.Sprintf("also in the queue of machine %s, which takes it; take one machine's label off", first)})
 				continue
 			}
 			item := s.item(i, src, checkins)
@@ -1530,11 +1551,11 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	if items, err = s.withMoved(ctx, w, items, bumps, taken, checkins); err != nil {
 		return nil, err
 	}
-	items = s.withLooks(ctx, w, items, open, checkins)
-	items = s.withVerifies(ctx, w, items, open, checkins)
-	s.queueMerges(ctx, open, checkins)
-	s.restartSkippedCI(ctx, open, checkins)
-	s.unpark(ctx, open, checkins)
+	items = s.withLooks(ctx, w, items, own, checkins)
+	items = s.withVerifies(ctx, w, items, own, checkins)
+	s.queueMerges(ctx, own, checkins)
+	s.restartSkippedCI(ctx, own, checkins)
+	s.unpark(ctx, own, checkins)
 	// The holds and the pace come first: the reserve is offered when nothing
 	// beside it can be acted on, held and paced work included. Then they
 	// apply to the reserve, whose priority work the pace lets through.
@@ -1574,6 +1595,18 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	})
 	s.keepQueue(w, items, reserve)
 	return items, nil
+}
+
+// firstQueue returns the machine that takes the issue when it is in the
+// queue of another machine before this one; "" when this machine takes it.
+func (s *Supervisor) firstQueue(i backlog.Issue) string {
+	if s.QueuesOf == nil {
+		return ""
+	}
+	if machines := s.QueuesOf(i.Repo, i.LabelNames()); len(machines) > 1 && machines[0] != s.Machine.Name && slices.Contains(machines, s.Machine.Name) {
+		return machines[0]
+	}
+	return ""
 }
 
 // keepQueue writes the worker's queue as this reading found it, with why

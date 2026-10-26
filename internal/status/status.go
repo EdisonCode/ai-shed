@@ -410,6 +410,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 
 	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
 	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels, cfg.Repos, cfg.Signals)
+	MarkSharedQueues(&report, m.Name, issues, cfg.QueuesOf)
 	MarkAgentHolds(&report)
 	if res != nil {
 		AssessContext(&report, m, *res, cfg.Supervisor.ContextBudget)
@@ -967,6 +968,31 @@ func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels strin
 	// pull requests are to be finished first.
 	if idle, builders := idleBuilders(*report); atLimit > 0 && idle > 0 {
 		report.Attention = append(report.Attention, fmt.Sprintf("%d of %d workers have no work: %d queued issue(s) are held: %s", idle, builders, atLimit, limitWhy))
+	}
+}
+
+// MarkSharedQueues says which issues are in the queue of more than one
+// machine. The first machine in the fleet file takes such an issue: on the
+// others it is held, and the first says so once, for the owner to take a
+// label off.
+func MarkSharedQueues(report *MachineReport, machine string, issues []backlog.Issue, queuesOf func(repo string, labels []string) []string) {
+	told := map[string]bool{}
+	for _, i := range issues {
+		machines := queuesOf(i.Repo, i.LabelNames())
+		key := issueKey(i.Repo, i.Number)
+		if len(machines) < 2 || told[key] {
+			continue
+		}
+		told[key] = true
+		if machines[0] == machine {
+			report.Attention = append(report.Attention, fmt.Sprintf("%s is in the queues of machines %s: %s takes it; take the other label(s) off", key, strings.Join(machines, ", "), machine))
+			continue
+		}
+		for n := range report.Issues {
+			if st := &report.Issues[n]; st.Repo == i.Repo && st.Number == i.Number && st.State == Queued {
+				st.State, st.Held = Held, fmt.Sprintf("also in the queue of machine %s, which takes it", machines[0])
+			}
+		}
 	}
 }
 

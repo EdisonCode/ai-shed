@@ -193,7 +193,11 @@ machines:
 ```
 
 An issue that waits on you is skipped. An issue that one worker has in hand is
-never handed to another, whatever their queues. A worker's brief also tells it
+never handed to another, whatever their queues. An issue whose labels put it
+in the queues of two machines is built on the first of them in the fleet
+file; on the others it is held, unless a worker there already has it in hand.
+`shed status` names it so you can take a label off, and `shed validate`
+rejects a label that is the queue of two machines. A worker's brief also tells it
 to look, before it starts an issue, for an open pull request or an unmerged
 branch that already covers it. If it finds one that it was not sent back to,
 it does not start: it reports the overlap in the issue as a decision for you.
@@ -1468,6 +1472,7 @@ and the two typed commands to what that tool understands.
 | task failed | the last run exited non-zero |
 | task missed its run | a scheduled time passed with no run |
 | issue waits on you | a comment asks for a decision, a look or a review, and nothing answers it |
+| is in the queues of machines | the issue's labels put it in two machines' queues; the first in the fleet file takes it, so take the other label off |
 | cannot read the release state | a `repos` commit command failed or did not print a commit, or GitHub could not be asked |
 | cannot tell which merged work staging serves | GitHub could not say whether staging has some merge commits; the counts stand, but a look of that work shows as waiting for staging |
 | every worker is at its weekly limit | the whole machine waits days for a reset; log it in to an account with room, or wait |
