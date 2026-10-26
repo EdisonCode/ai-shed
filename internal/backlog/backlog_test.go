@@ -276,6 +276,7 @@ func TestEyeCheckOfHandedBackWork(t *testing.T) {
 	}{
 		{"asked", []string{asks}, EyesAsked, 41, []string{"eyes"}},
 		{"nothing to look at", []string{handBackClean}, "", 41, nil},
+		{"nothing new, with an optional look", []string{"## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** nothing new. Optional: open /orders once more."}, "", 41, nil},
 		{"looked at and passed", []string{asks, "Eyes checked: the total is right."}, EyesPassed, 41, nil},
 		{"an answer with nothing asked is no pass", []string{handBackClean, "Eyes checked anyway."}, "", 41, nil},
 		{"looked at and failed: the look is done, the decision is open", []string{asks, failed}, EyesFailed, 41, []string{"decision"}},

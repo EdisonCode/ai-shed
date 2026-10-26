@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,18 @@ func (GH) MergedSince(ctx context.Context, repo string, since time.Time) (map[in
 		return nil, err
 	}
 	return parseMerged(out, since)
+}
+
+func (GH) Pull(ctx context.Context, repo string, number int) (Pull, error) {
+	out, err := gh(ctx, "pr", "view", strconv.Itoa(number), "--repo", repo, "--json", "number,title,mergedAt,mergeCommit,baseRefName")
+	if err != nil {
+		return Pull{}, err
+	}
+	pulls, err := parseMerged(append(append([]byte("["), out...), ']'), time.Time{})
+	if err != nil {
+		return Pull{}, err
+	}
+	return pulls[number], nil
 }
 
 // parseMerged keeps the pull requests merged after since: the search is by
