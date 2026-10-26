@@ -41,10 +41,11 @@ func (f *fakeGitHub) ClosedSince(_ context.Context, _ config.IssueSource, since 
 }
 func (f *fakeGitHub) MergedSince(context.Context, string, time.Time) (map[int]Pull, error) {
 	pulls := map[int]Pull{}
+	// Merged in number order, as merges into one branch are.
 	for number, commit := range f.merged {
-		at := now.Add(-time.Minute)
+		at := now.Add(-time.Duration(1000-number) * time.Second)
 		if f.early[number] {
-			at = f.deployed.Add(-time.Hour)
+			at = f.deployed.Add(-time.Hour).Add(time.Duration(number) * time.Second)
 		}
 		pulls[number] = Pull{Number: number, Commit: commit, MergedAt: at}
 	}
@@ -92,12 +93,12 @@ func states(r Report) map[int]string {
 func TestMergedWorkOwesALookUntilSomeoneLooked(t *testing.T) {
 	gh := &fakeGitHub{deployed: now.Add(-48 * time.Hour),
 		merged:    map[int]string{41: "c41", 42: "c42", 43: "c43", 44: "c44", 45: "c45"},
-		onStaging: map[string]bool{"c41": true, "c43": true, "c44": true},
+		onStaging: map[string]bool{"c41": true, "c42": true, "c43": true},
 		closed: []backlog.Issue{
 			handedBack(1, 41), // on staging, nobody looked
-			handedBack(2, 42), // merged after the last staging deploy
-			handedBack(3, 43, "Eyes checked: the total is right."),
-			handedBack(4, 44, "## Hand-back\n**Eyes failed:** the total is blank\n**Decisions needed:** 1. fix now?"),
+			handedBack(2, 44), // merged after the last staging deploy
+			handedBack(3, 42, "Eyes checked: the total is right."),
+			handedBack(4, 43, "## Hand-back\n**Eyes failed:** the total is blank\n**Decisions needed:** 1. fix now?"),
 			handedBack(6, 46), // merged before production's commit: already shipped
 		}}
 	open := []backlog.Issue{handedBack(5, 45), {Repo: "org/other", Number: 9}}
@@ -301,5 +302,66 @@ func TestALookStillAskedOfWorkProductionServesIsOwedAfterTheFact(t *testing.T) {
 	}
 	if report.Merged != 0 || len(report.Passed) != 0 {
 		t.Fatalf("merged = %d, passed = %+v: work before the window is not counted in it", report.Merged, report.Passed)
+	}
+}
+
+// ancestry answers whether head has a commit from a fixed set, and counts
+// and can fail its calls.
+type ancestry struct {
+	has   map[string]bool
+	calls int
+	fail  string // a commit whose comparison fails
+}
+
+func (a *ancestry) contains(_ context.Context, _, _, commit string) (bool, error) {
+	a.calls++
+	if commit == a.fail {
+		return false, errors.New("gh api compare: timed out at shed's deadline after 45s")
+	}
+	return a.has[commit], nil
+}
+
+func mergedInOrder(base string, from, to int) map[int]Pull {
+	pulls := map[int]Pull{}
+	for n := from; n <= to; n++ {
+		pulls[n] = Pull{Number: n, Commit: base + strconv.Itoa(n), Base: base, MergedAt: now.Add(time.Duration(n) * time.Minute)}
+	}
+	return pulls
+}
+
+func TestHistoryOfHundredsOfMergesTakesAFewComparisons(t *testing.T) {
+	merged := mergedInOrder("main", 1, 300)
+	a := &ancestry{has: map[string]bool{}}
+	for n := 1; n <= 210; n++ {
+		a.has["main"+strconv.Itoa(n)] = true
+	}
+	has, err := History(context.Background(), a.contains, "org/app", stagingCommit, merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.calls > 10 {
+		t.Fatalf("%d comparisons for 300 merges, want a binary search's few", a.calls)
+	}
+	if len(has) != 300 || !has["main1"] || !has["main210"] || has["main211"] || has["main300"] {
+		t.Fatalf("history = %d merges, main210 %v, main211 %v", len(has), has["main210"], has["main211"])
+	}
+}
+
+func TestAComparisonThatFailsLeavesOnlyTheMergesItWouldHaveSettledUnknown(t *testing.T) {
+	merged := mergedInOrder("main", 1, 8)
+	for n, p := range mergedInOrder("release", 11, 12) {
+		merged[n] = p
+	}
+	// The search of main asks about main5 first.
+	a := &ancestry{has: map[string]bool{"main1": true, "release11": true}, fail: "main5"}
+	has, err := History(context.Background(), a.contains, "org/app", stagingCommit, merged)
+	if err == nil || !strings.Contains(err.Error(), "8 of 10 merge(s)") {
+		t.Fatalf("err = %v, want it to say how many merges are unknown", err)
+	}
+	if _, known := has["main3"]; known {
+		t.Fatalf("main3 is known after the comparison that would settle it failed")
+	}
+	if !has["release11"] || has["release12"] {
+		t.Fatalf("history = %v: another branch's merges are still settled", has)
 	}
 }

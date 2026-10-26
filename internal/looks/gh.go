@@ -22,7 +22,7 @@ func (GH) ClosedSince(ctx context.Context, src config.IssueSource, since time.Ti
 
 func (GH) MergedSince(ctx context.Context, repo string, since time.Time) (map[int]Pull, error) {
 	out, err := gh(ctx, "pr", "list", "--repo", repo, "--state", "merged", "--limit", "1000",
-		"--search", "merged:>="+since.UTC().Format("2006-01-02"), "--json", "number,title,mergedAt,mergeCommit")
+		"--search", "merged:>="+since.UTC().Format("2006-01-02"), "--json", "number,title,mergedAt,mergeCommit,baseRefName")
 	if err != nil {
 		return nil, err
 	}
@@ -39,6 +39,7 @@ func parseMerged(data []byte, since time.Time) (map[int]Pull, error) {
 		MergeCommit struct {
 			OID string `json:"oid"`
 		} `json:"mergeCommit"`
+		BaseRefName string `json:"baseRefName"`
 	}
 	if err := json.Unmarshal(data, &prs); err != nil {
 		return nil, fmt.Errorf("gh pr list: parse output: %w", err)
@@ -46,7 +47,7 @@ func parseMerged(data []byte, since time.Time) (map[int]Pull, error) {
 	merged := map[int]Pull{}
 	for _, pr := range prs {
 		if pr.MergedAt.After(since) && pr.MergeCommit.OID != "" {
-			merged[pr.Number] = Pull{Number: pr.Number, Title: pr.Title, MergedAt: pr.MergedAt, Commit: pr.MergeCommit.OID}
+			merged[pr.Number] = Pull{Number: pr.Number, Title: pr.Title, MergedAt: pr.MergedAt, Commit: pr.MergeCommit.OID, Base: pr.BaseRefName}
 		}
 	}
 	return merged, nil
