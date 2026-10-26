@@ -1677,9 +1677,13 @@ type fakeLooks struct {
 	looks   []looks.Look
 	staging string
 	err     error
+	// sources and open are what the last read was given.
+	sources []config.IssueSource
+	open    []backlog.Issue
 }
 
-func (f *fakeLooks) Read(context.Context, config.Repo, []config.IssueSource, []backlog.Issue, []config.Signal) (looks.Report, error) {
+func (f *fakeLooks) Read(_ context.Context, _ config.Repo, sources []config.IssueSource, open []backlog.Issue, _ []config.Signal) (looks.Report, error) {
+	f.sources, f.open = sources, open
 	return looks.Report{Repo: "org/app", Staging: f.staging, Looks: f.looks}, f.err
 }
 
@@ -3134,5 +3138,21 @@ func TestAnIssueInHandStaysWithItsWorkerWhenAnEarlierMachineAlsoQueuesIt(t *test
 	f.tick(2 * time.Minute)
 	if prompt := f.reviewer.prompts[len(f.reviewer.prompts)-1]; !strings.Contains(prompt, "#12 Issue") || strings.Contains(prompt, "#12 Issue [held") {
 		t.Fatalf("the issue in hand was held:\n%s", prompt)
+	}
+}
+
+func TestLooksOfAnotherMachinesQueueAreReadWhereItHasNobodyToDoThem(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(7))
+	reader := withStaging(f, look(7, 41, looks.Due))
+	elsewhere := config.IssueSource{Repo: "org/app", Label: "machine:linux-box"}
+	f.LookSources = []config.IssueSource{elsewhere}
+	f.lister.byLabel = map[string][]backlog.Issue{"machine:box": {labeled(12)}, "machine:linux-box": {labeled(7, "machine:linux-box")}}
+	f.tick(2 * time.Minute)
+
+	if !slices.ContainsFunc(reader.sources, func(src config.IssueSource) bool { return src.Key() == elsewhere.Key() }) || !slices.ContainsFunc(reader.open, func(i backlog.Issue) bool { return i.Number == 7 }) {
+		t.Fatalf("looks were read from %+v with %d open issues, want linux-box's queue too", reader.sources, len(reader.open))
+	}
+	if !strings.Contains(strings.Join(f.term.sent, "\n"), "Do the eye check of #7") {
+		t.Fatalf("sent = %q, want the look of #7 handed over", f.term.sent)
 	}
 }

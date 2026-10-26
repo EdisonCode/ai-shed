@@ -1458,6 +1458,33 @@ func (m Machine) AllSources() []IssueSource {
 	return all
 }
 
+// LookSources returns the queues of other machines whose eye checks the
+// machine's workers do. A machine with no worker that does eye checks for a
+// repository has its looks of that repository done by the first machine in
+// the fleet file that has one, so each look goes to one machine.
+func (c *Config) LookSources(machine string) []IssueSource {
+	looksFor := func(m Machine, repo string) bool {
+		return slices.ContainsFunc(m.Workers, func(w Worker) bool {
+			return w.EyeChecks && slices.ContainsFunc(m.SourcesFor(w), func(src IssueSource) bool { return src.Repo == repo })
+		})
+	}
+	var sources []IssueSource
+	seen := map[IssueSourceKey]bool{}
+	for _, other := range c.Machines {
+		for _, src := range other.AllSources() {
+			if other.Name == machine || seen[src.Key()] || looksFor(other, src.Repo) {
+				continue
+			}
+			first := slices.IndexFunc(c.Machines, func(m Machine) bool { return looksFor(m, src.Repo) })
+			if first >= 0 && c.Machines[first].Name == machine {
+				seen[src.Key()] = true
+				sources = append(sources, src)
+			}
+		}
+	}
+	return sources
+}
+
 // QueuesOf returns the machines whose queue an issue of the repository with
 // these labels is in, in fleet order. A backfill source is a pool, not a
 // queue: what a machine takes from it leaves it. Only a source that selects

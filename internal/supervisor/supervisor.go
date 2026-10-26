@@ -176,6 +176,9 @@ type Supervisor struct {
 	// tokens only.
 	Prices      pricing.Table
 	QueueLabels []string
+	// LookSources are the queues of other machines whose eye checks this
+	// machine's workers do: those machines have no worker that does them.
+	LookSources []config.IssueSource
 	// QueuesOf returns the machines whose queue an issue with these labels
 	// is in, in fleet order; the first takes it. Nil takes every issue of
 	// the machine's own queue.
@@ -1922,7 +1925,20 @@ func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []Que
 		if !repo.Deployed() || !slices.ContainsFunc(sources, inQueue(repo.Name)) {
 			continue
 		}
-		report, err := s.Looks.Read(ctx, repo, sources, open, s.Signals)
+		// The looks of machines that have nobody to do them are done here.
+		lookSources, lookOpen := sources, open
+		for _, src := range s.LookSources {
+			if src.Repo != repo.Name {
+				continue
+			}
+			issues, err := s.Lister.List(ctx, src)
+			if err != nil {
+				failure = err.Error()
+				continue
+			}
+			lookSources, lookOpen = append(slices.Clone(lookSources), src), append(slices.Clone(lookOpen), issues...)
+		}
+		report, err := s.Looks.Read(ctx, repo, lookSources, lookOpen, s.Signals)
 		if err != nil {
 			// Building goes on without the looks. They stay undone, which
 			// shed status shows; they are never taken as done.

@@ -253,6 +253,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		Prices:      cfg.Prices(),
 		QueueLabels: cfg.QueueLabels(),
 		QueuesOf:    cfg.QueuesOf,
+		LookSources: cfg.LookSources(m.Name),
 		StateDir:    a.StateDir,
 		Now:         time.Now,
 		Sleep:       time.Sleep,
