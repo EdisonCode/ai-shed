@@ -787,7 +787,9 @@ repos:
 - **A failure** (the command fails, or staging still serves the old commit
   an hour later) goes to your `notify` command once, puts a `!` line in
   `shed status`, and is not tried again before `or_after` has passed.
-- `shed status` shows each repository's last deploy under `staging deploys`.
+- `shed status` shows each repository's last deploy by shed under `staging
+  deploys by shed`. A deploy you start yourself is not in it; the release
+  state shows the commit staging serves.
 - **It never touches production**: `production` takes only `commit`.
 - The agent sees the looks of its own machine only. Keep the workers with
   `eye_checks` on `deploy_from`, or a look on another machine may be under
@@ -1466,7 +1468,7 @@ and the two typed commands to what that tool understands.
 | task missed its run | a scheduled time passed with no run |
 | issue waits on you | a comment asks for a decision, a look or a review, and nothing answers it |
 | cannot read the release state | a `repos` commit command failed or did not print a commit, or GitHub could not be asked |
-| cannot tell which merged work staging serves | GitHub could not say whether staging has a merge commit; the counts stand, but a look that is due shows as waiting for staging |
+| cannot tell which merged work staging serves | GitHub could not say whether staging has some merge commits; the counts stand, but a look of that work shows as waiting for staging |
 | every worker is at its weekly limit | the whole machine waits days for a reset; log it in to an account with room, or wait |
 | eye checks are due on staging | merged work is on staging, owes a look, and no worker has `eye_checks` |
 | the eye check is blocked | a worker could not do it and said why; clear the cause and comment `Eyes unblocked`, or look yourself |

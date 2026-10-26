@@ -118,13 +118,19 @@ func (c Collector) Promote(ctx context.Context, cfg *config.Config, name string,
 		ordered = append(ordered, pull)
 	}
 	slices.SortFunc(ordered, func(a, b looks.Pull) int { return a.MergedAt.Compare(b.MergedAt) })
+	// The window is by time, to the second; production's own merge, or one
+	// in the same second, is already in production.
+	var inProduction map[string]bool
+	if p.Production != "" {
+		inProduction, _ = looks.History(ctx, staging.Contains, name, p.Production, pulls)
+	}
+	onStaging, err := looks.History(ctx, staging.Contains, name, report.Staging, pulls)
+	if err != nil {
+		p.Problems = append(p.Problems, "cannot tell whether staging serves "+err.Error())
+	}
 	for _, pull := range ordered {
-		// The window is by time, to the second; production's own merge, or
-		// one in the same second, is already in production.
-		if p.Production != "" {
-			if in, err := staging.Contains(ctx, name, p.Production, pull.Commit); err == nil && in {
-				continue
-			}
+		if inProduction[pull.Commit] {
+			continue
 		}
 		line := PromotionLine{PR: pull.Number, Title: pull.Title, MergedAt: pull.MergedAt}
 		if i, ok := byPR[pull.Number]; ok {
@@ -132,11 +138,7 @@ func (c Collector) Promote(ctx context.Context, cfg *config.Config, name string,
 			line.Tier, line.Verified = backlog.LastVerified(i)
 			line.ByShed = backlog.QueuedByShed(i, pull.Number)
 		}
-		on, err := staging.Contains(ctx, name, report.Staging, pull.Commit)
-		if err != nil {
-			p.Problems = append(p.Problems, fmt.Sprintf("#%d: %v", pull.Number, err))
-		}
-		line.OnStaging = on
+		line.OnStaging = onStaging[pull.Commit]
 		if line.ByShed {
 			p.ByShed = append(p.ByShed, line)
 		} else {

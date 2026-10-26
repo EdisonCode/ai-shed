@@ -576,7 +576,7 @@ func TestStagingThatCannotBeAskedStillGivesTheEyeChecks(t *testing.T) {
 	Render(&out, nil, repos)
 	for _, want := range []string{
 		"eye checks: 2 not done (1 on staging, 1 wait for a staging deploy), 1 failed",
-		"! cannot tell which merged work staging serves, so none is counted as on staging: gh api repos/org/app/compare/a...b: timed out",
+		"! cannot tell which merged work staging serves, so that work is not counted as on staging: gh api repos/org/app/compare/a...b: timed out",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
@@ -1188,7 +1188,7 @@ func TestStatusShowsTheLastStagingDeployAndAFailureNeedsTheOwner(t *testing.T) {
 	wantAttention(t, r, "the staging deploy of org/api failed (exit 1) 1h ago")
 	var out bytes.Buffer
 	Render(&out, []MachineReport{r}, nil)
-	for _, want := range []string{"  staging deploys\n", "org/app  served bbb2222   5h ago", "org/api  failed (exit 1)  1h ago"} {
+	for _, want := range []string{"  staging deploys by shed (staging may serve a later one)\n", "org/app  served bbb2222   5h ago", "org/api  failed (exit 1)  1h ago"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("status lacks %q:\n%s", want, out.String())
 		}
@@ -1435,7 +1435,7 @@ func TestThePromotionBriefSplitsWhatShedMergedFromWhatTheOwnerDid(t *testing.T) 
 	}}
 	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{mine}}, Looks: &fakeLooks{report: state}, Closed: fakeClosed{issues: []backlog.Issue{queued}}}
 	merged.pulls[40] = looks.Pull{Number: 40, Title: "Already in production", MergedAt: now.Add(-48 * time.Hour), Commit: "aaa1111"}
-	p, err := c.Promote(context.Background(), cfg, "org/app", merged, fakeStaging{serves: map[string]bool{"ccc3333@m41": true, "aaa1111@aaa1111": true}})
+	p, err := c.Promote(context.Background(), cfg, "org/app", merged, fakeStaging{serves: map[string]bool{"ccc3333@aaa1111": true, "ccc3333@m41": true, "aaa1111@aaa1111": true}})
 	if err != nil {
 		t.Fatal(err)
 	}

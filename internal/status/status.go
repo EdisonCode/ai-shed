@@ -307,7 +307,7 @@ func (r RepoReport) Attention() []string {
 	}
 	var attention []string
 	if r.Unchecked != "" {
-		attention = append(attention, "cannot tell which merged work staging serves, so none is counted as on staging: "+r.Unchecked)
+		attention = append(attention, "cannot tell which merged work staging serves, so that work is not counted as on staging: "+r.Unchecked)
 	}
 	attention = append(attention, trainAttention(r.Repo, r.Train, r.Now)...)
 	if due := r.count(looks.Due); due > 0 && r.Lookers == 0 {

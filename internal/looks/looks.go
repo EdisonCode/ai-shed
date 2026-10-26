@@ -3,6 +3,7 @@
 package looks
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os/exec"
@@ -66,8 +67,8 @@ type Report struct {
 	// ones that were done and passed, of work merged in the same window.
 	Looks  []Look `json:"looks"`
 	Passed []Look `json:"passed"`
-	// Unchecked is set when GitHub could not say which merged work staging
-	// serves. Looks it would have made due are left awaiting.
+	// Unchecked is set when GitHub could not say which merged work an
+	// environment serves. A look of such work is left awaiting.
 	Unchecked string `json:"unchecked,omitempty"`
 }
 
@@ -78,6 +79,8 @@ type Pull struct {
 	MergedAt time.Time `json:"merged_at"`
 	// Commit is the commit the merge made on the base branch.
 	Commit string `json:"commit"`
+	// Base is the branch the pull request merged into.
+	Base string `json:"base,omitempty"`
 }
 
 // PullTimes is when each step of a merged pull request happened, as GitHub
@@ -166,6 +169,20 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 		}
 		issues = append(issues, closed...)
 	}
+	// Which merges an environment serves is asked once per environment, of
+	// every merge, when the first look needs it.
+	served := map[string]map[string]bool{}
+	serves := func(head, commit string) (has, known bool) {
+		if served[head] == nil {
+			var err error
+			served[head], err = History(ctx, r.contains, repo.Name, head, merged)
+			if err != nil && report.Unchecked == "" {
+				report.Unchecked = err.Error()
+			}
+		}
+		has, known = served[head][commit]
+		return has, known
+	}
 	seen := map[int]bool{}
 	for _, issue := range issues {
 		state, pr, since, note := backlog.EyeCheck(issue, signals)
@@ -180,13 +197,7 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 			if state != backlog.EyesAsked || report.Production == "" {
 				continue
 			}
-			if report.Unchecked != "" {
-				continue
-			}
-			if inProduction, err = r.contains(ctx, repo.Name, report.Production, pull.Commit); err != nil {
-				report.Unchecked = err.Error()
-			}
-			if !inProduction {
+			if inProduction, _ = serves(report.Production, pull.Commit); !inProduction {
 				continue
 			}
 		}
@@ -202,20 +213,63 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 		}
 		if state == backlog.EyesAsked {
 			look.State = Awaiting
-			if report.Unchecked == "" {
-				onStaging, err := r.contains(ctx, repo.Name, report.Staging, pull.Commit)
-				if err != nil {
-					report.Unchecked = err.Error()
-				}
-				if onStaging {
-					look.State = Due
-				}
+			if onStaging, _ := serves(report.Staging, pull.Commit); onStaging {
+				look.State = Due
 			}
 		}
 		report.Looks = append(report.Looks, look)
 	}
 	sort.SliceStable(report.Looks, func(a, b int) bool { return report.Looks[a].Since.Before(report.Looks[b].Since) })
 	return report, nil
+}
+
+// History says which of the merged pull requests head has in its history,
+// by merge commit. A merge into a branch has every earlier merge into that
+// branch in its history, so head has a run of each branch's earliest merges,
+// and a binary search finds where the run ends: a few comparisons per
+// branch, not one per merge. A comparison that fails leaves the merges it
+// would have settled out of the answer, and its error is returned with what
+// is known.
+func History(ctx context.Context, contains func(ctx context.Context, repo, head, commit string) (bool, error), repo, head string, merged map[int]Pull) (map[string]bool, error) {
+	branches := map[string][]Pull{}
+	for _, p := range merged {
+		branches[p.Base] = append(branches[p.Base], p)
+	}
+	has := map[string]bool{}
+	var unknown int
+	var firstErr error
+	for _, pulls := range branches {
+		sort.Slice(pulls, func(a, b int) bool {
+			if !pulls[a].MergedAt.Equal(pulls[b].MergedAt) {
+				return pulls[a].MergedAt.Before(pulls[b].MergedAt)
+			}
+			return pulls[a].Number < pulls[b].Number
+		})
+		// head has pulls[:in] and not pulls[out:].
+		in, out := 0, len(pulls)
+		for in < out {
+			mid := (in + out) / 2
+			ok, err := contains(ctx, repo, head, pulls[mid].Commit)
+			if err != nil {
+				firstErr, unknown = cmp.Or(firstErr, err), unknown+out-in
+				break
+			}
+			if ok {
+				in = mid + 1
+			} else {
+				out = mid
+			}
+		}
+		for n, p := range pulls {
+			if n < in || n >= out {
+				has[p.Commit] = n < in
+			}
+		}
+	}
+	if firstErr != nil {
+		return has, fmt.Errorf("%d of %d merge(s): %w", unknown, len(merged), firstErr)
+	}
+	return has, nil
 }
 
 var commitRE = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
