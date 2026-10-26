@@ -33,6 +33,15 @@ type fakeGitHub struct {
 	closedSince  time.Time
 	containCalls int
 	containErr   error
+	// older are pull requests merged before the look-back limit, asked
+	// for one by one.
+	older     map[int]Pull
+	pullCalls int
+}
+
+func (f *fakeGitHub) Pull(_ context.Context, _ string, number int) (Pull, error) {
+	f.pullCalls++
+	return f.older[number], nil
 }
 
 func (f *fakeGitHub) ClosedSince(_ context.Context, _ config.IssueSource, since time.Time) ([]backlog.Issue, error) {
@@ -363,5 +372,59 @@ func TestAComparisonThatFailsLeavesOnlyTheMergesItWouldHaveSettledUnknown(t *tes
 	}
 	if !has["release11"] || has["release12"] {
 		t.Fatalf("history = %v: another branch's merges are still settled", has)
+	}
+}
+
+func TestALookNobodyDidOfWorkMergedBeforeTheLookBackIsStillOwed(t *testing.T) {
+	gh := &fakeGitHub{deployed: now.Add(-2 * time.Hour),
+		merged:       map[int]string{50: "c50"},
+		onStaging:    map[string]bool{"c30": true, "c50": true},
+		inProduction: map[string]bool{"c30": true},
+		older:        map[int]Pull{30: {Number: 30, Commit: "c30", MergedAt: now.Add(-30 * 24 * time.Hour)}},
+	}
+	asked := handedBack(1, 30)
+	asked.OpenPRs = map[int]backlog.PR{}
+	r := reader(gh)
+	for range 2 {
+		report, err := r.Read(context.Background(), repo, sources, []backlog.Issue{asked}, config.DefaultSignals())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(report.Looks) != 1 || report.Looks[0].State != Due || !report.Looks[0].Production {
+			t.Fatalf("looks = %+v, want #1 due, production already serving it", report.Looks)
+		}
+	}
+	if gh.pullCalls != 1 {
+		t.Fatalf("asked for the merged pull request %d times, want once", gh.pullCalls)
+	}
+}
+
+func TestALookOfAnOpenPullRequestAsksGitHubNothing(t *testing.T) {
+	gh := &fakeGitHub{deployed: now.Add(-2 * time.Hour), merged: map[int]string{}}
+	asked := handedBack(1, 30)
+	asked.OpenPRs = map[int]backlog.PR{30: {}}
+	report, err := reader(gh).Read(context.Background(), repo, sources, []backlog.Issue{asked}, config.DefaultSignals())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Looks) != 0 || gh.pullCalls != 0 {
+		t.Fatalf("looks = %+v after %d pull request calls, want none: the work has not merged", report.Looks, gh.pullCalls)
+	}
+}
+
+func TestABlockedLookOfWorkProductionServesIsListed(t *testing.T) {
+	gh := &fakeGitHub{deployed: now.Add(-2 * time.Hour),
+		merged:       map[int]string{41: "c41"},
+		early:        map[int]bool{41: true},
+		onStaging:    map[string]bool{"c41": true},
+		inProduction: map[string]bool{"c41": true},
+	}
+	blocked := handedBack(1, 41, "Eyes blocked: the staging customer has no open invoice.")
+	report, err := reader(gh).Read(context.Background(), repo, sources, []backlog.Issue{blocked}, config.DefaultSignals())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Looks) != 1 || report.Looks[0].State != Blocked || report.Looks[0].Note != "the staging customer has no open invoice." {
+		t.Fatalf("looks = %+v, want #1 blocked, with why", report.Looks)
 	}
 }

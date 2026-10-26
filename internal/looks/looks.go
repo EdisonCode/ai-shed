@@ -107,6 +107,9 @@ type GitHub interface {
 	CommitTime(ctx context.Context, repo, commit string) (time.Time, error)
 	// Contains reports whether head has commit in its history.
 	Contains(ctx context.Context, repo, head, commit string) (bool, error)
+	// Pull returns a pull request; its Commit is empty when it has not
+	// merged.
+	Pull(ctx context.Context, repo string, number int) (Pull, error)
 }
 
 // Reader reads a repository's looks.
@@ -118,6 +121,8 @@ type Reader struct {
 
 	// contained remembers whether a head has a commit: that never changes.
 	contained map[string]bool
+	// pulls remembers the merged pull requests asked for one by one.
+	pulls map[string]Pull
 }
 
 // Read reports on one repository. open holds the open issues of sources;
@@ -155,8 +160,24 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 
 	var issues []backlog.Issue
 	for _, i := range open {
-		if i.Repo == repo.Name {
-			issues = append(issues, i)
+		if i.Repo != repo.Name {
+			continue
+		}
+		issues = append(issues, i)
+		// A look nobody did of work merged before the look-back limit is
+		// still owed: its pull request is asked for by itself.
+		state, pr, _, _ := backlog.EyeCheck(i, signals)
+		if _, isOpen := i.OpenPRs[pr]; state != backlog.EyesAsked || i.OpenPRs == nil || isOpen {
+			continue
+		}
+		if _, known := merged[pr]; !known {
+			pull, err := r.pull(ctx, repo.Name, pr)
+			if err != nil {
+				return report, err
+			}
+			if pull.Commit != "" {
+				merged[pr] = pull
+			}
 		}
 	}
 	for _, src := range sources {
@@ -192,9 +213,9 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 		}
 		inProduction := false
 		if !pull.MergedAt.After(report.Since) {
-			// Before the window: only a look nobody has done is still owed,
-			// and only when production serves the work.
-			if state != backlog.EyesAsked || report.Production == "" {
+			// Before the window: only a look nobody has done, or could not
+			// do, is still owed, and only when production serves the work.
+			if (state != backlog.EyesAsked && state != backlog.EyesBlocked) || report.Production == "" {
 				continue
 			}
 			if inProduction, _ = serves(report.Production, pull.Commit); !inProduction {
@@ -302,6 +323,25 @@ func (r *Reader) contains(ctx context.Context, repo, head, commit string) (bool,
 	}
 	r.contained[key] = has
 	return has, nil
+}
+
+func (r *Reader) pull(ctx context.Context, repo string, number int) (Pull, error) {
+	key := fmt.Sprintf("%s#%d", repo, number)
+	if p, known := r.pulls[key]; known {
+		return p, nil
+	}
+	p, err := r.GitHub.Pull(ctx, repo, number)
+	if err != nil {
+		return Pull{}, err
+	}
+	// A pull request that has not merged yet may still merge.
+	if p.Commit != "" {
+		if r.pulls == nil {
+			r.pulls = map[string]Pull{}
+		}
+		r.pulls[key] = p
+	}
+	return p, nil
 }
 
 // Shell runs a commit command with sh.
