@@ -711,3 +711,35 @@ func TestALabelThatIsTheQueueOfTwoMachinesIsRejected(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestLooksOfAMachineWithNoEyeCheckWorkerGoToTheFirstMachineThatHasOne(t *testing.T) {
+	fleet := `
+repos: [{repo: org/app, staging: {commit: "echo abc1234"}}]
+machines:
+  - name: linux-box
+    host: local
+    issues: [{repo: org/app, label: "machine:linux-box"}]
+    workers: [{name: build, dir: /tmp/build, brief: b}]
+  - name: mac-mini
+    host: local
+    issues: [{repo: org/app, label: "machine:mac-mini"}]
+    workers: [{name: look, dir: /tmp/look, brief: b, eye_checks: true}]
+  - name: spare
+    host: local
+    issues: [{repo: org/app, label: "machine:spare"}]
+    workers: [{name: look, dir: /tmp/spare, brief: b, eye_checks: true}]
+`
+	cfg, err := Parse([]byte(fleet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.LookSources("mac-mini"); len(got) != 1 || got[0].Label != "machine:linux-box" {
+		t.Fatalf("mac-mini does the looks of %+v, want linux-box's queue", got)
+	}
+	if got := cfg.LookSources("spare"); len(got) != 0 {
+		t.Fatalf("spare does the looks of %+v, want none: mac-mini comes first", got)
+	}
+	if got := cfg.LookSources("linux-box"); len(got) != 0 {
+		t.Fatalf("linux-box does the looks of %+v, want none: it has no worker for them", got)
+	}
+}

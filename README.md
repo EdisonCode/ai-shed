@@ -697,7 +697,9 @@ machines:
   nothing is asked of anyone.
 - **Who does it.** A worker with `eye_checks: true`, ahead of new issues.
   Where another such worker shares the queue, not the worker that built the
-  work: a second reader catches a hand-back that is too vague to check.
+  work: a second reader catches a hand-back that is too vague to check. The
+  looks of a machine with no such worker for the repository are done on the
+  first machine in the fleet file that has one.
 - **What the worker may do.** Its brief gets the staging address and your
   `orders`. An act the orders do not name is not allowed. Name the writes a
   check needs and the ones that must never happen.
