@@ -78,7 +78,7 @@ const (
 	modelTold        = " The model for this issue is %s."
 	// lookOrder hands over an eye check. It is not left to the reviewer's
 	// words: a worker that took it for work to build would start a branch.
-	lookOrder = "Do the eye check of #%d on staging: %s. Follow the Eye checks section of " + BriefFile + " and change no code."
+	lookOrder = "Do the eye check of #%d on staging: %s. Follow the Eye checks section of " + BriefFile + " and change no product code."
 	// verifyOrder hands over a verification, for the same reason.
 	verifyOrder   = "Verify pull request #%d of #%d at tier %s: follow the Verification section of " + BriefFile + " and change no code. Start your comment on the issue with `Verified (%s):` or `Verification failed (%s):`."
 	clearSettling = 2 * time.Second
@@ -2267,7 +2267,7 @@ production, and that is you. It is not work to build.
 			b.WriteString(".\n")
 			if orders := strings.TrimSpace(repo.Staging.Orders); orders != "" {
 				orders = strings.ReplaceAll(orders, config.WorkerPlaceholder, w.Name)
-				fmt.Fprintf(b, "  What you may do there: %s\n", strings.ReplaceAll(orders, "\n", "\n  "))
+				fmt.Fprintf(b, "  Orders there: %s\n", strings.ReplaceAll(orders, "\n", "\n  "))
 			}
 			if repo.Staging.Viewport != "" {
 				fmt.Fprintf(b, "  Viewport: look at %s, unless the hand-back names another size.\n", repo.Staging.Viewport)
@@ -2278,13 +2278,14 @@ production, and that is you. It is not work to build.
 How to do one:
 
 - Read the issue's last hand-back. What to look at, and what a pass looks like, is after `+"`%s`"+`.
-- Look on staging only, in a browser. Change no code and open no branch.
-- On staging, do only what is allowed above. An act that is not named there is not allowed.
+- Look on staging, in a browser. Change no product code.
+- On staging, do anything the orders above do not forbid.
+- The check needs a state staging does not have (a customer, an order, a setting): make it first, by acts on staging or with the repository's tool for staging states. When that tool has no way to make it, add one in a small pull request, run it, then look. "Change no product code" does not cover a staging-state scenario.
 - Look at the viewport the check names. Read the size your browser really has (`+"`window.innerWidth`"+` by `+"`window.innerHeight`"+`); do not take it from what you asked for. Whatever you post, say that size in it, as in `+"`viewport 1440x900`"+`.
 - You cannot get the size the check names: if what is to be judged does not depend on the size, look at the size you have. If it does, you are blocked, and your comment says the size you had and the size that was asked.
 - It passes: post a comment on the issue that starts with `+"`%s:`"+` and says what you saw.
 - It fails: reopen the issue (`+"`gh issue reopen`"+`) and post a comment headed `+"`%s`"+`. Write `+"`%s:`"+` with what you saw against what was expected, then `+"`%s`"+` with the question for the owner and your recommendation. Do not fix it.
-- You could not do it (you cannot sign in, staging is down, the description is too vague to judge, the check needs an act that is not allowed): you are blocked. Post a comment on the issue that starts with `+"`%s:`"+` and says, on that line, what stopped you and what the owner must do about it. Post nothing that says checked or failed. Then say so here and stop: the check is the owner's to clear, and the supervisor gives you your next item. A check you could not do has not passed.
+- You could not do it (staging is down, the description is too vague to judge, the check needs an act the orders forbid): you are blocked. Missing data and a sign-in are not reasons to stop: make the data, and sign in as the orders say or with a user you make. Post a comment on the issue that starts with `+"`%s:`"+` and says, on that line, what stopped you and what the owner must do about it. Post nothing that says checked or failed. Then say so here and stop: the check is the owner's to clear, and the supervisor gives you your next item. A check you could not do has not passed.
 `, eyes.Ask, eyes.AnsweredBy, eyes.HandBack, eyes.FailedBy, decision.Ask, eyes.BlockedBy)
 }
 

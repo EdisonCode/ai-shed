@@ -273,8 +273,8 @@ Run this as a checklist and report each line.
      its issue with a decision for the owner: put that to them like any
      other decision, and do not send a fix without their ruling.
    - `the eye check of ... is blocked`, and `BLOCKED` in the release state:
-     the worker could not sign in to staging, staging was down, or the check
-     needs an act the staging `orders` do not allow. Its reason is in the
+     staging was down, the description was too vague to judge, or the
+     check needs an act the staging `orders` forbid. Its reason is in the
      line. The worker has moved on; the look waits for the owner. Fix the
      cause, then comment the `unblocked_by` phrase of the `eyes` signal
      (`Eyes unblocked`) on the issue so a worker tries again, or do the look
