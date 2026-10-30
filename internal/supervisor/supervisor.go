@@ -203,7 +203,8 @@ type Supervisor struct {
 	// wait on a hung one shows. Nil lists none.
 	Shells ShellLister
 	// Diffs reads what a pull request changes, to rate its risk tier for a
-	// verification. Nil verifies nothing.
+	// verification or a look's model. Nil verifies nothing, and a look runs
+	// on the eye-check model.
 	Diffs DiffReader
 	// RunDeploy runs a repository's staging deploy command on this machine
 	// and returns its output and exit code. Nil deploys nothing.
@@ -1964,7 +1965,7 @@ func (s *Supervisor) withLooks(ctx context.Context, w config.Worker, items []Que
 				// a defect there.
 				item.Look += ", and production already serves it: look after the fact, and report a failure as a defect in production"
 			}
-			if m := s.Settings.Models.EyeChecks; m != "" {
+			if m := s.lookModel(ctx, look); m != "" {
 				// A look runs its session on its own model, whatever the
 				// rest of the fleet is told.
 				item.Model, item.Apply = m, config.ModelSwitch
@@ -2287,6 +2288,22 @@ How to do one:
 - It fails: reopen the issue (`+"`gh issue reopen`"+`) and post a comment headed `+"`%s`"+`. Write `+"`%s:`"+` with what you saw against what was expected, then `+"`%s`"+` with the question for the owner and your recommendation. Do not fix it.
 - You could not do it (staging is down, the description is too vague to judge, the check needs an act the orders forbid): you are blocked. Missing data and a sign-in are not reasons to stop: make the data, and sign in as the orders say or with a user you make. Post a comment on the issue that starts with `+"`%s:`"+` and says, on that line, what stopped you and what the owner must do about it. Post nothing that says checked or failed. Then say so here and stop: the check is the owner's to clear, and the supervisor gives you your next item. A check you could not do has not passed.
 `, eyes.Ask, eyes.AnsweredBy, eyes.HandBack, eyes.FailedBy, decision.Ask, eyes.BlockedBy)
+}
+
+// lookModel is the model a look runs on: the one its pull request's risk
+// tier names, else the eye-check model. Empty leaves the issue's own.
+func (s *Supervisor) lookModel(ctx context.Context, look looks.Look) string {
+	models := s.Settings.Models
+	if len(models.EyeChecksByTier) > 0 && s.Diffs != nil {
+		tier, _, err := s.tierOf(ctx, look.Repo, look.PR)
+		if err != nil {
+			// The tier only picks the model: the look goes on without it.
+			s.Logf("eye check of %s#%d: tier of pull request #%d: %v", look.Repo, look.Number, look.PR, err)
+		} else if m := models.EyeChecksByTier[tier]; m != "" {
+			return m
+		}
+	}
+	return models.EyeChecks
 }
 
 // signal returns the signal with this name.

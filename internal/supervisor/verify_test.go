@@ -17,12 +17,13 @@ import (
 
 type fakeDiffs struct {
 	diffs map[int]risk.Diff
+	err   error
 	asked int
 }
 
 func (f *fakeDiffs) Diff(_ context.Context, _ string, pr int) (risk.Diff, error) {
 	f.asked++
-	return f.diffs[pr], nil
+	return f.diffs[pr], f.err
 }
 
 // withVerifier makes the fixture's repository verify, and gives the machine

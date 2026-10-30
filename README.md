@@ -1183,6 +1183,26 @@ them. With `apply: tell` the look still switches, and `session` is the
 model the session goes back to; in switch mode that is the next issue's
 model, so `default` is needed.
 
+The look of a risky change needs the strongest judgment. Give each risk
+tier its own model:
+
+```yaml
+supervisor:
+  models:
+    default: sonnet
+    eye_checks: sonnet
+    eye_checks_by_tier: { high: opus }
+```
+
+The tier is the one a verification uses, rated with no model from the
+pull request's diff (see
+[Verification before your review](#verification-before-your-review)). Its
+areas come from the repository's `verify`; without one, only the size of the
+change and code changed with no test make it `high`. A tier the map does not name runs on
+`eye_checks`, or on the issue's own model without it. When the diff cannot
+be read, the look is still handed over, on `eye_checks`, and the agent logs
+why.
+
 `session` is needed whenever some labels switch and others are told. The
 cost comment names any sub-agent that ran on another model than the issue's
 (`Ran on another model than the issue's (sonnet): implementer (opus-5-5)`),
