@@ -499,6 +499,8 @@ func TestAnEyeCheckModelNeedsAModelToGoBackTo(t *testing.T) {
 	for _, tc := range []struct{ models, want string }{
 		{"{eye_checks: haiku}", "models.eye_checks needs models.default"},
 		{"{eye_checks: haiku, default: opus, apply: tell}", "models.eye_checks needs models.session"},
+		{"{eye_checks_by_tier: {high: opus}}", "models.eye_checks_by_tier needs models.default"},
+		{"{eye_checks_by_tier: {risky: opus}, default: sonnet}", `models.eye_checks_by_tier "risky" must be low or high`},
 	} {
 		_, err := Parse([]byte(minimal + "supervisor: {models: " + tc.models + "}\n"))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

@@ -450,6 +450,11 @@ type Models struct {
 	// it for the look and back for the next issue, so a look does not run
 	// on the model the hardest work needs.
 	EyeChecks string `yaml:"eye_checks"`
+	// EyeChecksByTier maps the risk tier of the pull request a look is of
+	// to the model the look runs on, as in {high: opus}, so the look of a
+	// risky change is judged by a strong model. A tier it does not name
+	// runs on EyeChecks.
+	EyeChecksByTier map[string]string `yaml:"eye_checks_by_tier"`
 	// Verify maps a risk tier to the model a verification at that tier runs
 	// on, as in {low: haiku, high: opus}. The session switches for it and
 	// back for the next issue.
@@ -1245,7 +1250,12 @@ func (c *Config) validate() error {
 			fail("supervisor: models.verify %q must be %s or %s", tier, TierLow, TierHigh)
 		}
 	}
-	if m := c.Supervisor.Models; len(m.Verify) > 0 && m.EyeChecks == "" {
+	for tier := range c.Supervisor.Models.EyeChecksByTier {
+		if tier != TierLow && tier != TierHigh {
+			fail("supervisor: models.eye_checks_by_tier %q must be %s or %s", tier, TierLow, TierHigh)
+		}
+	}
+	if m := c.Supervisor.Models; len(m.Verify) > 0 && m.EyeChecks == "" && len(m.EyeChecksByTier) == 0 {
 		switch {
 		case (m.TellOnly() || mixed) && m.Session == "":
 			fail("supervisor: models.verify needs models.session: the model a session goes back to after a verification")
@@ -1253,12 +1263,16 @@ func (c *Config) validate() error {
 			fail("supervisor: models.verify needs models.default: the model the next issue goes back to after a verification")
 		}
 	}
-	if m := c.Supervisor.Models; m.EyeChecks != "" {
+	if m := c.Supervisor.Models; m.EyeChecks != "" || len(m.EyeChecksByTier) > 0 {
+		field := "models.eye_checks"
+		if m.EyeChecks == "" {
+			field = "models.eye_checks_by_tier"
+		}
 		switch {
 		case (m.TellOnly() || mixed) && m.Session == "":
-			fail("supervisor: models.eye_checks needs models.session: the model a session goes back to after a look")
+			fail("supervisor: %s needs models.session: the model a session goes back to after a look", field)
 		case !m.TellOnly() && !mixed && m.Default == "":
-			fail("supervisor: models.eye_checks needs models.default: the model the next issue goes back to after a look")
+			fail("supervisor: %s needs models.default: the model the next issue goes back to after a look", field)
 		}
 	}
 	if mixed && c.Supervisor.Models.Session == "" {

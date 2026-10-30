@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/looks"
+	"github.com/edisoncode/ai-shed/internal/risk"
 )
 
 func TestAnEyeCheckRunsOnItsOwnModelAndTheNextIssueSwitchesBack(t *testing.T) {
@@ -30,6 +32,44 @@ func TestAnEyeCheckRunsOnItsOwnModelAndTheNextIssueSwitchesBack(t *testing.T) {
 	f.tick(12 * time.Minute)
 	if len(f.term.sent) != 3 || f.term.sent[1] != "/model opus" {
 		t.Fatalf("sent = %q, want the issue's own model back", f.term.sent)
+	}
+}
+
+// lookOfTier hands app the look of #7, whose pull request #41 has this diff.
+func lookOfTier(t *testing.T, m config.Models, diffs *fakeDiffs) *fixture {
+	f := started(t, config.Supervisor{Models: m}, assign(7), assign(12))
+	withStaging(f, look(7, 41, looks.Due))
+	f.Diffs = diffs
+	f.tick(2 * time.Minute)
+	return f
+}
+
+var (
+	riskyDiff = map[int]risk.Diff{41: {Files: []string{"internal/billing/refund.go"}, Lines: 30}}
+	safeDiff  = map[int]risk.Diff{41: {Files: []string{"internal/billing/refund.go", "internal/billing/refund_test.go"}, Lines: 30}}
+)
+
+func TestTheLookOfARiskyPullRequestRunsOnItsTiersModel(t *testing.T) {
+	m := config.Models{Default: "sonnet", EyeChecks: "haiku", EyeChecksByTier: map[string]string{config.TierHigh: "opus"}}
+	f := lookOfTier(t, m, &fakeDiffs{diffs: riskyDiff})
+	if !slices.Contains(f.term.sent, "/model opus") {
+		t.Fatalf("sent = %q, want the look of a high-risk pull request on opus", f.term.sent)
+	}
+}
+
+func TestTheLookOfATierWithNoModelRunsOnTheEyeCheckModel(t *testing.T) {
+	m := config.Models{Default: "sonnet", EyeChecks: "haiku", EyeChecksByTier: map[string]string{config.TierHigh: "opus"}}
+	f := lookOfTier(t, m, &fakeDiffs{diffs: safeDiff})
+	if !slices.Contains(f.term.sent, "/model haiku") {
+		t.Fatalf("sent = %q, want the look of a low-risk pull request on the eye-check model", f.term.sent)
+	}
+}
+
+func TestALookWhoseTierCannotBeReadIsStillHandedOver(t *testing.T) {
+	m := config.Models{Default: "sonnet", EyeChecks: "haiku", EyeChecksByTier: map[string]string{config.TierHigh: "opus"}}
+	f := lookOfTier(t, m, &fakeDiffs{err: errors.New("gh: HTTP 502")})
+	if !slices.Contains(f.term.sent, "/model haiku") || !strings.Contains(f.term.sent[len(f.term.sent)-1], "Do the eye check of #7") {
+		t.Fatalf("sent = %q, want the look on the eye-check model", f.term.sent)
 	}
 }
 
