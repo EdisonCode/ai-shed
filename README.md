@@ -701,8 +701,13 @@ machines:
   looks of a machine with no such worker for the repository are done on the
   first machine in the fleet file that has one.
 - **What the worker may do.** Its brief gets the staging address and your
-  `orders`. An act the orders do not name is not allowed. Name the writes a
-  check needs and the ones that must never happen.
+  `orders`. On staging it may do anything the orders do not forbid, so name
+  the acts that must never happen there. It changes no product code.
+- **A state staging does not have.** A check that needs a customer, an
+  order or a setting staging lacks makes it first, by acts on staging or
+  with your repository's tool for staging states. When that tool has no way
+  to make it, the worker adds one in a small pull request, runs it, then
+  looks. A staging-state scenario is not product code.
 - **One identity per worker.** Workers on one machine that sign in as the
   same test user move each other's state: one ends the other's session,
   closes its drawer, empties its cart. Each then blames the other's
@@ -739,11 +744,12 @@ machines:
   failed look is new information, and whether it is a regression, an older
   defect or the feature working as specified but wrong is yours to scope.
   Your `Owner ruling` then sends the issue to a worker as usual.
-- **A check that could not be done.** The browser is signed out, staging is
-  down, the description cannot be judged, or the check needs an act the
-  orders forbid. The worker comments `Eyes blocked:` with what stopped it
-  and takes its next item: a look only you can clear does not hold a worker
-  idle. The look is yours now. `shed status` counts it as not done and lists
+- **A check that could not be done.** Staging is down, the description is
+  too vague to judge, or the check needs an act the orders forbid. Missing
+  data and a sign-in are not reasons to stop: the worker makes the data and
+  signs in as the orders say or with a user it makes. The worker comments
+  `Eyes blocked:` with what stopped it and takes its next item: a look only
+  you can clear does not hold a worker idle. The look is yours now. `shed status` counts it as not done and lists
   it with the worker's reason, and your `notify` command hears of it. When
   the cause is gone, comment `Eyes unblocked` on the issue and a worker
   tries again; or look yourself and comment `Eyes checked:`. A blocked look

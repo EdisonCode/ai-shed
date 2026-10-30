@@ -1714,7 +1714,7 @@ func TestLookOnStagingIsHandedToAWorkerThatDoesEyeChecks(t *testing.T) {
 	if !strings.Contains(prompt, "org/app#7 Merged work [eye check: pull request #41 is on staging]") {
 		t.Fatalf("the look is not marked in the queue:\n%s", prompt)
 	}
-	want := "Do the eye check of #7 on staging: pull request #41 is on staging. Follow the Eye checks section of .shed/BRIEF.md and change no code."
+	want := "Do the eye check of #7 on staging: pull request #41 is on staging. Follow the Eye checks section of .shed/BRIEF.md and change no product code."
 	if !slices.Equal(f.term.sent, []string{want}) {
 		t.Fatalf("sent = %q, want the fixed eye-check order", f.term.sent)
 	}
@@ -1793,7 +1793,7 @@ func TestRestingWorkerWakesWhenMergedWorkReachesStaging(t *testing.T) {
 
 	reader.looks = []looks.Look{look(7, 41, looks.Due)}
 	f.tick(queueRecheck + time.Minute)
-	if len(f.term.sent) != 1 || !strings.HasSuffix(f.term.sent[0], "change no code.") {
+	if len(f.term.sent) != 1 || !strings.HasSuffix(f.term.sent[0], "change no product code.") {
 		t.Fatalf("sent = %q; staging now serves the work", f.term.sent)
 	}
 }
@@ -1817,7 +1817,7 @@ func TestBriefSaysHowAnEyeCheckPassesFailsAndIsBlocked(t *testing.T) {
 	for _, want := range []string{
 		"## Eye checks",
 		"- org/app: staging is https://staging.example.com.",
-		"What you may do there: Open pages and cancel a draft.\n  Never send a message.",
+		"Orders there: Open pages and cancel a draft.\n  Never send a message.",
 		"is after `Needs eyes:`",
 		"Viewport: look at 1440x900, unless the hand-back names another size.",
 		"Whatever you post, say that size in it, as in `viewport 1440x900`.",
@@ -1827,6 +1827,57 @@ func TestBriefSaysHowAnEyeCheckPassesFailsAndIsBlocked(t *testing.T) {
 		"then `Decisions needed:`",
 		"Post a comment on the issue that starts with `Eyes blocked:`",
 		"the supervisor gives you your next item. A check you could not do has not passed.",
+	} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+}
+
+func TestBriefLetsAnEyeCheckDoOnStagingWhatTheOrdersDoNotForbid(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	withStaging(f)
+	f.Repos[0].Staging.Orders = "Staging is safe for every write."
+	f.tick(0)
+
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	if !strings.Contains(string(brief), "- On staging, do anything the orders above do not forbid.") {
+		t.Fatalf("brief does not make the orders a deny-list:\n%s", brief)
+	}
+	for _, allowList := range []string{"What you may do", "do only what is allowed", "not named there", "an act that is not allowed"} {
+		if strings.Contains(string(brief), allowList) {
+			t.Fatalf("brief has the allow-list words %q:\n%s", allowList, brief)
+		}
+	}
+}
+
+func TestBriefTellsAnEyeCheckToMakeTheStagingStateItNeeds(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	withStaging(f)
+	f.tick(0)
+
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	for _, want := range []string{
+		"- Look on staging, in a browser. Change no product code.",
+		"make it first, by acts on staging or with the repository's tool for staging states.",
+		"When that tool has no way to make it, add one in a small pull request, run it, then look.",
+		"\"Change no product code\" does not cover a staging-state scenario.",
+	} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+}
+
+func TestBriefBlocksAnEyeCheckOnlyForWhatTheWorkerCannotFix(t *testing.T) {
+	f := newFixture(t, config.Supervisor{}, onTrack)
+	withStaging(f)
+	f.tick(0)
+
+	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
+	for _, want := range []string{
+		"(staging is down, the description is too vague to judge, the check needs an act the orders forbid): you are blocked.",
+		"Missing data and a sign-in are not reasons to stop",
 	} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("brief lacks %q:\n%s", want, brief)
@@ -1846,7 +1897,7 @@ func TestBriefOfAWorkerWithoutABrowserHasNoEyeChecks(t *testing.T) {
 func TestBlockedLookLeavesTheQueueAndTheOwnerIsToldOnce(t *testing.T) {
 	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack)
 	blocked := look(7, 41, looks.Blocked)
-	blocked.Note = "staging asks for a sign-in"
+	blocked.Note = "staging is down"
 	withStaging(f, blocked)
 	var told []string
 	f.Notify = func(worker, message string) { told = append(told, message) }
@@ -1860,7 +1911,7 @@ func TestBlockedLookLeavesTheQueueAndTheOwnerIsToldOnce(t *testing.T) {
 	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
 		t.Fatalf("sent = %q; the worker takes the next workable item", f.term.sent)
 	}
-	if want := []string{"box: the eye check of org/app#7 is blocked and waits for you: staging asks for a sign-in"}; !slices.Equal(told, want) {
+	if want := []string{"box: the eye check of org/app#7 is blocked and waits for you: staging is down"}; !slices.Equal(told, want) {
 		t.Fatalf("told = %q, want %q once", told, want)
 	}
 }

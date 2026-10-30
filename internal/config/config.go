@@ -301,7 +301,8 @@ type Environment struct {
 	Commit string `yaml:"commit"`
 	// URL is where a worker opens the environment in a browser.
 	URL string `yaml:"url"`
-	// Orders say what a worker may and may not do there during an eye check.
+	// Orders say what a worker must not do there during an eye check. An act
+	// they do not forbid is allowed.
 	Orders string `yaml:"orders"`
 	// Viewport is the browser size an eye check is done at when the
 	// hand-back names none, as "<width>x<height>" in CSS pixels. shed cannot
