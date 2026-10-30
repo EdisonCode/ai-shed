@@ -1916,6 +1916,15 @@ func TestBlockedLookLeavesTheQueueAndTheOwnerIsToldOnce(t *testing.T) {
 	}
 }
 
+func TestReviewerSendsAnEyeCheckStoppedAtMissingDataBackToIt(t *testing.T) {
+	if strings.Contains(instructions, "it could not sign in") {
+		t.Fatal("the reviewer still takes a sign-in as a reason to block an eye check")
+	}
+	if !strings.Contains(instructions, "Missing staging data and a sign-in are not blocks: a worker that stops at one has not finished, so tell it once to make the data or sign in, then do the check.") {
+		t.Fatal("the reviewer is not told to send a worker stopped at missing data back to its check")
+	}
+}
+
 func TestReviewerIsToldABlockedEyeCheckDoesNotHoldTheWorker(t *testing.T) {
 	if !strings.Contains(instructions, "A blocked check is no reason to leave a worker idle beside an item it can act on.") {
 		t.Fatal("the reviewer is not told what to do with an eye check that could not be done")
