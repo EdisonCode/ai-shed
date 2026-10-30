@@ -542,6 +542,12 @@ supervisor:
   acceptance, checks the branch out in its own directory, and goes once
   through a `low` pull request; a `high` one it tries to break. It changes
   no code.
+- **The eye-check ask.** When the hand-back asks for eyes, the verifier
+  judges that ask too: after the merge, a worker looks on staging from it
+  alone. It must say where to look, what to do there (with the state the
+  check needs) and what a pass looks like, matching the issue's acceptance.
+  Each gap is a finding, and the pull request goes back as rework while its
+  builder still has the context, not after the merge as a blocked look.
 - **Its verdict** is a comment on the issue. `Verified (high):` with its
   evidence passes the work, and only then does the review wait on you.
   `Verification failed (high):` with its findings sends the pull request

@@ -146,6 +146,33 @@ func TestBriefOfAVerifierSaysHowToVerify(t *testing.T) {
 	}
 }
 
+func TestAVerifierFailsAnEyeCheckAskTooVagueToCheck(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	withVerifier(t, f)
+	f.tick(0)
+	brief, _ := os.ReadFile(filepath.Join(f.Machine.Workers[1].Dir, BriefFile))
+	for _, want := range []string{
+		"When the hand-back asks for an eye check (after `Needs eyes:`), judge that\n  ask too",
+		"where to look on staging, what to do there (with the state the check\n  needs), and what a pass looks like, matching the issue's acceptance.",
+		"Each\n  of these it lacks is a finding, and the verification fails.",
+	} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+}
+
+func TestAVerifierOfAFleetWithNoEyeCheckAskJudgesNoAsk(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	withVerifier(t, f)
+	f.Signals = slices.DeleteFunc(f.Signals, func(s config.Signal) bool { return s.Name == config.EyesSignal })
+	f.tick(0)
+	brief, _ := os.ReadFile(filepath.Join(f.Machine.Workers[1].Dir, BriefFile))
+	if strings.Contains(string(brief), "asks for an eye check") {
+		t.Fatalf("brief judges an eye-check ask the fleet has no phrase for:\n%s", brief)
+	}
+}
+
 func TestAHandOverAfterAHandBackSaysWhatTheWorkerHadAndWhyNothingIsLeftInIt(t *testing.T) {
 	f := started(t, config.Supervisor{CacheTTL: "1h"}, assign(12), onTrack, onTrack)
 	withVerifier(t, f)

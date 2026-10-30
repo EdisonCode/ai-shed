@@ -151,16 +151,25 @@ and starts you with an empty context: judge the work on its own evidence.
   it touches only tests or docs, judge that change alone; otherwise verify
   the whole pull request at its tier.
 - Change no code. Commit nothing, push nothing, approve or merge nothing.
-- When it does what the issue asks, post a comment on the issue that starts
-  with `+"`Verified (<tier>):`"+` and gives your evidence: the commands you ran
+`)
+	if eyes := s.signal(config.EyesSignal); eyes.Ask != "" {
+		fmt.Fprintf(b, `- When the hand-back asks for an eye check (after `+"`%s`"+`), judge that
+  ask too: after the merge, someone looks on staging from it alone. It must say
+  where to look on staging, what to do there (with the state the check
+  needs), and what a pass looks like, matching the issue's acceptance. Each
+  of these it lacks is a finding, and the verification fails.
+`, eyes.Ask)
+	}
+	b.WriteString(`- When it does what the issue asks, post a comment on the issue that starts
+  with ` + "`Verified (<tier>):`" + ` and gives your evidence: the commands you ran
   with their results, and each acceptance item with how you checked it.
   Where the repository lets shed merge what you pass, your pass queues the
   merge. When the merge cannot be undone (a dropped column or table, rows
   rewritten for good, data sent to another system), start with
-  `+"`Verified (<tier>, owner merges):`"+` instead and say why: the owner
+  ` + "`Verified (<tier>, owner merges):`" + ` instead and say why: the owner
   merges it.
 - When it does not, post a comment that starts with
-  `+"`Verification failed (<tier>):`"+`, then one finding per line: what is
+  ` + "`Verification failed (<tier>):`" + `, then one finding per line: what is
   wrong and how to see it. Do not fix it: the pull request goes back to a
   worker that builds.
 - Then say so here and stop.
