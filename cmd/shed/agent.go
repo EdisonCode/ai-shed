@@ -67,6 +67,7 @@ func cmdDeploy(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	warn(cfg)
 	machines := cfg.Machines
 	if names := fs.Args(); len(names) > 0 {
 		machines = nil

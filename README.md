@@ -2104,8 +2104,15 @@ defaults:
 ```
 
 The message is in `SHED_MESSAGE`; `SHED_MACHINE` and `SHED_WORKER` say where
-it came from. It runs once when the state begins, not while it lasts. A usage
+it came from. It runs once when the state begins, not while it lasts, and
+once more if the worker still needs you 30 minutes later, with the same
+reason: for a permission prompt, the message its tool's hook gave. A usage
 limit, a nudge and a finished queue do not notify.
+
+`shed validate` and `shed deploy` warn when a fleet with workers has no
+`notify` command, and when `standing_orders` or a worker's brief runs
+`cd <dir> && git`, which stops the worker's tool to ask a person. Use
+`git -C <dir>` instead.
 
 Idle workers stop nothing, so by default nobody hears of them. Two settings
 under `supervisor` change that: `no_work_after: 30m` notifies when a worker

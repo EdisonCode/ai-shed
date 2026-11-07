@@ -149,5 +149,13 @@ func cmdValidate(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("%s: ok, %d machine(s)\n", path, len(cfg.Machines))
+	warn(cfg)
 	return exitOK
+}
+
+// warn prints what in the fleet file is valid but will cost the owner.
+func warn(cfg *config.Config) {
+	for _, w := range cfg.Warnings() {
+		fmt.Fprintf(os.Stderr, "shed: warning: %s\n", w)
+	}
 }

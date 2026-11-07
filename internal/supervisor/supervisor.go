@@ -299,7 +299,13 @@ type workerState struct {
 	// briefStale is set when the brief changed while the worker had an issue
 	// in hand. It is told with the next message, not in the middle of work.
 	briefStale bool
-	lastReview time.Time
+	// needsSince is when the worker started to need the owner, and
+	// needsCheckin the check-in that said so; reminded is set once the owner
+	// was reminded of it.
+	needsSince   time.Time
+	needsCheckin runlog.Checkin
+	reminded     bool
+	lastReview   time.Time
 	// reviewedActivity is the window's activity time at the last review. An
 	// idle worker is reviewed once per silence, not once per tick.
 	reviewedActivity time.Time
@@ -421,6 +427,11 @@ func (st *workerState) handsOver(issue int, item QueueItem) bool {
 // noted keeps what a check-in says about how long the worker has had no
 // work. A check-in that says nothing new of the worker leaves it as it is.
 func (st *workerState) noted(c runlog.Checkin) {
+	if _, needs := needsOwner[c.Verdict]; !needs {
+		st.needsSince, st.reminded = time.Time{}, false
+	} else if st.needsSince.IsZero() {
+		st.needsSince, st.needsCheckin, st.reminded = c.Time, c, false
+	}
 	switch {
 	case c.Verdict == runlog.VerdictDone && st.doneSince.IsZero():
 		st.doneSince = c.Time
@@ -499,6 +510,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 	for _, w := range s.Machine.Workers {
 		st := s.workers[w.Name]
 		now := s.Now()
+		s.remind(w, st, now)
 		s.resume(w.Name, st, now)
 		if now.Before(st.notBefore) {
 			continue
@@ -2126,6 +2138,23 @@ func fingerprint(queue []QueueItem) string {
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// ownerReminder is how long a worker needs the owner before they are told
+// again, once: the first notification may have gone unseen, and a worker at
+// a permission prompt does nothing until someone answers.
+const ownerReminder = 30 * time.Minute
+
+// remind tells the owner, once, that a worker has needed them for
+// ownerReminder, with what it needs: the text of a permission prompt, when
+// its tool gave one.
+func (s *Supervisor) remind(w config.Worker, st *workerState, now time.Time) {
+	if s.Notify == nil || st.needsSince.IsZero() || st.reminded || now.Sub(st.needsSince) < ownerReminder {
+		return
+	}
+	st.reminded = true
+	c := st.needsCheckin
+	s.Notify(w.Name, fmt.Sprintf("%s: worker %s still %s after %s: %s", s.Machine.Name, w.Name, needsOwner[c.Verdict], spell(now.Sub(st.needsSince).Truncate(time.Minute)), c.Reason))
 }
 
 // needsOwner maps the verdicts that need the owner to how a notification

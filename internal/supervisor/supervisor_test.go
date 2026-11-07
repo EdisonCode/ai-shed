@@ -1469,6 +1469,42 @@ func TestOwnerIsNotifiedOnceWhenAWorkerStartsToNeedThem(t *testing.T) {
 	}
 }
 
+func TestOwnerIsRemindedOnceWhenAWorkerStillNeedsThem(t *testing.T) {
+	needs := Verdict{Verdict: runlog.VerdictNeedsOwner, Reason: "its tool asks: Do you want to proceed?"}
+	f := started(t, config.Supervisor{}, needs)
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+
+	f.tick(2 * time.Minute)
+	f.tick(20 * time.Minute)
+	if len(notes) != 1 {
+		t.Fatalf("notifications = %q, want only the first before %s", notes, ownerReminder)
+	}
+	f.tick(15 * time.Minute)
+	if len(notes) != 2 || !strings.Contains(notes[1], "still needs you after 35m") || !strings.Contains(notes[1], "Do you want to proceed?") {
+		t.Fatalf("notifications = %q, want a reminder with the prompt", notes)
+	}
+	f.tick(2 * time.Hour)
+	if len(notes) != 2 {
+		t.Fatalf("notifications = %q, want one reminder only", notes)
+	}
+}
+
+func TestOwnerIsNotRemindedOnceTheWorkerMovesOn(t *testing.T) {
+	needs := Verdict{Verdict: runlog.VerdictNeedsOwner, Reason: "a permission prompt is open"}
+	f := started(t, config.Supervisor{}, needs, onTrack)
+	var notes []string
+	f.Notify = func(worker, message string) { notes = append(notes, message) }
+
+	f.tick(2 * time.Minute)
+	f.term.running(f.now) // the owner answered and the worker went on
+	f.tick(2 * time.Minute)
+	f.tick(time.Hour)
+	if len(notes) != 1 {
+		t.Fatalf("notifications = %q, want no reminder", notes)
+	}
+}
+
 func TestOwnerIsNotNotifiedAboutWorkThatIsGoingWell(t *testing.T) {
 	f := started(t, config.Supervisor{}, assign(12), Verdict{Verdict: runlog.VerdictDone, Reason: "r"}, limited(30))
 	notified := false
