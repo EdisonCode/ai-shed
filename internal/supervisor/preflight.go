@@ -91,7 +91,7 @@ func Preflight(term Terminal, w config.Worker, readable func(config.Worker) stri
 		return fail("%v", err)
 	}
 	defer term.Close(window)
-	if err := term.Send(window, w.CommandOrDefault()); err != nil {
+	if err := term.Send(window, sessionCommand(w)); err != nil {
 		return fail("%v", err)
 	}
 	if obs, err = waitToSettle(term, window, now, sleep); err != nil {

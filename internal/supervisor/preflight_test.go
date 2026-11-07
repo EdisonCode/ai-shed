@@ -82,8 +82,8 @@ func TestPreflightStartsTheCommandWithNoPromptAndCleansUp(t *testing.T) {
 	if !slices.Equal(p.opened, []string{"preflight-app"}) || !slices.Equal(p.closed, []string{"preflight-app"}) {
 		t.Fatalf("opened %v, closed %v; want the throwaway window opened and closed", p.opened, p.closed)
 	}
-	if !slices.Equal(p.sent, []string{"claude --permission-mode auto"}) {
-		t.Fatalf("sent = %q; the command must get no prompt, so no work starts", p.sent)
+	if !slices.Equal(p.sent, []string{"claude --permission-mode auto --settings '" + quietSettings + "'"}) {
+		t.Fatalf("sent = %q; the command must get no prompt, so no work starts, and the settings a session starts with", p.sent)
 	}
 }
 
