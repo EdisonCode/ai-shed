@@ -194,7 +194,7 @@ func TestMissingWorkerIsStartedWithItsBrief(t *testing.T) {
 	if !slices.Equal(f.term.opened, []string{"app"}) {
 		t.Fatalf("opened = %v", f.term.opened)
 	}
-	want := "claude --permission-mode auto 'You are an unattended worker. Read .shed/BRIEF.md in full and carry it out.'"
+	want := "claude --permission-mode auto --settings '" + quietSettings + "' 'You are an unattended worker. Read .shed/BRIEF.md in full and carry it out.'"
 	if !slices.Equal(f.term.sent, []string{want}) {
 		t.Fatalf("sent = %q", f.term.sent)
 	}
@@ -218,7 +218,7 @@ func TestWorkerStartsAtTheMachinesLowerPriority(t *testing.T) {
 	f.Machine.Workers[0].Env = map[string]string{"TZ": "UTC"}
 	f.tick(0)
 
-	want := "TZ='UTC' nice -n 10 claude --permission-mode auto 'You are an unattended worker. Read .shed/BRIEF.md in full and carry it out.'"
+	want := "TZ='UTC' nice -n 10 claude --permission-mode auto --settings '" + quietSettings + "' 'You are an unattended worker. Read .shed/BRIEF.md in full and carry it out.'"
 	if !slices.Equal(f.term.sent, []string{want}) {
 		t.Fatalf("sent = %q, want %q", f.term.sent, want)
 	}

@@ -1127,7 +1127,16 @@ again at full price.
   so a limit can cut a turn off without taking the work with it.
 
 shed cannot see the cache. `supervisor.cache_ttl` (default `5m`) is what you
-tell it your plan gives.
+tell it your plan gives. Claude Code keeps a subscription session's cache for
+an hour, and five minutes on an API key or once it draws on usage credits, so
+set `1h` for workers that sign in with a subscription. `shed validate` warns
+while it is not set.
+
+A worker whose command is `claude` is started with `--settings` that turn off
+the requests Claude Code makes on its own while nobody reads the session:
+idle compaction (the supervisor clears a cold context instead), prompt
+suggestions and the session recap. A worker that talks with you (`ask`), and a
+command that passes its own `--settings`, are started as written.
 
 ### A model per issue
 
