@@ -15,6 +15,26 @@ const unsentPrefix = 40
 // tool echoes a sent message above the box, not in it, so a message there
 // was typed and not sent. A screen without such a box tells nothing.
 func unsentInput(screen, message string) bool {
+	typed, want := typedAndWanted(screen, message)
+	return want != "" && strings.HasPrefix(typed, want)
+}
+
+// stackedInput reports whether the worker's input box holds the message
+// behind other text, such as a command that was typed before it and did not
+// run. Enter would send both as one message.
+func stackedInput(screen, message string) bool {
+	typed, want := typedAndWanted(screen, message)
+	return want != "" && strings.Contains(typed, want) && !strings.HasPrefix(typed, want)
+}
+
+// typedAndWanted returns the text typed in the screen's input box and the
+// opening of the message to look for in it, both without spaces. typed is
+// empty when the screen has no box or the box shows the tool's placeholder.
+func typedAndWanted(screen, message string) (typed, want string) {
+	want = squeeze(message)
+	if len(want) > unsentPrefix {
+		want = want[:unsentPrefix]
+	}
 	lines := strings.Split(strings.TrimRight(screen, "\n"), "\n")
 	var rules []int
 	for n, line := range lines {
@@ -23,10 +43,9 @@ func unsentInput(screen, message string) bool {
 		}
 	}
 	if len(rules) < 2 {
-		return false
+		return "", want
 	}
 	box := lines[rules[len(rules)-2]+1 : rules[len(rules)-1]]
-	typed := ""
 	for _, line := range box {
 		line = strings.Trim(strings.TrimSpace(line), "│")
 		line = strings.TrimLeft(strings.TrimSpace(line), ">❯ ")
@@ -34,13 +53,9 @@ func unsentInput(screen, message string) bool {
 	}
 	if strings.Contains(typed, faintOpen) {
 		// Faint text is the tool's placeholder: the input is empty.
-		return false
+		return "", want
 	}
-	want := squeeze(message)
-	if len(want) > unsentPrefix {
-		want = want[:unsentPrefix]
-	}
-	return want != "" && strings.HasPrefix(squeeze(typed), want)
+	return squeeze(typed), want
 }
 
 // isRule reports whether the line is a horizontal rule of a box: box-drawing

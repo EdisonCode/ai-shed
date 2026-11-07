@@ -72,3 +72,67 @@ func TestATaskHandOverLeftUnsentIsSubmittedWithoutAskingTheReviewer(t *testing.T
 		t.Fatalf("check-in = %+v", c)
 	}
 }
+
+func TestAClearLeftTypedIsEmptiedAndTypedAgainBeforeTheHandOver(t *testing.T) {
+	f := started(t, config.Supervisor{Models: models}, assign(12))
+	f.term.sticks = map[string]int{"/clear": 1}
+	f.tick(2 * time.Minute)
+
+	if f.term.interrupts != 1 || len(f.term.sent) != 4 || f.term.sent[0] != "/clear" || f.term.sent[1] != "/clear" || f.term.sent[2] != "/model sonnet" {
+		t.Fatalf("interrupts %d, sent = %q; want the input emptied once and /clear typed again", f.term.interrupts, f.term.sent)
+	}
+	if c := f.lastCheckin(t); c.Issue != 12 || !c.Sent {
+		t.Fatalf("check-in = %+v, want #12 handed over", c)
+	}
+}
+
+func TestAModelCommandLeftTypedIsEmptiedAndTypedAgain(t *testing.T) {
+	f := started(t, config.Supervisor{Models: models}, assign(12))
+	f.term.sticks = map[string]int{"/model sonnet": 1}
+	f.tick(2 * time.Minute)
+
+	if f.term.interrupts != 1 || !slices.Equal(f.term.sent[:3], []string{"/clear", "/model sonnet", "/model sonnet"}) {
+		t.Fatalf("interrupts %d, sent = %q", f.term.interrupts, f.term.sent)
+	}
+}
+
+func TestAClearThatStaysTypedEndsTheSessionAndTypesNoHandOver(t *testing.T) {
+	f := started(t, config.Supervisor{Models: models}, assign(12))
+	f.term.sticks = map[string]int{"/clear": 2}
+	f.tick(2 * time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{"/clear", "/clear"}) {
+		t.Fatalf("sent = %q; nothing may be typed on top of a command that did not run", f.term.sent)
+	}
+	if !slices.Equal(f.term.closed, []string{"app"}) {
+		t.Fatalf("closed = %q, want the session ended", f.term.closed)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictRecycled || !strings.Contains(c.Reason, `"/clear" stayed typed`) {
+		t.Fatalf("check-in = %+v, want recycled with the command named", c)
+	}
+}
+
+func TestAMessageTypedBehindACommandIsNotSubmitted(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, done)
+	f.tick(2 * time.Minute) // found done; it rests
+	f.pushTask(t, runlog.TaskAny, "t1", "Audit the export.")
+	f.tick(time.Minute)
+	reviews := len(f.reviewer.prompts)
+	f.term.screen = inputBox("", "> /clear "+taskMessage)
+	f.term.running(f.now)
+	f.tick(2 * time.Minute)
+
+	if f.term.submitted != 0 || len(f.reviewer.prompts) != reviews {
+		t.Fatalf("submitted %d, reviews %d (were %d); Enter would send the command and the message as one", f.term.submitted, len(f.reviewer.prompts), reviews)
+	}
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictRecycled || !strings.Contains(c.Reason, "behind other text") {
+		t.Fatalf("check-in = %+v, want recycled", c)
+	}
+}
+
+func TestAMessageBehindOtherTextIsSeenStacked(t *testing.T) {
+	screen := inputBox("", "> /clear "+handOver)
+	if !stackedInput(screen, handOver) || unsentInput(screen, handOver) {
+		t.Fatalf("stacked %v, unsent %v; want stacked only:\n%s", stackedInput(screen, handOver), unsentInput(screen, handOver), screen)
+	}
+}

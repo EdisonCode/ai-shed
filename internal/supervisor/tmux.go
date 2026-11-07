@@ -36,6 +36,9 @@ type Terminal interface {
 	// Submit presses Enter as a carriage return, which sends a line that is
 	// left typed in the window's input.
 	Submit(window string) error
+	// Interrupt presses C-c once, which empties a typed input. On an empty
+	// input a second one would end the session.
+	Interrupt(window string) error
 	// Close ends the window and whatever runs in it.
 	Close(window string) error
 }
@@ -189,6 +192,11 @@ func (t Tmux) Send(window, text string) error {
 // Enter key, and still take a carriage return.
 func (t Tmux) Submit(window string) error {
 	_, err := t.run("send-keys", "-t", target(window), "C-m")
+	return err
+}
+
+func (t Tmux) Interrupt(window string) error {
+	_, err := t.run("send-keys", "-t", target(window), "C-c")
 	return err
 }
 

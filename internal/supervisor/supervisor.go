@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -126,7 +127,7 @@ const (
 	KindQueue    = "queue"    // it was resting and its queue changed
 	KindBrief    = "brief"    // its brief was edited
 	KindLimit    = "limit"    // its usage limit was due to reset
-	KindRecycle  = "recycle"  // the owner asked for a fresh session
+	KindRecycle  = "recycle"  // the owner asked for a fresh session, or typing could not reach the old one
 	KindCapacity = "capacity" // a held hand-over was delivered
 	KindHook     = "hook"     // its tool said it waits for a person, or no longer does
 	KindTask     = "task"     // it was handed a one-off task from the owner
@@ -512,6 +513,15 @@ func (s *Supervisor) Tick(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		// A session that typing cannot reach is ended at once: left as it
+		// is, the worker idles with its next message unsent.
+		var stuck stuckInput
+		if errors.As(err, &stuck) {
+			if err = s.endStuck(w, st, now, stuck.Error()); err == nil {
+				st.lastError = ""
+				continue
+			}
+		}
 		c := runlog.Checkin{Time: now, Worker: w.Name, Kind: KindError, Verdict: runlog.VerdictError, Reason: err.Error()}
 		st.notBefore = now.Add(retryAfter)
 		// A reviewer at its usage limit is not a fault and needs nobody: the
@@ -791,6 +801,10 @@ func (s *Supervisor) review(ctx context.Context, w config.Worker, st *workerStat
 	if st.reviewerLimited && st.limitOver == "" {
 		st.limitOver = reviewerAnswers
 	}
+	if msg := st.lastSent(); msg != "" && stackedInput(terminal, msg) {
+		// Enter would send the message with whatever is typed before it.
+		return s.endStuck(w, st, now, "the message it was sent sits typed behind other text in its input box, and no turn started")
+	}
 	if msg := st.lastSent(); msg != "" && unsentInput(terminal, msg) {
 		// The supervisor knows what it typed: no reviewer is needed to see
 		// that it was not sent. A message still there after one Enter
@@ -897,6 +911,10 @@ func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, 
 		c.Until, c.Message = st.retryAt, verdict.Message
 		c.Reason = fmt.Sprintf("%s; retry %d of %d in %s", verdict.Reason, st.retries+1, len(retryBackoff), spell(wait))
 	}
+	if verdict.Verdict == runlog.VerdictUnsent && st.submittedSinceSent() {
+		// Enter did not send it; nothing more typed into this session will.
+		return s.endStuck(w, st, now, "its message still sat unsent after one Enter: "+verdict.Reason)
+	}
 	if verdict.Verdict == runlog.VerdictUnsent {
 		if err := s.submit(w, st, &c); err != nil {
 			return err
@@ -919,14 +937,8 @@ func (s *Supervisor) act(ctx context.Context, w config.Worker, st *workerState, 
 }
 
 // submit sends the message that sits unsent in the worker's input, once. The
-// next tick looks at the worker again, to see that its turn started. When
-// Enter was already pressed for that message, the owner is needed.
+// next tick looks at the worker again, to see that its turn started.
 func (s *Supervisor) submit(w config.Worker, st *workerState, c *runlog.Checkin) error {
-	if st.submittedSinceSent() {
-		c.Verdict = runlog.VerdictNeedsOwner
-		c.Reason = "its message still sits unsent after one Enter: " + c.Reason
-		return nil
-	}
 	if err := s.Terminal.Submit(w.Name); err != nil {
 		return err
 	}
@@ -1203,13 +1215,44 @@ func (s *Supervisor) release(ctx context.Context, w config.Worker, st *workerSta
 }
 
 // command types a command of the worker's own program, such as its clear or
-// model command, and gives it time to take effect.
+// model command, and gives it time to take effect. Its tool may leave the
+// command typed and not run it; what is typed next would then land behind
+// it, and Enter would send both as one message. So the input is looked at:
+// a command still there is emptied and typed once more, and one that stays
+// after that is a stuckInput.
 func (s *Supervisor) command(w config.Worker, line string) error {
-	if err := s.Terminal.Send(w.Name, line); err != nil {
-		return err
+	for try := 1; ; try++ {
+		if err := s.Terminal.Send(w.Name, line); err != nil {
+			return err
+		}
+		s.Sleep(clearSettling)
+		screen, err := s.Terminal.Capture(w.Name, terminalLines)
+		if err != nil {
+			return err
+		}
+		if !unsentInput(screen, line) {
+			return nil
+		}
+		if try == 2 {
+			return stuckInput{line: line}
+		}
+		// The input holds the command, so one C-c empties it and does not
+		// reach the session.
+		if err := s.Terminal.Interrupt(w.Name); err != nil {
+			return err
+		}
+		s.Sleep(clearSettling)
 	}
-	s.Sleep(clearSettling)
-	return nil
+}
+
+// stuckInput is a command the worker's tool left typed in its input twice.
+// Nothing more can be typed into that session with any use.
+type stuckInput struct {
+	line string
+}
+
+func (e stuckInput) Error() string {
+	return fmt.Sprintf("%q stayed typed in its input and did not run, after the input was emptied and it was typed again", e.line)
 }
 
 // contextOver returns the context the idle worker's session carries when
@@ -1329,10 +1372,26 @@ func (s *Supervisor) recycle(w config.Worker, st *workerState, now time.Time) er
 	if err := os.Remove(filepath.Join(s.StateDir, runlog.RecycleDir, w.Name)); err != nil {
 		return fmt.Errorf("worker %s: clear the recycle request: %w", w.Name, err)
 	}
+	s.ended(w, st, now, "its session was ended so that a fresh one starts")
+	return nil
+}
+
+// endStuck ends a session whose input typing cannot reach, as a recycle
+// does, so that a fresh one starts and its issue is handed over again. A
+// session that sticks each time is held back by the limit on starts.
+func (s *Supervisor) endStuck(w config.Worker, st *workerState, now time.Time, why string) error {
+	if err := s.Terminal.Close(w.Name); err != nil {
+		return err
+	}
+	s.ended(w, st, now, "its session was ended so that a fresh one starts: "+why)
+	return nil
+}
+
+// ended forgets what the ended session had in hand and records the recycle.
+func (s *Supervisor) ended(w config.Worker, st *workerState, now time.Time, reason string) {
 	st.issue, st.look, st.model, st.limitedUntil = 0, false, "", time.Time{}
 	s.returnTask(w, st)
-	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindRecycle, Verdict: runlog.VerdictRecycled, Reason: "its session was ended so that a fresh one starts"})
-	return nil
+	s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindRecycle, Verdict: runlog.VerdictRecycled, Reason: reason})
 }
 
 // resume acts on the owner's `shed resume`: the worker's usage limit is over,
