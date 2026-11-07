@@ -31,6 +31,11 @@ type fakeTerminal struct {
 	closed []string
 	// submitted counts the carriage returns pressed with nothing typed.
 	submitted int
+	// sticks says how many more times a line typed into the window stays
+	// in its input box, not run. interrupts counts the C-c presses, each of
+	// which empties the box.
+	sticks     map[string]int
+	interrupts int
 }
 
 func (f *fakeTerminal) Close(window string) error {
@@ -45,8 +50,20 @@ func (f *fakeTerminal) Open(window, dir string) error {
 	f.opened = append(f.opened, window)
 	return nil
 }
-func (f *fakeTerminal) Send(window, text string) error { f.sent = append(f.sent, text); return nil }
-func (f *fakeTerminal) Submit(window string) error     { f.submitted++; return nil }
+func (f *fakeTerminal) Send(window, text string) error {
+	f.sent = append(f.sent, text)
+	if f.sticks[text] > 0 {
+		f.sticks[text]--
+		f.screen = inputBox("", "> "+text)
+	}
+	return nil
+}
+func (f *fakeTerminal) Submit(window string) error { f.submitted++; return nil }
+func (f *fakeTerminal) Interrupt(window string) error {
+	f.interrupts++
+	f.screen = inputBox("", "> ")
+	return nil
+}
 func (f *fakeTerminal) running(lastActivity time.Time) {
 	f.obs = Observation{Exists: true, Command: "claude", LastActivity: lastActivity}
 }
@@ -3137,19 +3154,15 @@ func TestAMessageLeftUnsentIsSubmittedOnceAndLookedAtAgain(t *testing.T) {
 	}
 }
 
-func TestAMessageStillUnsentAfterOneEnterNeedsTheOwner(t *testing.T) {
+func TestAMessageStillUnsentAfterOneEnterEndsTheSession(t *testing.T) {
 	f := started(t, config.Supervisor{}, unsent())
-	var notes []string
-	f.Notify = func(worker, message string) { notes = append(notes, message) }
 	f.tick(2 * time.Minute)
 	f.tick(time.Minute)
-	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictNeedsOwner || !strings.Contains(c.Reason, "still sits unsent after one Enter") {
-		t.Fatalf("check-in = %+v, want needs_owner", c)
+	if c := f.lastCheckin(t); c.Verdict != runlog.VerdictRecycled || !strings.Contains(c.Reason, "still sat unsent after one Enter") {
+		t.Fatalf("check-in = %+v, want recycled", c)
 	}
-	f.term.running(f.now) // the screen moved, and the reviewer sees the same
-	f.tick(2 * time.Minute)
-	if f.term.submitted != 1 || len(notes) != 1 {
-		t.Fatalf("submitted %d times, notes %q; Enter is pressed once per message", f.term.submitted, notes)
+	if f.term.submitted != 1 || !slices.Equal(f.term.closed, []string{"app"}) {
+		t.Fatalf("submitted %d times, closed %q; want one Enter, then the session ended", f.term.submitted, f.term.closed)
 	}
 }
 
