@@ -1638,10 +1638,13 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	s.applyHolds(w, items, open, elsewhere, checkins)
 	s.applyPace(w, items, checkins)
 	var reserve string
-	if items, reserve, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
+	var offered []backlog.Issue
+	if items, offered, reserve, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
 	}
-	s.applyHolds(w, items, open, elsewhere, checkins)
+	// A backfill issue is in no labelled source, so applyHolds needs it
+	// beside them to hold it as it holds queued work.
+	s.applyHolds(w, items, append(slices.Clone(open), offered...), elsewhere, checkins)
 	s.applyPace(w, items, checkins)
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
@@ -1774,30 +1777,31 @@ func capitalize(s string) string {
 // withBackfill adds the issues of the worker's backfill sources when its
 // queue has nothing it can act on. They are listed only then. An issue that
 // waits on the owner, that another worker has in hand, or that carries a
-// label that puts it in a queue of the fleet is left where it is.
+// label that puts it in a queue of the fleet is left where it is. It returns
+// the issues it offered, so that the holds of queued work apply to them.
 //
 // It also says what became of the reserve, for the queue the agent keeps for
 // the owner: why it was not listed, or what it offered and what it left.
-func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []QueueItem, taken map[int]bool, checkins []runlog.Checkin) ([]QueueItem, string, error) {
+func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []QueueItem, taken map[int]bool, checkins []runlog.Checkin) ([]QueueItem, []backlog.Issue, string, error) {
 	sources := s.Machine.BackfillFor(w)
 	if len(sources) == 0 {
-		return items, "", nil
+		return items, nil, "", nil
 	}
 	if s.Claimer == nil {
-		return items, "not listed: this agent cannot label an issue it takes", nil
+		return items, nil, "not listed: this agent cannot label an issue it takes", nil
 	}
 	if n := slices.IndexFunc(items, QueueItem.actionable); n >= 0 {
-		return items, fmt.Sprintf("not listed: #%d can be acted on", items[n].Number), nil
+		return items, nil, fmt.Sprintf("not listed: #%d can be acted on", items[n].Number), nil
 	}
 	if runlog.BackfillSpent(checkins, w.Name, s.Now()) {
-		return items, fmt.Sprintf("not listed: the worker took %d issues from it in the last %s", runlog.BackfillLimit, spell(runlog.BackfillWindow)), nil
+		return items, nil, fmt.Sprintf("not listed: the worker took %d issues from it in the last %s", runlog.BackfillLimit, spell(runlog.BackfillWindow)), nil
 	}
-	offered := 0
+	var offered []backlog.Issue
 	var skipped skips
 	for _, src := range sources {
 		issues, err := s.Lister.List(ctx, src)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, "", err
 		}
 		for _, i := range issues {
 			_, queued := find(items, i.Number)
@@ -1825,10 +1829,10 @@ func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []
 			// A labelled backfill source is a pool: what is taken leaves it.
 			item.unclaim, item.ReleasedBy = src.Label, backlog.ReleasedBy(i)
 			items = append(items, item)
-			offered++
+			offered = append(offered, i)
 		}
 	}
-	return items, fmt.Sprintf("listed: %d issue(s) offered%s", offered, skipped.words()), nil
+	return items, offered, fmt.Sprintf("listed: %d issue(s) offered%s", len(offered), skipped.words()), nil
 }
 
 // skips counts the issues a listing left out, by reason, with the first few

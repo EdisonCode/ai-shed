@@ -3,6 +3,7 @@ package supervisor
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -254,6 +255,74 @@ func TestTheKeptQueueSaysWhatTheReserveOfferedAndWhatItLeftOut(t *testing.T) {
 	for _, e := range v.Items {
 		if e.Number == 50 && !e.Backfill {
 			t.Fatalf("#50 is not marked as from the reserve: %+v", v)
+		}
+	}
+}
+
+// reserveOf replaces the backlog the reserve lists.
+func reserveOf(f *fixture, issues ...backlog.Issue) {
+	f.lister.byLabel[""] = issues
+}
+
+// withOpenPRs gives the issue the open pull requests of its repository.
+func withOpenPRs(i backlog.Issue, prs ...int) backlog.Issue {
+	i.OpenPRs = map[int]backlog.PR{}
+	for _, pr := range prs {
+		i.OpenPRs[pr] = backlog.PR{}
+	}
+	return i
+}
+
+func TestTheReserveIsHeldWhileItsRepositoryIsAtItsOpenPullRequestLimit(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	f.Repos = []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}
+	withBackfill(f, withOpenPRs(labeled(11), 41, 42))
+	reserveOf(f, withOpenPRs(labeled(50, "p1"), 41, 42))
+	f.tick(2 * time.Minute)
+
+	const hold = "held: org/app has 2 open pull requests, at or over its limit of 2"
+	prompt := f.reviewer.prompts[0]
+	for _, want := range []string{"org/app#11 Issue [" + hold, "#50 Issue [" + hold} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	f.tick(15 * time.Minute)
+	for _, c := range f.checkins(t) {
+		if c.Issue == 11 || c.Issue == 50 {
+			t.Fatalf("check-in = %+v: an issue was handed over while the repository is at its limit", c)
+		}
+	}
+}
+
+func TestTheReserveIsHandedOverWhileItsRepositoryIsUnderItsOpenPullRequestLimit(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(50))
+	f.Repos = []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}
+	claimer := withBackfill(f)
+	reserveOf(f, withOpenPRs(labeled(50, "p1"), 41))
+	f.tick(2 * time.Minute)
+
+	if c := f.lastCheckin(t); c.Issue != 50 || !c.Backfill || !c.Sent {
+		t.Fatalf("check-in = %+v, want #50 handed over from the reserve", c)
+	}
+	if !slices.Equal(claimer.claimed, []string{"org/app#50 machine:box"}) {
+		t.Fatalf("claimed = %q", claimer.claimed)
+	}
+}
+
+func TestTheReserveHoldsAnIssueThatWaitsForADependency(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	withBackfill(f)
+	reserveOf(f, dependsOn(50, 12, true))
+	f.tick(2 * time.Minute)
+
+	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#50 Issue [held: waits for #12 to close] [backlog]") {
+		t.Fatalf("prompt does not show the hold:\n%s", prompt)
+	}
+	f.tick(10 * time.Minute)
+	for _, c := range f.checkins(t) {
+		if c.Issue == 50 {
+			t.Fatalf("check-in = %+v: #50 was handed over while it waits for #12", c)
 		}
 	}
 }
