@@ -1596,11 +1596,11 @@ merged and the part that is still open: `#41 (backend, merged) and #42
 (frontend, ready)`. The review, and a conflict or a failed check, follow the
 first one that is still open. The eye check is of the first one named.
 
-A draft that is a draft on purpose says what it waits for, in the brackets
-after its number: `**PR:** #41 (draft: waits for #40 to merge)`. While that
+A draft is held only when it says what it waits for, in the brackets
+after its number: `**PR:** #41 (draft: waits for #40 to merge)`; a note without "waits for", such as `parked`, does not hold it. While that
 pull request is a draft on GitHub it is not yours to review: the issue shows
 as `draft` with those words, puts no `!` line on the machine and is not
-counted in `Waiting on you`. A draft that gives no reason goes back to a
+counted in `Waiting on you`. Any other draft goes back to a
 worker to finish, and a pull request marked ready since is a review like any other.
 
 A hand-back with no pull request, such as a plan for you to rule on, writes

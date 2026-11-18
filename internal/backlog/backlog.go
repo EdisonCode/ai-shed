@@ -527,14 +527,14 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 		}
 		ask := Ask{Name: s.Name, Since: since}
 		if s.FollowsPR {
-			if issue.OpenPRs[pr].Draft && draftNote(line) == "" {
-				// Unfinished work: Rework sends it to a worker.
-				continue
-			}
-			ask.PR, ask.NoPR = pr, pr == 0
 			if issue.OpenPRs[pr].Draft {
+				if !heldDraft(line) {
+					// Unfinished work: Rework sends it to a worker.
+					continue
+				}
 				ask.WaitsFor = draftNote(line)
 			}
+			ask.PR, ask.NoPR = pr, pr == 0
 		}
 		asks = append(asks, ask)
 	}
@@ -574,7 +574,7 @@ func Rework(issue Issue, signals []config.Signal) string {
 	}
 	if open.Draft {
 		for _, s := range signals {
-			if isOpen, _, _, line := signalState(issue, s); s.FollowsPR && isOpen && draftNote(line) == "" {
+			if isOpen, _, _, line := signalState(issue, s); s.FollowsPR && isOpen && !heldDraft(line) {
 				reasons = append(reasons, fmt.Sprintf("pull request #%d is still a draft: finish it (rebase on the base branch, run the gate, mark it ready with auto-merge), or hand back with what it waits for", pr))
 				break
 			}
@@ -829,12 +829,20 @@ var draftRE = regexp.MustCompile(`(?i)\(draft\b[\s:,;-]*([^)]*)\)`)
 
 // draftNote returns what a hand-back says its draft pull request waits for:
 // the words after "draft" in the brackets that follow the number. "" when it
-// says nothing, which sends the draft back to a worker to finish.
+// says nothing.
 func draftNote(line string) string {
 	if m := draftRE.FindStringSubmatch(line); m != nil {
 		return strings.TrimSpace(m[1])
 	}
 	return ""
+}
+
+// heldDraft reports whether a hand-back's draft says what it waits for. Any
+// other draft, including one with no note or one that is only parked, is
+// unfinished work.
+func heldDraft(line string) bool {
+	note := strings.ToLower(draftNote(line))
+	return strings.Contains(note, "waits for") || strings.Contains(note, "wait for")
 }
 
 var prRE = regexp.MustCompile(`#(\d+)`)
