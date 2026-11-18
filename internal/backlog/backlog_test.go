@@ -521,6 +521,14 @@ func TestDraftThatGivesNoReasonGoesBackToAWorker(t *testing.T) {
 		t.Fatalf("rework = %q, want the draft reason for a parked draft", got)
 	}
 
+	issue.Comments[0].Body = "## Hand-back\n**PR:** #41 (draft, parked)"
+	if got := Rework(issue, signals); got != "" {
+		t.Fatalf("rework = %q, want none for a draft shed parked", got)
+	}
+	if asks := Asks(issue, signals); len(asks) != 1 || asks[0].WaitsFor != "parked" {
+		t.Fatalf("asks = %+v, want the parked draft held", asks)
+	}
+
 	issue.Comments[0].Body = "## Hand-back\n**PR:** #41 (draft: waits for #40)"
 	if got := Rework(issue, signals); got != "" {
 		t.Fatalf("rework = %q, want none for a draft that says what it waits for", got)

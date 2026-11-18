@@ -837,12 +837,12 @@ func draftNote(line string) string {
 	return ""
 }
 
-// heldDraft reports whether a hand-back's draft says what it waits for. Any
-// other draft, including one with no note or one that is only parked, is
+// heldDraft reports whether a hand-back's draft says what it waits for, or
+// carries shed's own park marker, which shed lifts itself. Any other draft is
 // unfinished work.
 func heldDraft(line string) bool {
 	note := strings.ToLower(draftNote(line))
-	return strings.Contains(note, "waits for") || strings.Contains(note, "wait for")
+	return strings.Contains(note, "waits for") || strings.Contains(note, "wait for") || strings.EqualFold(note, ParkedNote)
 }
 
 var prRE = regexp.MustCompile(`#(\d+)`)
