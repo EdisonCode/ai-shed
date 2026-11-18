@@ -310,6 +310,37 @@ func TestEyeCheckOfHandedBackWork(t *testing.T) {
 	}
 }
 
+func TestAFailedLookThatAsksNothingGoesBackToAWorker(t *testing.T) {
+	signals := config.DefaultSignals()
+	asks := "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders and check the total"
+	fixable := "## Hand-back\n**Eyes failed:** the total is blank (viewport 1440x900)\n**Decided without you:** show zero\n**Decisions needed:** none"
+	risky := "## Hand-back\n**Eyes failed:** the total is blank\n**Decisions needed:** change what the refund does?"
+	fixed := "## Hand-back\n**PR:** #58 (ready)\n**Needs eyes:** nothing"
+	cases := []struct {
+		name       string
+		comments   []string
+		wantRework bool
+		wantWait   []string
+	}{
+		{"no decision asked", []string{asks, fixable}, true, nil},
+		{"a decision is open", []string{asks, risky}, false, []string{"decision"}},
+		{"a worker handed back again", []string{asks, fixable, fixed}, false, nil},
+	}
+	for _, tc := range cases {
+		issue := mergedIssue(tc.comments...)
+		got := Rework(issue, signals)
+		if (got != "") != tc.wantRework || (tc.wantRework && !strings.Contains(got, "the eye check failed")) {
+			t.Errorf("%s: Rework = %q, want rework %v", tc.name, got, tc.wantRework)
+		}
+		if w := Waiting(issue, signals); !slices.Equal(w, tc.wantWait) {
+			t.Errorf("%s: Waiting = %v, want %v", tc.name, w, tc.wantWait)
+		}
+	}
+	if f := Finished(mergedIssue(asks, fixable), signals); f != 0 {
+		t.Errorf("a failed look left its issue finished: %d", f)
+	}
+}
+
 func TestBlockedEyeCheckSaysWhatStoppedIt(t *testing.T) {
 	issue := Issue{OpenPRs: map[int]PR{}, Comments: []Comment{
 		{Body: "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders"},

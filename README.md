@@ -749,10 +749,12 @@ machines:
   your worker's browser tool can resize, say how in `orders`.
 - **A pass.** The worker comments `Eyes checked:` with what it saw.
 - **A failure.** The worker reopens the issue and hands it back with
-  `Eyes failed:` and a `Decisions needed:` for you. It does not fix it: a
-  failed look is new information, and whether it is a regression, an older
-  defect or the feature working as specified but wrong is yours to scope.
-  Your `Owner ruling` then sends the issue to a worker as usual.
+  `Eyes failed:` (what it saw against what was expected), the fix for each
+  failure decided by your defaults under `Decided without you:`, and
+  `Decisions needed: none`. It does not fix it in the look. The issue goes
+  back to a worker as rework, ahead of new work, under the usual limit of
+  two sends in six hours. Only a fix in the `risky` list is a question for
+  you: that failed look waits, and your `Owner ruling` sends it to a worker.
 - **A check that could not be done.** Staging is down, the description is
   too vague to judge, or the check needs an act the orders forbid. Missing
   data and a sign-in are not reasons to stop: the worker makes the data and
