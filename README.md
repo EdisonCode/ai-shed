@@ -161,6 +161,9 @@ at a time, in this order:
      and costs no worker turn.
    - *The pull request went stale.* It conflicts with its base branch, or a
      check failed. The worker is told what is wrong and to fix only that.
+   - *The pull request is an unfinished draft.* The hand-back names a draft
+     and says nothing about what it waits for. The worker is told to finish
+     it, or to hand back with the reason.
 
    The worker hands back again when it is done, which ends the rework. It
    does so even when your answer left nothing to change, and says that. An
@@ -1593,12 +1596,12 @@ merged and the part that is still open: `#41 (backend, merged) and #42
 (frontend, ready)`. The review, and a conflict or a failed check, follow the
 first one that is still open. The eye check is of the first one named.
 
-A draft that is a draft on purpose says what it waits for, in the brackets
-after its number: `**PR:** #41 (draft: waits for #40 to merge)`. While that
+A draft is held only when it says what it waits for, in the brackets
+after its number: `**PR:** #41 (draft: waits for #40 to merge)`. The `(draft, parked)` marker that shed writes itself holds one too. Any other note, such as `parked at the PR limit`, does not hold it. While that
 pull request is a draft on GitHub it is not yours to review: the issue shows
 as `draft` with those words, puts no `!` line on the machine and is not
-counted in `Waiting on you`. A draft that gives no reason is a review like
-any other, and so is one that was marked ready since.
+counted in `Waiting on you`. Any other draft goes back to a
+worker to finish, and a pull request marked ready since is a review like any other.
 
 A hand-back with no pull request, such as a plan for you to rule on, writes
 `**PR:** none`: there is nothing to review, so the review signal stays closed.

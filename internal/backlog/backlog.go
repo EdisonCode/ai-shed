@@ -527,10 +527,14 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 		}
 		ask := Ask{Name: s.Name, Since: since}
 		if s.FollowsPR {
-			ask.PR, ask.NoPR = pr, pr == 0
 			if issue.OpenPRs[pr].Draft {
+				if !heldDraft(line) {
+					// Unfinished work: Rework sends it to a worker.
+					continue
+				}
 				ask.WaitsFor = draftNote(line)
 			}
+			ask.PR, ask.NoPR = pr, pr == 0
 		}
 		asks = append(asks, ask)
 	}
@@ -567,6 +571,14 @@ func Rework(issue Issue, signals []config.Signal) string {
 		why, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(issue.Comments[off].Body), OffTrainPhrase), ReworkPhrase)
 		why = strings.TrimSuffix(strings.TrimSpace(why), ".")
 		reasons = append(reasons, fmt.Sprintf("shed took it off the merge train: %s; fix what it found and hand back again", why))
+	}
+	if open.Draft {
+		for _, s := range signals {
+			if isOpen, _, _, line := signalState(issue, s); s.FollowsPR && isOpen && !heldDraft(line) {
+				reasons = append(reasons, fmt.Sprintf("pull request #%d is still a draft: finish it (rebase on the base branch, run the gate, mark it ready with auto-merge), or hand back with what it waits for", pr))
+				break
+			}
+		}
 	}
 	if v := Verification(issue, signals); v.State == VerifyFailed {
 		reasons = append(reasons, fmt.Sprintf("the verifier sent pull request #%d back: %s; fix what it found and hand back again", pr, v.Note))
@@ -817,12 +829,20 @@ var draftRE = regexp.MustCompile(`(?i)\(draft\b[\s:,;-]*([^)]*)\)`)
 
 // draftNote returns what a hand-back says its draft pull request waits for:
 // the words after "draft" in the brackets that follow the number. "" when it
-// says nothing, which leaves the draft a review like any other.
+// says nothing.
 func draftNote(line string) string {
 	if m := draftRE.FindStringSubmatch(line); m != nil {
 		return strings.TrimSpace(m[1])
 	}
 	return ""
+}
+
+// heldDraft reports whether a hand-back's draft says what it waits for, or
+// carries shed's own park marker, which shed lifts itself. Any other draft is
+// unfinished work.
+func heldDraft(line string) bool {
+	note := strings.ToLower(draftNote(line))
+	return strings.Contains(note, "waits for") || strings.Contains(note, "wait for") || strings.EqualFold(note, ParkedNote)
 }
 
 var prRE = regexp.MustCompile(`#(\d+)`)
