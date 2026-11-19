@@ -1877,7 +1877,8 @@ func TestBriefSaysHowAnEyeCheckPassesFailsAndIsBlocked(t *testing.T) {
 		"If it does, you are blocked, and your comment says the size you had and the size that was asked.",
 		"starts with `Eyes checked:`",
 		"headed `Hand-back`. Write `Eyes failed:`",
-		"then `Decisions needed:`",
+		"record it after `Decided without you:`",
+		"write `Decisions needed:` as `none`, unless a fix touches this ground: anything that changes what is merged or deployed",
 		"Post a comment on the issue that starts with `Eyes blocked:`",
 		"the supervisor gives you your next item. A check you could not do has not passed.",
 	} {
@@ -2867,7 +2868,7 @@ func TestAHandOverToAWorkerWithNoIssueSaysItHadNone(t *testing.T) {
 
 func TestReworkHandedOverWithoutTheReviewerSaysWhatIsWrong(t *testing.T) {
 	item := QueueItem{Number: 13, Rework: "its pull request has conflicts"}
-	if got, want := unaskedOrder(0, false, item), "Start #13 now. Its pull request cannot merge as it stands: its pull request has conflicts. Fix that and nothing else."; got != want {
+	if got, want := unaskedOrder(0, false, item), "Start #13 now. It needs rework: its pull request has conflicts. Fix that and nothing else."; got != want {
 		t.Fatalf("order = %q, want %q", got, want)
 	}
 }

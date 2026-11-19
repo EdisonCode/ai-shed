@@ -87,7 +87,7 @@ const (
 	// knows that the worker has nothing else it can act on.
 	unaskedStart  = "Start #%d now."
 	unaskedWaits  = "Nothing is left for you on #%d until the owner acts. "
-	unaskedRework = " Its pull request cannot merge as it stands: %s. Fix that and nothing else."
+	unaskedRework = " It needs rework: %s. Fix that and nothing else."
 	unaskedRuled  = " The owner answered its question: read the answer in the issue and go on from there."
 	unaskedStack  = " %s: build what is still to do (%s) on a new branch from its branch, and open the next pull request against that branch."
 	unaskedOnDep  = " It needs #%d, whose pull request #%d waits for review: build it on a new branch from that pull request's branch, and open its pull request against that branch."
@@ -2377,9 +2377,9 @@ How to do one:
 - Look at the viewport the check names. Read the size your browser really has (`+"`window.innerWidth`"+` by `+"`window.innerHeight`"+`); do not take it from what you asked for. Whatever you post, say that size in it, as in `+"`viewport 1440x900`"+`.
 - You cannot get the size the check names: if what is to be judged does not depend on the size, look at the size you have. If it does, you are blocked, and your comment says the size you had and the size that was asked.
 - It passes: post a comment on the issue that starts with `+"`%s:`"+` and says what you saw.
-- It fails: reopen the issue (`+"`gh issue reopen`"+`) and post a comment headed `+"`%s`"+`. Write `+"`%s:`"+` with what you saw against what was expected, then `+"`%s`"+` with the question for the owner and your recommendation. Do not fix it.
+- It fails: reopen the issue (`+"`gh issue reopen`"+`) and post a comment headed `+"`%s`"+`. Write `+"`%s:`"+` with what you saw against what was expected (the screen and the viewport). Then, for each failure, decide the fix by the owner's defaults and record it after `+"`%s`"+`. Then write `+"`%s`"+` as `+"`none`"+`, unless a fix touches this ground: %s. That one is the question for the owner, with your recommendation. A failed look goes back to a worker as rework. Do not fix it yourself in this session.
 - You could not do it (staging is down, the description is too vague to judge, the check needs an act the orders forbid): you are blocked. Missing data and a sign-in are not reasons to stop: make the data, and sign in as the orders say or with a user you make. Post a comment on the issue that starts with `+"`%s:`"+` and says, on that line, what stopped you and what the owner must do about it. Post nothing that says checked or failed. Then say so here and stop: the check is the owner's to clear, and the supervisor gives you your next item. A check you could not do has not passed.
-`, eyes.Ask, eyes.AnsweredBy, eyes.HandBack, eyes.FailedBy, decision.Ask, eyes.BlockedBy)
+`, eyes.Ask, eyes.AnsweredBy, eyes.HandBack, eyes.FailedBy, decision.Decided, decision.Ask, decision.Risky, eyes.BlockedBy)
 }
 
 // lookModel is the model a look runs on: the one its pull request's risk

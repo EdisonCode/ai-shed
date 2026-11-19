@@ -541,18 +541,21 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 	return asks
 }
 
-// Rework says why an issue that was handed back needs a worker again while
-// its pull request is still open: the owner answered after the hand-back with
-// something other than an acceptance, the pull request cannot merge as it
-// stands, or shed took it off a merge train for a failure. Empty when it
-// does not.
+// Rework says why an issue that was handed back needs a worker again. Its
+// open pull request needs a change (the owner answered with more than an
+// acceptance, it cannot merge, or shed took it off a merge train), or the
+// eye check of its merged work failed and the hand-back asks the owner
+// nothing. Empty when it does not.
 func Rework(issue Issue, signals []config.Signal) string {
 	handBack, pr := lastHandBack(issue, signals)
 	open, isOpen := issue.OpenPRs[pr]
-	if handBack < 0 || !isOpen {
-		return ""
-	}
 	var reasons []string
+	if failedLook(issue, signals) {
+		reasons = append(reasons, "the eye check failed: fix what it found (see the Eyes failed hand-back), then hand back again")
+	}
+	if handBack < 0 || !isOpen {
+		return strings.Join(reasons, "; ")
+	}
 	for _, s := range signals {
 		if !s.SendsBack || s.AnsweredBy == "" {
 			continue
@@ -730,7 +733,7 @@ func Finished(issue Issue, signals []config.Signal) int {
 		return 0
 	}
 	index, pr := lastHandBack(issue, signals)
-	if index < 0 || pr == 0 || !issue.MergedPRs[pr] || len(Remaining(issue, signals)) > 0 {
+	if index < 0 || pr == 0 || !issue.MergedPRs[pr] || len(Remaining(issue, signals)) > 0 || failedLook(issue, signals) {
 		return 0
 	}
 	if _, open := issue.OpenPRs[pr]; open {
@@ -742,6 +745,44 @@ func Finished(issue Issue, signals []config.Signal) int {
 		}
 	}
 	return pr
+}
+
+// failedLook reports whether the last hand-back of the issue reports a failed
+// eye check and leaves no decision open. The worker that failed the look
+// decided the fix by the owner's defaults, so a worker takes the issue back;
+// a decision still open (the risky case) waits on the owner as before. A
+// later hand-back means a worker already answered the failure.
+func failedLook(issue Issue, signals []config.Signal) bool {
+	failedAt := -1
+	for _, s := range signals {
+		if s.Name != config.EyesSignal {
+			continue
+		}
+		for i, c := range issue.Comments {
+			if failedIn(strings.ToLower(c.Body), s) && isHandBack(c.Body, signals) {
+				failedAt = i
+			}
+		}
+	}
+	if failedAt < 0 {
+		return false
+	}
+	for _, c := range issue.Comments[failedAt+1:] {
+		if isHandBack(c.Body, signals) {
+			return false
+		}
+	}
+	if state, _, _, _ := EyeCheck(issue, signals); state != EyesFailed {
+		return false
+	}
+	for _, s := range signals {
+		if s.Name == config.DecisionSignal {
+			if open, _, _, _ := signalState(issue, s); open {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // isHandBack reports whether a comment is a worker's hand-back. With no
