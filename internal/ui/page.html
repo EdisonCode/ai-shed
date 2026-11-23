@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shed</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --text: #d7dbe3; --dim: #8a93a6;
+    --ok: #4cc38a; --warn: #e5b454; --bad: #ef6b6b; --accent: #7aa2f7;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  header { position: sticky; top: 0; z-index: 2; display: flex; gap: 16px; align-items: center; padding: 10px 20px; background: #12151b; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 16px; letter-spacing: .5px; }
+  .pill { padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); font-size: 12px; }
+  .pill.bad { color: #fff; background: var(--bad); border-color: var(--bad); }
+  .pill.ok { color: var(--ok); border-color: #2a5a44; }
+  .pill.warn { color: var(--warn); border-color: #6a5427; }
+  .spacer { flex: 1; }
+  main { padding: 16px 20px 40px; display: grid; gap: 16px; }
+  section.attn { background: #1d1416; border: 1px solid #4a2427; border-radius: 8px; padding: 10px 14px; }
+  section.attn h2 { margin: 0 0 6px; font-size: 13px; color: var(--bad); text-transform: uppercase; letter-spacing: .6px; }
+  section.attn li { margin: 2px 0; }
+  .machines { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(560px, 100%), 1fr)); }
+  .machine { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .machine > .head { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .machine > .head h2 { margin: 0; font-size: 15px; }
+  .machine .meta { color: var(--dim); font-size: 12px; }
+  .machine .body { padding: 8px 14px 12px; overflow-x: auto; }
+  .machine h3 { margin: 10px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--dim); }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid #1f232c; vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: #1c2029; }
+  .reason { color: var(--dim); }
+  .chip { display: inline-block; padding: 0 6px; margin: 0 4px 4px 0; border-radius: 4px; font-size: 12px; border: 1px solid var(--line); }
+  .chip.fail { color: var(--bad); border-color: #5a2a2d; }
+  .v-on_track, .v-done, .v-started { color: var(--ok); }
+  .v-nudge, .v-held, .v-limited, .v-unsent { color: var(--warn); }
+  .v-stuck, .v-needs_owner, .v-error { color: var(--bad); }
+  .unreachable { color: var(--bad); padding: 12px 14px; }
+  a { color: var(--accent); text-decoration: none; }
+  aside { position: fixed; top: 0; right: 0; bottom: 0; width: min(900px, 100%); background: #0b0d11; border-left: 1px solid var(--line); display: none; flex-direction: column; z-index: 3; }
+  aside.open { display: flex; }
+  aside .bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  aside pre { flex: 1; margin: 0; padding: 12px 14px; overflow: auto; white-space: pre-wrap; }
+  aside .log { max-height: 35%; overflow: auto; border-top: 1px solid var(--line); padding: 8px 14px; font-size: 12px; }
+  button { background: #222733; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  .empty { color: var(--dim); padding: 4px 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>shed</h1>
+  <span id="needs" class="pill">…</span>
+  <span id="conn" class="pill">connecting</span>
+  <span class="spacer"></span>
+  <span id="when" class="meta"></span>
+</header>
+<main>
+  <section id="attn" class="attn" hidden><h2>Needs you</h2><ul id="attn-list"></ul></section>
+  <div id="machines" class="machines"><div class="empty">Reading the fleet…</div></div>
+</main>
+<aside id="drawer">
+  <div class="bar"><strong id="drawer-title"></strong><span id="drawer-note" class="meta"></span><span class="spacer"></span><button id="drawer-close">Close</button></div>
+  <pre id="screen"></pre>
+  <div class="log" id="log"></div>
+</aside>
+<script>
+"use strict";
+// Every value from the fleet is set as text, never as markup: issue titles
+// and screens are written by others.
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v;
+    else if (k === "onclick") e.addEventListener("click", v);
+    else if (k === "href") e.href = /^https:\/\//.test(v) ? v : "#";
+    else e.setAttribute(k, v);
+  }
+  for (const k of kids) if (k != null) e.append(k instanceof Node ? k : String(k));
+  return e;
+}
+function ago(t, now) {
+  const s = Math.max(0, (now - new Date(t)) / 1000);
+  if (s < 90) return Math.round(s) + "s";
+  if (s < 5400) return Math.round(s / 60) + "m";
+  if (s < 172800) return Math.round(s / 3600) + "h";
+  return Math.round(s / 86400) + "d";
+}
+
+let last = null;
+function render(snap) {
+  last = snap;
+  const now = new Date();
+  const needs = document.getElementById("needs");
+  needs.textContent = snap.needs_you ? snap.needs_you + " need you" : "on track";
+  needs.className = "pill " + (snap.needs_you ? "bad" : "ok");
+  document.getElementById("when").textContent = "read " + ago(snap.at, now) + " ago, took " + snap.took + ", every " + snap.every;
+
+  const attn = [];
+  for (const m of snap.report.machines || []) for (const a of m.attention || []) attn.push(m.name + ": " + a);
+  for (const a of snap.repo_attention || []) attn.push(a);
+  const list = document.getElementById("attn-list");
+  list.replaceChildren(...attn.map(a => el("li", {}, a)));
+  document.getElementById("attn").hidden = attn.length === 0;
+
+  const box = document.getElementById("machines");
+  box.replaceChildren(...(snap.report.machines || []).map(m => machine(m, now)));
+}
+
+function machine(m, now) {
+  const p = m.probe;
+  const head = el("div", { class: "head" }, el("h2", {}, m.name), el("span", { class: "meta" }, m.host));
+  if (p) {
+    const load = p.cores ? (p.load1 / p.cores).toFixed(2) + "/core" : p.load1;
+    head.append(el("span", { class: "meta" }, "load " + load + " · disk " + p.disk_used_pct + "%" + (p.account ? " · " + p.account : "")));
+  }
+  const card = el("div", { class: "machine" }, head);
+  if (m.error) {
+    card.append(el("div", { class: "unreachable" }, "Unreachable: " + m.error));
+    return card;
+  }
+  const body = el("div", { class: "body" });
+  const failed = (p && p.checks || []).filter(c => !c.ok);
+  if (failed.length) body.append(...failed.map(c => el("span", { class: "chip fail", title: c.detail || "" }, "✗ " + c.name)));
+
+  body.append(el("h3", {}, "Workers"));
+  const workers = m.workers || [];
+  if (!workers.length) body.append(el("div", { class: "empty" }, "No supervised workers"));
+  else body.append(el("table", {},
+    el("tr", {}, el("th", {}, "worker"), el("th", {}, "issue"), el("th", {}, "tool"), el("th", {}, "verdict"), el("th", {}, ""), el("th", {}, "why")),
+    ...workers.map(w => {
+      const c = w.last || {};
+      const issue = w.task ? "task " + w.task : w.issue ? "#" + w.issue : "—";
+      const reason = (w.messages ? "[" + w.messages + " msg/h] " : "") + (c.reason || "no check-in yet");
+      return el("tr", { class: "click", onclick: () => openWorker(m.name, w.name) },
+        el("td", {}, w.name), el("td", { class: "mono" }, issue), el("td", {}, w.state || "—"),
+        el("td", { class: "v-" + (c.verdict || "") }, c.verdict || "—"),
+        el("td", { class: "meta" }, c.time ? ago(c.time, now) : ""),
+        el("td", { class: "reason" }, reason));
+    })));
+
+  const issues = (m.issues || []).filter(i => i.state !== "done");
+  body.append(el("h3", {}, "Issues"));
+  if (!issues.length) body.append(el("div", { class: "empty" }, "None open in its queues"));
+  else body.append(el("table", {},
+    ...issues.map(i => el("tr", {},
+      el("td", { class: "mono" }, el("a", { href: i.url, target: "_blank", rel: "noopener" }, i.repo + "#" + i.number)),
+      el("td", {}, i.state + (i.worker ? " · " + i.worker : "")),
+      el("td", {}, i.title, i.held ? el("div", { class: "reason" }, "held: " + i.held) : null)))));
+  card.append(body);
+  return card;
+}
+
+// The drawer shows one worker's screen and its machine's latest check-ins
+// while it is open, read again every few seconds.
+let timer = null;
+function openWorker(machine, worker) {
+  document.getElementById("drawer").classList.add("open");
+  document.getElementById("drawer-title").textContent = machine + " / " + worker;
+  const q = "machine=" + encodeURIComponent(machine) + "&worker=" + encodeURIComponent(worker);
+  const load = async () => {
+    const note = document.getElementById("drawer-note");
+    try {
+      const [scr, log] = await Promise.all([fetch("/api/screen?" + q), fetch("/api/log?machine=" + encodeURIComponent(machine))]);
+      document.getElementById("screen").textContent = await scr.text();
+      if (log.ok) {
+        const rows = (await log.json()).filter(c => c.worker === worker).slice(-15).reverse();
+        document.getElementById("log").replaceChildren(el("h3", {}, "Check-ins"),
+          ...rows.map(c => el("div", {}, el("span", { class: "meta" }, ago(c.time, new Date()) + " "),
+            el("span", { class: "v-" + c.verdict }, c.verdict), " ", c.kind, " — ", el("span", { class: "reason" }, c.reason || ""))));
+      }
+      note.textContent = (scr.ok ? "live · " : "could not read the screen · ") + new Date().toLocaleTimeString();
+    } catch (e) {
+      note.textContent = "could not read: " + e;
+    }
+  };
+  clearInterval(timer);
+  load();
+  timer = setInterval(load, 5000);
+}
+document.getElementById("drawer-close").addEventListener("click", () => {
+  clearInterval(timer);
+  document.getElementById("drawer").classList.remove("open");
+});
+
+function connect() {
+  const conn = document.getElementById("conn");
+  const es = new EventSource("/api/events");
+  es.onopen = () => { conn.textContent = "live"; conn.className = "pill ok"; };
+  es.onmessage = e => render(JSON.parse(e.data));
+  es.onerror = () => { conn.textContent = "reconnecting"; conn.className = "pill warn"; };
+}
+// A report older than two rounds is said to be late.
+setInterval(() => {
+  if (!last) return;
+  const every = parseFloat(last.every) * (/h/.test(last.every) ? 3600 : /m/.test(last.every) && !/ms/.test(last.every) ? 60 : 1);
+  const late = (new Date() - new Date(last.at)) / 1000 > 2 * every + 60;
+  document.getElementById("when").style.color = late ? "var(--warn)" : "";
+}, 10000);
+connect();
+</script>
+</body>
+</html>

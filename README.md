@@ -33,6 +33,18 @@ Waiting on you: 1 return to a worker (oldest 2h), 1 to read (oldest 5h).
 
 The exit code is 1 when anything needs you, so a script or a notifier can act on it.
 
+`shed ui` shows the same report live in the browser, at
+`http://127.0.0.1:7777`. It reads the fleet every 30 seconds (`-every`) and
+pushes each new report to the page. Click a worker to watch its screen and
+its latest check-ins, read again every few seconds over ssh while the panel
+is open. The page is read-only: answering, merging and queueing stay with
+`shed` commands. It runs on your own machine with your `ssh` and `gh`, like
+`shed status`, so nothing on the fleet depends on it: close the laptop and the
+agents go on. A machine whose `host:` is a Tailscale name is reached over the
+tailnet with nothing more to set up. The page listens on loopback; give
+`-listen` another address only on purpose, since whoever reaches it sees the
+fleet, its issues and its workers' screens.
+
 What waits on you is in the order to answer it, oldest first inside each group:
 
 - **returns**: answering hands the issue back to a worker, ahead of new

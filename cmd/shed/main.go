@@ -16,6 +16,7 @@ const usage = `shed watches the worker machines in your shed.
 
 Usage:
   shed status [-json] [-watch 1m]   report every machine; exit 1 when something needs you
+  shed ui [-listen 127.0.0.1:7777] [-every 30s]   the same report, live in the browser; read-only
   shed digest [-since 24h] [-json]  what merged, how the eye checks went, what waits on you
   shed validate                     check the fleet file
   shed deploy [-install-agent] [machine...]
@@ -73,6 +74,8 @@ func main() {
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
 	case "status":
 		code = cmdStatus(args)
+	case "ui":
+		code = cmdUI(args)
 	case "agent":
 		code = cmdAgent(args)
 	case "deploy":
