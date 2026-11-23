@@ -114,6 +114,11 @@ type QueueItem struct {
 	unclaim string
 	// rank is the issue's place in its source's priority order.
 	rank int
+	// Elsewhere says which issue in flight on another machine touches the
+	// same code, and which peers there the worker may tell what it changes.
+	// The item is not held: each machine builds in its own checkout, and the
+	// second pull request rebases after the first merges.
+	Elsewhere string
 	// overlaps is set on rework that touches the same code as an issue
 	// another worker has in hand: it is not held, but waits on that one.
 	overlaps string
@@ -294,6 +299,9 @@ func Prompt(in ReviewInput) string {
 		}
 		if q.StackOn != "" {
 			fmt.Fprintf(&b, " [stack on: %s; build this on a new branch from it]", q.StackOn)
+		}
+		if q.Elsewhere != "" {
+			fmt.Fprintf(&b, " [elsewhere: %s]", q.Elsewhere)
 		}
 		if q.Park != "" {
 			fmt.Fprintf(&b, " [park: %s; its pull request is opened as a draft and left one]", q.Park)

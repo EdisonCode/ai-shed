@@ -389,6 +389,9 @@ func unaskedOrder(inHand int, waits bool, next QueueItem) string {
 	case next.Ruled:
 		order += unaskedRuled
 	}
+	if next.Elsewhere != "" {
+		order += " It " + next.Elsewhere + "."
+	}
 	return order
 }
 
@@ -2138,7 +2141,7 @@ func fingerprint(queue []QueueItem) string {
 	h := sha256.New()
 	for _, q := range queue {
 		if q.Workable() {
-			fmt.Fprintf(h, "%s#%d:%s:%s:%t:%s:%s;", q.Repo, q.Number, q.Rework, q.Look, q.Ruled, q.Stack, q.StackOn)
+			fmt.Fprintf(h, "%s#%d:%s:%s:%t:%s:%s:%s;", q.Repo, q.Number, q.Rework, q.Look, q.Ruled, q.Stack, q.StackOn, q.Elsewhere)
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]

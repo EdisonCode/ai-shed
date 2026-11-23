@@ -119,10 +119,18 @@ func TestAReleasedIssueIsTakenFromTheFleetPoolAndTheWorkerIsToldItWasReleased(t 
 	}
 }
 
-func TestAnIssueThatOverlapsWorkInFlightOnAnotherMachineIsHeld(t *testing.T) {
+// overlapElsewhere gives the fixture #11, which shares an area with #20 in
+// flight on mini, and #12, whose overlap mini already handed back.
+func overlapElsewhere(t *testing.T) *fixture {
 	f := started(t, config.Supervisor{OverlapLabels: "area:"}, done)
 	f.Account = &config.Account{Name: "max-1", Machines: []string{"box"}, Overflow: "fleet:ready"}
 	f.QueueLabels = []string{"machine:box", "machine:mini"}
+	f.QueuesOf = func(repo string, labels []string) []string {
+		if slices.Contains(labels, "machine:mini") {
+			return []string{"mini"}
+		}
+		return []string{"box"}
+	}
 	elsewhere := labeled(20, "machine:mini", "area:billing")
 	elsewhere.Comments = []backlog.Comment{{Body: "## Plan\n**Paths:** internal/billing/"}}
 	handedBack := labeled(21, "machine:mini", "area:auth")
@@ -131,13 +139,42 @@ func TestAnIssueThatOverlapsWorkInFlightOnAnotherMachineIsHeld(t *testing.T) {
 		"machine:box": {labeled(11, "machine:box", "area:billing"), labeled(12, "machine:box", "area:auth")},
 		"":            {elsewhere, handedBack}, // the search for other machines' labels
 	}
+	return f
+}
+
+func TestAnIssueThatOverlapsWorkInFlightOnAnotherMachineIsNotHeldButNamed(t *testing.T) {
+	f := overlapElsewhere(t)
 	f.tick(2 * time.Minute)
 	prompt := f.reviewer.prompts[0]
-	if !strings.Contains(prompt, "org/app#11 Issue [held: overlaps #20, in flight on another machine: both are area:billing]") {
+	if strings.Contains(prompt, "org/app#11 Issue [held:") {
+		t.Fatalf("#11 is held by work on another machine, which builds in its own checkout:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "org/app#11 Issue [elsewhere: overlaps #20, in flight on mini: both are area:billing; rebase on the default branch after #20's pull request merges]") {
 		t.Fatalf("prompt:\n%s", prompt)
 	}
-	if strings.Contains(prompt, "org/app#12 Issue [held:") {
-		t.Fatalf("#12 is held by work another machine already handed back:\n%s", prompt)
+	if strings.Contains(prompt, "org/app#12 Issue [elsewhere:") {
+		t.Fatalf("#12 is named beside work another machine already handed back:\n%s", prompt)
+	}
+}
+
+func TestAWorkerIsToldWhichPeersToTellAboutWorkThatOverlapsElsewhere(t *testing.T) {
+	f := overlapElsewhere(t)
+	f.Machine.Workers[0].Session = "box-app"
+	f.Machine.Workers[0].PeerList = []config.Peer{
+		{Machine: "mini", Worker: "web", Session: "mini-web", Remote: true},
+		{Machine: "other", Worker: "x", Session: "other-x", Remote: true},
+	}
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	if !strings.Contains(prompt, "tell your peers there (`mini-web`) what you change that #20 builds on") || strings.Contains(prompt, "other-x") {
+		t.Fatalf("prompt:\n%s", prompt)
+	}
+}
+
+func TestTheHandOverWithoutTheReviewerCarriesTheNoteAboutWorkElsewhere(t *testing.T) {
+	order := unaskedOrder(0, false, QueueItem{Number: 11, Elsewhere: "overlaps #20, in flight on mini: both are area:billing"})
+	if order != "Start #11 now. It overlaps #20, in flight on mini: both are area:billing." {
+		t.Fatalf("order = %q", order)
 	}
 }
 

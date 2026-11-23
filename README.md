@@ -246,7 +246,8 @@ The supervisor holds both kinds back, and hands out what can go ahead.
   shows the issue as `held` with the same reason.
 - Overlap is checked against the issues held by the workers of the same
   machine, as far as that machine's queues list them. Work in flight on
-  another machine is not seen.
+  another machine does not hold an issue: it is named instead (see
+  overlap across machines below).
 
 ### A queue that cannot run dry
 
@@ -1923,8 +1924,12 @@ machines:
   the same window backfill has.
 - **Overlap across machines.** With `overflow` set, an issue that carries
   another machine's queue label, has a `**Paths:**` plan comment and no
-  hand-back after it is work in flight there, and holds an overlapping
-  issue here.
+  hand-back after it is work in flight there. An overlapping issue here is
+  not held, since each machine builds in its own checkout. The worker is
+  told: the reviewer sees `[elsewhere: overlaps #20, in flight on mac-mini:
+  both are area:billing; rebase on the default branch after #20's pull
+  request merges]`. When the worker has peers on that machine, the note
+  names them, so it can tell them what it changes.
 - `shed status` lists the released issues no machine has taken yet, and
   `shed digest` counts the releases on the issues it closed. The weekly
   limit line stays, so switching the account still works when nothing takes

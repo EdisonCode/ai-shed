@@ -15,7 +15,9 @@ import (
 // that depends on one still open, an issue of a repository at its limit of
 // open pull requests (or, where the limit counts ready ones, marks it to be
 // parked as a draft), and an issue that touches the same code as one
-// another worker of the machine has in hand. Two branches on the same
+// another worker of the machine has in hand. An issue that touches the same
+// code as one in flight on another machine is not held: that machine builds
+// in its own checkout. The worker is told about it instead. Two branches on the same
 // code go stale on each other's merge, and cost a rebase and a full run of
 // the checks. With stacking, an issue whose one open dependency has a ready
 // pull request is built on that pull request's branch instead.
@@ -82,14 +84,14 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 			}
 		}
 		for _, other := range elsewhere {
-			if item.Blocked != "" {
+			if item.Blocked != "" || item.Elsewhere != "" {
 				break
 			}
 			if other.Repo != issue.Repo || other.Number == issue.Number {
 				continue
 			}
 			if why := backlog.Overlap(issue, other, s.Settings.OverlapLabels); why != "" {
-				item.Blocked = fmt.Sprintf("overlaps #%d, in flight on another machine: %s", other.Number, why)
+				item.Elsewhere = s.elsewhereNote(w, other, why)
 			}
 		}
 	}
@@ -169,4 +171,31 @@ func (s *Supervisor) inFlightElsewhere(ctx context.Context, w config.Worker) []b
 		}
 	}
 	return out
+}
+
+// elsewhereNote says which issue in flight on another machine touches the
+// same code as an item, and which of the worker's peers there it may tell
+// what it changes.
+func (s *Supervisor) elsewhereNote(w config.Worker, other backlog.Issue, why string) string {
+	machine := ""
+	if s.QueuesOf != nil {
+		if machines := s.QueuesOf(other.Repo, other.LabelNames()); len(machines) > 0 {
+			machine = machines[0]
+		}
+	}
+	where := "on another machine"
+	if machine != "" {
+		where = "on " + machine
+	}
+	note := fmt.Sprintf("overlaps #%d, in flight %s: %s", other.Number, where, why)
+	var peers []string
+	for _, p := range w.PeerList {
+		if p.Remote && (machine == "" || p.Machine == machine) {
+			peers = append(peers, "`"+p.Session+"`")
+		}
+	}
+	if len(peers) > 0 {
+		note += fmt.Sprintf("; tell your peers there (%s) what you change that #%d builds on", strings.Join(peers, ", "), other.Number)
+	}
+	return note + fmt.Sprintf("; rebase on the default branch after #%d's pull request merges", other.Number)
 }
