@@ -627,6 +627,16 @@ type Worker struct {
 	// test user it signs in to staging with, so two workers on one machine
 	// do not share one account.
 	Env map[string]string `yaml:"env"`
+	// Peers are the workers this one may message with Claude Code's
+	// cross-session messaging: a worker of the same machine by its name, or
+	// one of another machine as machine/worker. Naming a peer makes it
+	// mutual.
+	Peers []string `yaml:"peers"`
+	// PeerList and Session are filled in when the fleet file is read. They
+	// are empty for a worker with no peers.
+	PeerList []Peer `yaml:"-"`
+	// Session is the name the worker's session answers to.
+	Session string `yaml:"-"`
 }
 
 var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -902,6 +912,9 @@ func Parse(data []byte) (*Config, error) {
 		if s.UnblockedBy == "" {
 			cfg.Signals[i].UnblockedBy = DefaultUnblockedBy
 		}
+	}
+	if err := cfg.resolvePeers(); err != nil {
+		return nil, err
 	}
 	if err := cfg.validateEyeChecks(); err != nil {
 		return nil, err

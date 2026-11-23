@@ -2234,6 +2234,7 @@ func (s *Supervisor) briefText(w config.Worker) string {
 	}
 	s.eyeCheckBrief(&b, w)
 	s.verifyBrief(&b, w)
+	peersBrief(&b, w)
 	fmt.Fprintf(&b, `
 ## One-off tasks
 

@@ -9,7 +9,7 @@ import (
 
 func TestAnUnattendedClaudeWorkerStartsWithBackgroundRequestsOff(t *testing.T) {
 	got := sessionCommand(config.Worker{Command: "claude --permission-mode auto"})
-	want := "claude --permission-mode auto --settings '" + quietSettings + "'"
+	want := "claude --permission-mode auto --settings '" + quietSettings("refuse") + "'"
 	if got != want {
 		t.Fatalf("command = %q, want %q", got, want)
 	}
