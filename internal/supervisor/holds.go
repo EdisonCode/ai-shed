@@ -133,9 +133,12 @@ func (s *Supervisor) stackOnDep(item *QueueItem, deps []backlog.Dep, byNumber ma
 // building, as far as the issues say: they carry another machine's queue
 // label, and their plan is written and not handed back. Only a fleet that
 // shares work across machines (an account with overflow) asks: one search
-// per repository.
+// per repository. A worker with peers on other machines asks too: its
+// roster names what they build.
 func (s *Supervisor) inFlightElsewhere(ctx context.Context, w config.Worker) []backlog.Issue {
-	if s.Account == nil || s.Account.Overflow == "" {
+	sharesWork := s.Account != nil && s.Account.Overflow != ""
+	remotePeers := slices.ContainsFunc(w.PeerList, func(p config.Peer) bool { return p.Remote })
+	if !sharesWork && !remotePeers {
 		return nil
 	}
 	own := map[string]bool{}
@@ -144,7 +147,7 @@ func (s *Supervisor) inFlightElsewhere(ctx context.Context, w config.Worker) []b
 	}
 	var labels []string
 	for _, l := range s.QueueLabels {
-		if !own[l] && l != s.Account.Overflow {
+		if !own[l] && (s.Account == nil || l != s.Account.Overflow) {
 			labels = append(labels, fmt.Sprintf("%q", l))
 		}
 	}
@@ -188,6 +191,9 @@ func (s *Supervisor) elsewhereNote(w config.Worker, other backlog.Issue, why str
 		where = "on " + machine
 	}
 	note := fmt.Sprintf("overlaps #%d, in flight %s: %s", other.Number, where, why)
+	if signer := backlog.PlanSession(other); signer != "" && slices.ContainsFunc(w.PeerList, func(p config.Peer) bool { return p.Session == signer }) {
+		return note + fmt.Sprintf("; #%d is built by `%s`: tell it what you change that #%d builds on; rebase on the default branch after #%d's pull request merges", other.Number, signer, other.Number, other.Number)
+	}
 	var peers []string
 	for _, p := range w.PeerList {
 		if p.Remote && (machine == "" || p.Machine == machine) {
