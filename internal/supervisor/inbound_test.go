@@ -72,3 +72,80 @@ func TestAWorkerThatTalksWithTheOwnerHasNoInboundWarning(t *testing.T) {
 		t.Fatalf("warnings = %q", got)
 	}
 }
+
+func peered() config.Worker {
+	return config.Worker{
+		Name:     "app",
+		Command:  "claude --permission-mode auto",
+		Session:  "box-app",
+		PeerList: []config.Peer{{Machine: "box", Worker: "api", Session: "box-api"}},
+	}
+}
+
+func TestAWorkerWithPeersAcceptsTheirMessagesAndIsNamed(t *testing.T) {
+	got := sessionCommand(peered())
+	if !strings.Contains(got, `"crossSessionInbound":"accept"`) || !strings.Contains(got, "--name 'box-app'") {
+		t.Fatalf("command = %q", got)
+	}
+}
+
+func TestAWorkerWithPeersAndItsOwnSettingsIsStillNamed(t *testing.T) {
+	w := peered()
+	w.Command = "claude --settings ~/worker.json"
+	if got := sessionCommand(w); got != "claude --settings ~/worker.json --name 'box-app'" {
+		t.Fatalf("command = %q", got)
+	}
+}
+
+func TestOwnSettingsThatRefuseAreWarnedAboutWhenTheWorkerHasPeers(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "worker.json"), []byte(`{"crossSessionInbound":"refuse"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := peered()
+	w.Command = "claude --settings ~/worker.json"
+	got := InboundWarnings(home, w)
+	if len(got) != 1 || !strings.Contains(got[0], `refuses messages, but the worker has peers`) {
+		t.Fatalf("warnings = %q", got)
+	}
+}
+
+func TestAProjectFileThatRefusesIsWarnedAboutWhenTheWorkerHasPeers(t *testing.T) {
+	dir := t.TempDir()
+	writeSettings(t, dir, "settings.json", `{"crossSessionInbound":"refuse"}`)
+	w := peered()
+	w.Dir = dir
+	got := InboundWarnings(t.TempDir(), w)
+	if len(got) != 1 || !strings.Contains(got[0], "settings.json refuses messages from other sessions") {
+		t.Fatalf("warnings = %q", got)
+	}
+}
+
+func TestABareWorkerWithPeersCannotReceive(t *testing.T) {
+	w := peered()
+	w.Command = "claude --bare"
+	got := InboundWarnings(t.TempDir(), w)
+	if len(got) != 1 || !strings.Contains(got[0], "--bare") {
+		t.Fatalf("warnings = %q", got)
+	}
+}
+
+func TestTheBriefNamesEachPeer(t *testing.T) {
+	var b strings.Builder
+	w := peered()
+	w.PeerList = append(w.PeerList, config.Peer{Machine: "mini", Worker: "web", Session: "mini-web", Remote: true})
+	peersBrief(&b, w)
+	for _, want := range []string{"## Peers", "`box-app`", "`box-api`", "`mini-web` (on mini)", "Never ask a peer to make an edit"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("brief lacks %q:\n%s", want, b.String())
+		}
+	}
+}
+
+func TestAWorkerWithoutPeersGetsNoPeersSection(t *testing.T) {
+	var b strings.Builder
+	peersBrief(&b, config.Worker{Name: "app"})
+	if b.Len() != 0 {
+		t.Fatalf("brief = %q", b.String())
+	}
+}

@@ -1148,6 +1148,37 @@ you (`ask`), and a command that passes its own `--settings`, are started as
 written; `shed preflight` warns when those settings do not set
 `crossSessionInbound`, or set it to `hold`.
 
+### Peers
+
+Optional. Workers can tell each other what they changed, what landed, or the
+answer one of them is blocked on, with Claude Code's
+[cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging).
+A message is plain text: none of the sender's conversation or files go with
+it. Name the workers a worker may message:
+
+```yaml
+    workers:
+      - name: app
+        peers: [api, mac-mini/web]   # a worker here, or machine/worker
+```
+
+Naming a peer makes it mutual. A worker with peers starts with the session
+name `<machine>-<worker>`, by which they message it, accepts their messages
+(`crossSessionInbound: accept`), and its brief lists them with the rules: a
+message informs and never asks a peer to make an edit, and work or a decision
+goes on the issue. A worker without peers refuses messages.
+
+Claude Code has no list of allowed senders: a worker that accepts messages
+takes them from every session of the same user. The brief tells other
+workers to message only their peers.
+
+Messages between machines go through Remote Control, so a peer on another
+machine needs `--remote-control` in both workers' commands, and a claude.ai
+sign-in (`shed login`) on both machines. `shed validate` says when one is
+missing. `shed preflight` warns when a worker with peers runs with `--bare`
+(no inbox) or its repository's own `.claude/settings.json` refuses messages,
+which beats every other setting.
+
 ### A model per issue
 
 Optional. Map issue labels to models, and the agent switches the worker's
