@@ -1140,8 +1140,13 @@ while it is not set.
 A worker whose command is `claude` is started with `--settings` that turn off
 the requests Claude Code makes on its own while nobody reads the session:
 idle compaction (the supervisor clears a cold context instead), prompt
-suggestions and the session recap. A worker that talks with you (`ask`), and a
-command that passes its own `--settings`, are started as written.
+suggestions and the session recap. The same settings refuse messages from your
+other Claude Code sessions (`crossSessionInbound: refuse`): without a value, a
+session that bypasses permission prompts holds each such message in an
+approval dialog, and nobody is there to answer it. A worker that talks with
+you (`ask`), and a command that passes its own `--settings`, are started as
+written; `shed preflight` warns when those settings do not set
+`crossSessionInbound`, or set it to `hold`.
 
 ### A model per issue
 

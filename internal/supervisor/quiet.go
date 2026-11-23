@@ -11,7 +11,11 @@ import (
 // own while nobody reads it: compacting a conversation left idle, which the
 // supervisor clears instead once its cache is cold; suggesting the next
 // prompt after each answer; and writing a recap for a person coming back.
-const quietSettings = `{"idleCompaction":false,"promptSuggestionEnabled":false,"awaySummaryEnabled":false}`
+// They also refuse messages from the owner's other Claude Code sessions.
+// Without a value, a session that bypasses permission prompts holds each
+// message in an approval dialog that nobody answers, and the worker waits
+// on it.
+const quietSettings = `{"idleCompaction":false,"promptSuggestionEnabled":false,"awaySummaryEnabled":false,"crossSessionInbound":"refuse"}`
 
 // sessionCommand is the command that starts the worker's session. An
 // unattended Claude Code worker gets quietSettings. A worker that talks with
