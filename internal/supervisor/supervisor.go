@@ -133,6 +133,7 @@ const (
 	KindTask     = "task"     // it was handed a one-off task from the owner
 	KindRetry    = "retry"    // its tool had stopped on an error and it was told to continue
 	KindWait     = "wait"     // it waited on its own work for too long
+	KindMessages = "messages" // it sent another session too many messages
 	KindError    = "error"
 )
 
@@ -276,6 +277,10 @@ type LookReader interface {
 // costs a working worker nothing: no extra review and no repeated message.
 type workerState struct {
 	briefChecked bool
+	// messagesTold is when the worker was told to stop messaging a session,
+	// by session, and messagesStuck the sessions it went on messaging after.
+	messagesTold  map[string]time.Time
+	messagesStuck map[string]bool
 	// contextSince is when the worker's context was last emptied: calls
 	// before it say nothing of the context it carries now.
 	contextSince time.Time
@@ -637,6 +642,11 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 	if st.waiting {
 		st.waiting = false
 		s.record(st, runlog.Checkin{Time: now, Worker: w.Name, Kind: KindHook, Verdict: runlog.VerdictOnTrack, Reason: "its tool no longer waits for a person: the screen moved on"})
+	}
+
+	// Two sessions that answer each other can go on without end.
+	if acted, err := s.messageLoop(w, st, now); acted || err != nil {
+		return err
 	}
 
 	if st.held != nil {

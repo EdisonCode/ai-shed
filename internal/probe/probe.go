@@ -39,6 +39,9 @@ type Result struct {
 	Recycle []string `json:"-"`
 	// Marks is what each worker's tool last reported about itself, by worker.
 	Marks map[string]runlog.Mark `json:"-"`
+	// Messages are the latest messages each worker's session sent to other
+	// sessions, by worker, oldest first.
+	Messages map[string][]runlog.Message `json:"-"`
 	// Queues are each worker's queue as the agent last computed it, with why
 	// it holds what it does not hand over, by worker.
 	Queues map[string]runlog.QueueView `json:"queues,omitempty"`
@@ -122,6 +125,7 @@ for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(b
 [ -f "$s/` + runlog.PauseFile + `" ] && echo "@@pause $(cat "$s/` + runlog.PauseFile + `")"
 for f in "$s/` + runlog.BumpsDir + `"/*; do [ -f "$f" ] && echo "@@bump $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
+for f in "$s/` + runlog.MessagesDir + `"/*; do [ -f "$f" ] && tail -n 100 "$f" | sed "s/^/@@msg $(basename "$f") /"; done
 for f in "$s/` + runlog.QueuesDir + `"/*; do [ -f "$f" ] && echo "@@queue $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.ContextDir + `"/*; do [ -f "$f" ] && echo "@@context $(basename "$f") $(cat "$f")"; done
 ` + usageScript + `echo "@@end"
@@ -270,6 +274,15 @@ func Parse(out string, checks []config.Check) (Result, error) {
 					res.Marks = map[string]runlog.Mark{}
 				}
 				res.Marks[worker] = m
+			}
+		case "@@msg":
+			// A line the hook was still writing is skipped, not fatal.
+			worker, line, _ := strings.Cut(rest, " ")
+			if m, err := runlog.ParseMessage(line); err == nil {
+				if res.Messages == nil {
+					res.Messages = map[string][]runlog.Message{}
+				}
+				res.Messages[worker] = append(res.Messages[worker], m)
 			}
 		case "@@queue":
 			// A queue the agent was still writing has another name.

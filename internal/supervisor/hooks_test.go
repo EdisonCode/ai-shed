@@ -79,3 +79,16 @@ func TestClassifyShowsWarningsBesideAReadyWorker(t *testing.T) {
 		t.Fatalf("ready = %v, line = %q", ready, line)
 	}
 }
+
+func TestAWorkerWithPeersAndNoMessageHookIsWarned(t *testing.T) {
+	dir := t.TempDir()
+	w := config.Worker{Name: "app", Dir: dir, PeerList: []config.Peer{{Session: "box-api"}}}
+	got := HookWarnings(t.TempDir(), w)
+	if len(got) != 1 || !strings.Contains(got[0], "shed mark message") {
+		t.Fatalf("warnings = %q", got)
+	}
+	writeSettings(t, dir, "settings.json", `{"hooks": {"PostToolUse": [{"matcher": "SendMessage", "hooks": [{"type": "command", "command": "shed mark message"}]}]}}`)
+	if got := HookWarnings(t.TempDir(), w); len(got) != 0 {
+		t.Fatalf("warnings with the hook = %q", got)
+	}
+}

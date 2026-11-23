@@ -13,7 +13,8 @@ import (
 )
 
 // HookWarnings reads the Claude Code settings a worker's session loads and
-// names a hook shed relies on that is missing. With the state hooks and no
+// names a hook shed relies on that is missing. A worker with peers needs the
+// hook that counts its messages. With the state hooks and no
 // SubagentStop hook, the cost comment counts the worker's own session and
 // leaves out every sub-agent, and nothing else says so. Another tool's
 // settings are not read.
@@ -27,7 +28,7 @@ func HookWarnings(home string, w config.Worker) []string {
 		dir = filepath.Join(home, rest)
 	}
 	var warnings []string
-	state, usage := false, false
+	state, usage, message := false, false, false
 	for _, path := range []string{
 		filepath.Join(home, ".claude", "settings.json"),
 		filepath.Join(dir, ".claude", "settings.json"),
@@ -43,6 +44,8 @@ func HookWarnings(home string, w config.Worker) []string {
 				switch {
 				case event == "SubagentStop" && strings.Contains(command, "shed mark usage"):
 					usage = true
+				case event == "PostToolUse" && strings.Contains(command, "shed mark message"):
+					message = true
 				case strings.Contains(command, "shed mark working"), strings.Contains(command, "shed mark idle"), strings.Contains(command, "shed mark waiting"):
 					state = true
 				}
@@ -51,6 +54,9 @@ func HookWarnings(home string, w config.Worker) []string {
 	}
 	if state && !usage {
 		warnings = append(warnings, "cost comments leave out sub-agents: add the SubagentStop hook that runs `shed mark usage` (see the README)")
+	}
+	if len(w.PeerList) > 0 && !message {
+		warnings = append(warnings, "the worker has peers, but no PostToolUse hook on SendMessage runs `shed mark message`: its messages are not counted, so a message loop goes unseen (see the README)")
 	}
 	return warnings
 }

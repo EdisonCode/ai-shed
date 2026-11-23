@@ -185,6 +185,9 @@ type WorkerStatus struct {
 	RecyclePending bool `json:"recycle_pending,omitempty"`
 	// Last is the supervisor's latest check-in; nil before the first one.
 	Last *runlog.Checkin `json:"last,omitempty"`
+	// Messages is how many messages its session sent to other sessions in
+	// the last hour, as its tool's hook recorded them.
+	Messages int `json:"messages,omitempty"`
 }
 
 type Collector struct {
@@ -709,6 +712,9 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 			if st.State == mark.State {
 				st.StateSince = mark.Time
 			}
+		}
+		for _, n := range runlog.CountSince(res.Messages[w.Name], res.Now.Add(-time.Hour)) {
+			st.Messages += n
 		}
 		if c, ok := latest[w.Name]; ok {
 			st.Last = &c

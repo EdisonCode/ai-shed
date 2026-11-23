@@ -23,8 +23,8 @@ const maxMarkDetail = 300
 // It never exits 2. To an agent tool, a hook that exits 2 blocks what the
 // hook is about, and a mark must never stop a worker.
 func cmdMark(args []string) int {
-	if len(args) == 0 || (args[0] != "usage" && !runlog.ValidMark(args[0])) {
-		fmt.Fprintf(os.Stderr, "usage: shed mark %s|%s|%s|usage [detail]\n", runlog.MarkWorking, runlog.MarkIdle, runlog.MarkWaiting)
+	if len(args) == 0 || (args[0] != "usage" && args[0] != "message" && !runlog.ValidMark(args[0])) {
+		fmt.Fprintf(os.Stderr, "usage: shed mark %s|%s|%s|usage|message [detail]\n", runlog.MarkWorking, runlog.MarkIdle, runlog.MarkWaiting)
 		return exitAttention
 	}
 	pane := os.Getenv("TMUX_PANE")
@@ -61,6 +61,17 @@ func cmdMark(args []string) int {
 		}
 	}
 	if args[0] == "usage" {
+		return exitOK
+	}
+	if args[0] == "message" {
+		// PostToolUse on SendMessage: what the session sent, for the
+		// supervisor's count. The message itself is not kept.
+		if hook.SentTo == "" {
+			return exitOK
+		}
+		if err := runlog.RecordMessage(state, worker, runlog.Message{Time: time.Now(), To: hook.SentTo, Chars: hook.SentChars}); err != nil {
+			return markFailed(err)
+		}
 		return exitOK
 	}
 	detail := strings.Join(args[1:], " ")

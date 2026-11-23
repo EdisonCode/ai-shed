@@ -1584,3 +1584,27 @@ func TestAnIssueInTwoMachinesQueuesIsToldOnceAndHeldOnTheLaterMachine(t *testing
 		t.Fatalf("later machine: attention %q, issue %+v", later.Attention, st)
 	}
 }
+
+func TestStatusCountsTheMessagesAWorkerSentInTheLastHour(t *testing.T) {
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}, {Name: "docs", Dir: "/tmp", Brief: "b"}}}
+	res := healthy()
+	res.Messages = map[string][]runlog.Message{"app": {
+		{Time: now.Add(-2 * time.Hour), To: "box-docs"},
+		{Time: now.Add(-10 * time.Minute), To: "box-docs"},
+		{Time: now.Add(-time.Minute), To: "mini-web"},
+	}}
+	for _, name := range []string{"app", "docs"} {
+		c := checkin(runlog.VerdictOnTrack, "fine")
+		c.Worker = name
+		res.Checkins = append(res.Checkins, c)
+	}
+	r := Assess(m, signals, now, res, nil)
+	if r.Workers[0].Messages != 2 || r.Workers[1].Messages != 0 {
+		t.Fatalf("workers = %+v", r.Workers)
+	}
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	if !strings.Contains(out.String(), "[2 message(s) sent in the last hour] fine") || strings.Contains(out.String(), "docs  no issue  on_track  5m ago  [") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
