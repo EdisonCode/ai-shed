@@ -1169,6 +1169,13 @@ name `<machine>-<worker>`, by which they message it, accepts their messages
 message informs and never asks a peer to make an edit, and work or a decision
 goes on the issue. A worker without peers refuses messages.
 
+A worker with peers signs its plan comment with `**Session:** <its name>`
+beside `**Paths:**`, so every machine can read from the issue who builds it.
+The supervisor keeps `.shed/PEERS.md` in the worker's directory current: each
+peer and what it has in hand, read from this machine's check-ins for a peer
+here and from signed plans on GitHub for a peer elsewhere. The note about
+overlapping work on another machine names the peer that signed its plan.
+
 Claude Code has no list of allowed senders: a worker that accepts messages
 takes them from every session of the same user. The brief tells other
 workers to message only their peers.

@@ -1649,6 +1649,11 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	// apply to the reserve, whose priority work the pace lets through.
 	elsewhere := s.inFlightElsewhere(ctx, w)
 	s.applyHolds(w, items, open, elsewhere, checkins)
+	if _, err := writeRoster(w, rosterText(w, open, elsewhere, checkins)); err != nil {
+		// The roster helps a worker message the right peer; its queue
+		// must not wait on it.
+		s.Logf("%v", err)
+	}
 	s.applyPace(w, items, checkins)
 	var reserve string
 	var offered []backlog.Issue
