@@ -71,6 +71,11 @@ type Hook struct {
 	// sub-agent: its own transcript, and its type.
 	AgentTranscriptPath string
 	AgentType           string
+	// ToolName is the tool a PostToolUse hook is about. For SendMessage,
+	// SentTo is the session the message went to and SentChars its length.
+	ToolName  string
+	SentTo    string
+	SentChars int
 }
 
 // ParseHook reads the JSON an agent tool passes a hook. A body that is not
@@ -82,12 +87,30 @@ func ParseHook(input io.Reader) Hook {
 		TranscriptPath string `json:"transcript_path"`
 		AgentPath      string `json:"agent_transcript_path"`
 		AgentType      string `json:"agent_type"`
+		ToolName       string `json:"tool_name"`
+		// The input is decoded on its own: a tool whose input has another
+		// shape must not cost the hook its mark.
+		ToolInput json.RawMessage `json:"tool_input"`
 	}
 	if err := json.NewDecoder(io.LimitReader(input, maxHookInput)).Decode(&raw); err != nil {
 		return Hook{}
 	}
-	return Hook{Message: raw.Message, SessionID: raw.SessionID, TranscriptPath: raw.TranscriptPath,
-		AgentTranscriptPath: raw.AgentPath, AgentType: raw.AgentType}
+	h := Hook{Message: raw.Message, SessionID: raw.SessionID, TranscriptPath: raw.TranscriptPath,
+		AgentTranscriptPath: raw.AgentPath, AgentType: raw.AgentType, ToolName: raw.ToolName}
+	var send struct {
+		To      string          `json:"to"`
+		Message json.RawMessage `json:"message"`
+	}
+	if raw.ToolName == "SendMessage" && json.Unmarshal(raw.ToolInput, &send) == nil {
+		h.SentTo = send.To
+		var text string
+		if json.Unmarshal(send.Message, &text) == nil {
+			h.SentChars = len(text)
+		} else {
+			h.SentChars = len(send.Message)
+		}
+	}
+	return h
 }
 
 // RecordTranscript remembers the transcript and adds any calls in it that

@@ -1180,6 +1180,25 @@ missing. `shed preflight` warns when a worker with peers runs with `--bare`
 (no inbox) or its repository's own `.claude/settings.json` refuses messages,
 which beats every other setting.
 
+Two sessions that answer each other can go on without end, and every
+message costs usage. A hook records each message a worker sends (the time,
+the session it went to and its length, not the text):
+
+```json
+"PostToolUse": [
+  { "matcher": "SendMessage",
+    "hooks": [{ "type": "command", "command": "$HOME/.local/bin/shed mark message" }] }
+]
+```
+
+`shed status` shows a worker's count: `[12 message(s) sent in the last
+hour]`. A worker that sends one session `message_limit` messages within an
+hour (20 by default, under `supervisor`; a negative number turns the check
+off) is told to stop and to put what is left on the issue. If it sends that
+session three more, it is `stuck`, and `shed status` lists it with the
+session. End the exchange, for example with `shed recycle`. `shed preflight`
+warns about a worker with peers and no such hook.
+
 ### A model per issue
 
 Optional. Map issue labels to models, and the agent switches the worker's

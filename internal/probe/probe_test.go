@@ -294,3 +294,17 @@ func TestParseReadsEachWorkersContextSize(t *testing.T) {
 		t.Fatalf("context = %v", res.Context)
 	}
 }
+
+func TestParseReadsTheMessagesEachWorkerSent(t *testing.T) {
+	out := "@@now 1790000000\n" +
+		`@@msg app {"time":"2026-10-04T12:00:00Z","to":"box-api","chars":30}` + "\n" +
+		`@@msg app {"time":"2026-10-04T12:01:00Z","to":"mini-web","chars":12}` + "\n" +
+		"@@msg app {half\n@@end\n"
+	res, err := Parse(out, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := res.Messages["app"]; len(m) != 2 || m[1].To != "mini-web" {
+		t.Fatalf("messages = %+v", res.Messages)
+	}
+}

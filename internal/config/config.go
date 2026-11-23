@@ -418,6 +418,12 @@ type Supervisor struct {
 	// same label of that prefix touch the same code: one is held while a
 	// worker has the other in hand, as for issues whose Paths overlap.
 	OverlapLabels string `yaml:"overlap_labels"`
+	// MessageLimit is how many messages a worker may send to one other
+	// session within an hour before the supervisor tells it to stop: two
+	// sessions that answer each other can go on without end, and every
+	// message costs usage. 0 is the default of 20; a negative number turns
+	// the check off.
+	MessageLimit int `yaml:"message_limit"`
 	// ContextBudget is how many tokens a worker's tool may load before its
 	// first item; above it, shed status says so. 0 for no budget.
 	ContextBudget int `yaml:"context_budget"`
@@ -1623,6 +1629,22 @@ func (s Supervisor) OwnWaitMaxOrDefault() time.Duration {
 		return 0
 	}
 	return durationOr(s.OwnWaitMax, DefaultOwnWaitMax)
+}
+
+// DefaultMessageLimit is the messages a worker may send one session in an
+// hour when message_limit is not set.
+const DefaultMessageLimit = 20
+
+// MessageLimitOrDefault is the hourly limit of messages to one session; 0
+// for no limit.
+func (s Supervisor) MessageLimitOrDefault() int {
+	switch {
+	case s.MessageLimit < 0:
+		return 0
+	case s.MessageLimit == 0:
+		return DefaultMessageLimit
+	}
+	return s.MessageLimit
 }
 
 // ClearWhenCold reports whether a nudge to a cold worker clears its context.
