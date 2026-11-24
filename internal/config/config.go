@@ -159,6 +159,11 @@ type Repo struct {
 	// marker. Past it, such an issue is held until the owner admits it with
 	// "Ready now". 0, the default, holds nothing.
 	IssueQuota int `yaml:"issue_quota"`
+	// CircuitBreaker holds new issues of the repository while the checks on
+	// its default branch are red: each new pull request would inherit the
+	// failure. Rework, verification and eye checks go on, and a worker with
+	// health is given a task to fix it.
+	CircuitBreaker bool `yaml:"circuit_breaker"`
 	// CloseFinished lets shed close an issue whose work is done: every pull
 	// request merged, verified where the repository verifies, its eye check
 	// passed, the checks on the merge commit green, and no regression
@@ -658,6 +663,9 @@ type Worker struct {
 	// EyeChecks says the worker has a browser and may do the eye checks of
 	// merged work on staging. Its queue's repositories need a `repos` entry.
 	EyeChecks bool `yaml:"eye_checks"`
+	// Health makes the worker the one that fixes a red default branch of a
+	// repository with circuit_breaker: it is given a one-off task for it.
+	Health bool `yaml:"health"`
 	// Ask makes the worker a session that answers the owner's questions. Its
 	// session is kept running and it is handed no issue and no task: nothing
 	// is typed into the owner's conversation with it.
@@ -1364,8 +1372,8 @@ func (c *Config) validate() error {
 		switch {
 		case deploys && r.Staging.Commit == "":
 			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
-		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0 && !r.CloseFinished && r.IssueQuota == 0:
-			fail("%s: give it staging, gates, verify, max_open_prs, close_finished or issue_quota, or leave it out", where)
+		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0 && !r.CloseFinished && r.IssueQuota == 0 && !r.CircuitBreaker:
+			fail("%s: give it staging, gates, verify, max_open_prs, close_finished, issue_quota or circuit_breaker, or leave it out", where)
 		}
 		if r.IssueQuota < 0 {
 			fail("%s: issue_quota %d must not be negative", where, r.IssueQuota)

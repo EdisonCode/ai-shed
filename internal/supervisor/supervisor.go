@@ -192,6 +192,9 @@ type Supervisor struct {
 	// Filed lists the issues workers opened, for issue_quota. Nil holds
 	// none.
 	Filed FiledLister
+	// Base reads the checks on a default branch, for circuit_breaker. Nil
+	// holds nothing.
+	Base BaseReader
 	// LookSources are the queues of other machines whose eye checks this
 	// machine's workers do: those machines have no worker that does them.
 	LookSources []config.IssueSource
@@ -256,6 +259,12 @@ type Supervisor struct {
 	// reserved holds work kept for the worker that has its code open, by
 	// repo#number.
 	reserved map[string]reservation
+	// broken holds the red default branches of repositories with
+	// circuit_breaker, breakerRead when each was last read, and
+	// healthQueued the health tasks given.
+	broken       map[string]backlog.BaseState
+	breakerRead  map[string]time.Time
+	healthQueued map[string]bool
 	// closeChecked holds when GitHub was last asked whether a finished
 	// issue may close, and closed the issues shed closed.
 	closeChecked map[string]time.Time
@@ -1675,6 +1684,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	// apply to the reserve, whose priority work the pace lets through.
 	elsewhere := s.inFlightElsewhere(ctx, w)
 	s.refreshFiled(ctx)
+	s.refreshBreaker(ctx)
 	s.applyHolds(w, items, open, elsewhere, checkins)
 	if _, err := writeRoster(w, rosterText(w, open, elsewhere, checkins)); err != nil {
 		// The roster helps a worker message the right peer; its queue

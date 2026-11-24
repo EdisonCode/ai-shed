@@ -61,6 +61,10 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 		if !ok || item.Look != "" || item.Rework != "" || item.Stack != "" || item.Number == inHand {
 			continue
 		}
+		if hold := s.breakerHold(issue); hold != "" && !item.Bumped && item.Verify == "" {
+			item.Blocked = hold
+			continue
+		}
 		if hold := s.quotaHold(issue); hold != "" && !item.Bumped {
 			item.Blocked = hold
 			continue
