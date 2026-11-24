@@ -33,17 +33,42 @@ Waiting on you: 1 return to a worker (oldest 2h), 1 to read (oldest 5h).
 
 The exit code is 1 when anything needs you, so a script or a notifier can act on it.
 
-`shed ui` shows the same report live in the browser, at
-`http://127.0.0.1:7777`. It reads the fleet every 30 seconds (`-every`) and
-pushes each new report to the page. Click a worker to watch its screen and
-its latest check-ins, read again every few seconds over ssh while the panel
-is open. The page is read-only: answering, merging and queueing stay with
-`shed` commands. It runs on your own machine with your `ssh` and `gh`, like
-`shed status`, so nothing on the fleet depends on it: close the laptop and the
-agents go on. A machine whose `host:` is a Tailscale name is reached over the
-tailnet with nothing more to set up. The page listens on loopback; give
-`-listen` another address only on purpose, since whoever reaches it sees the
-fleet, its issues and its workers' screens.
+`shed observe` shows the fleet live in the browser, at
+`http://127.0.0.1:7777` (`shed ui` is the same command). It reads the fleet
+every 30 seconds (`-every`) and pushes each new report to the page. Until the
+first read is back, the page says how long it has taken: on a large fleet it
+can take a minute or more. The page has two views:
+
+- **Deck** has five panels:
+  - **Goals**: each goal's progress, its pace over the last week, and when
+    it will be done (see [Goals](#goals)).
+  - **Fleet**: every worker with its state and the issue in hand.
+  - **Peers**: a graph of who messaged whom in the last day. A line is
+    lit when a message went in the last hour, and dashed for a pair that
+    never talks.
+  - **Needs you**: grouped by kind into counts that open on a click.
+  - **Flow**: per repository, the last 24 hours: net open issues, merges,
+    rework per merge, issues workers opened, looks that passed first time,
+    and the longest dependency chain. Idle worker-hours by cause sit beside
+    it.
+
+  Goals, flow and idle hours cost more GitHub calls than the report, so
+  they are read every 5 minutes (`-deck-every`), apart from it.
+- **Board** puts every issue in the queues in a column by its state: held,
+  queued, working, rework, verifying, waiting on you, draft, eye check,
+  merged. It filters by goal, repository and machine. Right-click a card for
+  the `shed` command that bumps it, puts it back, recycles its worker or
+  pauses its machine, ready to copy.
+
+Click a worker to watch its screen and its latest check-ins, read again
+every few seconds over ssh while the panel is open. The page changes nothing:
+answering, merging and queueing stay with `shed` commands. It runs on your
+own machine with your `ssh` and `gh`, like `shed status`, so nothing on the
+fleet depends on it: close the laptop and the agents go on. A machine whose
+`host:` is a Tailscale name is reached over the tailnet with nothing more to
+set up. The page listens on loopback; give `-listen` another address only on
+purpose, since whoever reaches it sees the fleet, its issues and its
+workers' screens.
 
 What waits on you is in the order to answer it, oldest first inside each group:
 

@@ -51,6 +51,11 @@ type Snapshot struct {
 	// the owner, one line each.
 	RepoAttention []string      `json:"repo_attention,omitempty"`
 	Report        status.Report `json:"report"`
+	// Deck is the slower part of the page: goals and their pace, flow,
+	// idle hours and spend, as the digest reads them over the last day.
+	// Its own report is left out; Report is the current one. Nil until
+	// the first is read.
+	Deck *status.Digest `json:"deck,omitempty"`
 }
 
 // Server keeps the latest report of the fleet and sends each new one to the
@@ -60,10 +65,18 @@ type Server struct {
 	Collect func(context.Context) status.Report
 	Runner  probe.Runner
 	Every   time.Duration
+	// Digest reads the deck from a report; nil leaves the deck out. It is
+	// read at most every DeckEvery, apart from the report, so a slow read
+	// of goals and flow does not hold the report back.
+	Digest    func(context.Context, status.Report) status.Digest
+	DeckEvery time.Duration
 
-	mu     sync.Mutex
-	latest []byte
-	subs   map[chan []byte]struct{}
+	mu      sync.Mutex
+	latest  []byte
+	subs    map[chan []byte]struct{}
+	snap    *Snapshot
+	deckAt  time.Time
+	reading bool
 }
 
 // Run reads the fleet at once and then every Every, until ctx ends.
@@ -79,6 +92,7 @@ func (s *Server) Run(ctx context.Context) {
 }
 
 // refresh reads the fleet once and sends the report to every open page.
+// When the deck is due, it is read after, in the background.
 func (s *Server) refresh(ctx context.Context) {
 	start := time.Now()
 	r := s.Collect(ctx)
@@ -92,14 +106,50 @@ func (s *Server) refresh(ctx context.Context) {
 		}
 	}
 	snap.NeedsYou += len(snap.RepoAttention)
-	data, err := json.Marshal(snap)
+	s.mu.Lock()
+	if s.snap != nil {
+		snap.Deck = s.snap.Deck
+	}
+	s.snap = &snap
+	due := s.Digest != nil && !s.reading && (snap.Deck == nil || time.Since(s.deckAt) >= s.DeckEvery)
+	if due {
+		s.reading = true
+	}
+	s.mu.Unlock()
+	s.publish()
+	if due {
+		go s.readDeck(ctx, r)
+	}
+}
+
+// readDeck reads the deck from a report and sends it to every open page
+// with the latest report.
+func (s *Server) readDeck(ctx context.Context, r status.Report) {
+	d := s.Digest(ctx, r)
+	d.Report = status.Report{}
+	s.mu.Lock()
+	s.reading = false
+	s.deckAt = time.Now()
+	if s.snap != nil {
+		s.snap.Deck = &d
+	}
+	s.mu.Unlock()
+	s.publish()
+}
+
+// publish encodes the latest snapshot and sends it to every open page.
+func (s *Server) publish() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.snap == nil {
+		return
+	}
+	data, err := json.Marshal(s.snap)
 	if err != nil {
 		// A report that cannot be encoded is a bug in shed: say so in its
 		// place, so the page does not go on showing an old one as current.
 		data, _ = json.Marshal(map[string]string{"error": fmt.Sprintf("encode the report: %v", err)})
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.latest = data
 	for ch := range s.subs {
 		select {
