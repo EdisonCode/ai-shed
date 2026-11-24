@@ -583,6 +583,9 @@ func (s *Supervisor) Tick(ctx context.Context) {
 		}
 		c := runlog.Checkin{Time: now, Worker: w.Name, Kind: KindError, Verdict: runlog.VerdictError, Reason: err.Error()}
 		st.notBefore = now.Add(retryAfter)
+		if gitHubLimit(strings.ToLower(err.Error())) {
+			c.Reason = fmt.Sprintf("GitHub's API rate limit stopped the read of its queue; shed reads it again in %s, and the worker's session goes on: %s", spell(retryAfter), err.Error())
+		}
 		// A reviewer at its usage limit is not a fault and needs nobody: the
 		// worker is simply not looked at until the limit may have reset.
 		if isLimit(err) {
@@ -1513,14 +1516,26 @@ func limitKind(screen string) string {
 }
 
 // isLimit reports whether a reviewer failed because it reached a usage limit.
+// GitHub's API rate limit is not one: a read of the queue failed, and the
+// reviewer's Claude account has nothing to do with it.
 func isLimit(err error) bool {
 	text := strings.ToLower(err.Error())
+	if gitHubLimit(text) {
+		return false
+	}
 	for _, phrase := range []string{"usage limit", "rate limit", "limit reached", "hit your limit", "weekly limit"} {
 		if strings.Contains(text, phrase) {
 			return true
 		}
 	}
 	return false
+}
+
+// gitHubLimit reports whether an error's text, in lower case, is GitHub's
+// API rate limit, as gh reports it.
+func gitHubLimit(text string) bool {
+	return strings.Contains(text, "api rate limit") || strings.Contains(text, "secondary rate limit") ||
+		(strings.HasPrefix(text, "gh ") && strings.Contains(text, "rate limit"))
 }
 
 // recover rebuilds a worker's state from the check-in log.

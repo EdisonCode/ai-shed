@@ -23,7 +23,7 @@ import (
 func cmdUI(args []string) int {
 	fs := flag.NewFlagSet("observe", flag.ContinueOnError)
 	listen := fs.String("listen", ui.DefaultListen, "address to serve the page on; another than loopback lets others on that network see the fleet")
-	every := fs.Duration("every", 30*time.Second, "how often to read the fleet")
+	every := fs.Duration("every", 2*time.Minute, "how often to read the fleet; each read lists every queue on GitHub, on the same account the supervisors use")
 	deckEvery := fs.Duration("deck-every", 5*time.Minute, "how often to read goals, flow and spend, which take more GitHub calls than the fleet")
 	cfg, _, err := loadConfig(fs, args)
 	if err != nil {
