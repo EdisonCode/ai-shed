@@ -92,9 +92,13 @@ func (f *fakeReviewer) Review(_ context.Context, prompt string) (Verdict, error)
 type fakeLister struct {
 	issues  []backlog.Issue
 	byLabel map[string][]backlog.Issue
+	err     error
 }
 
 func (f *fakeLister) List(_ context.Context, src config.IssueSource) ([]backlog.Issue, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	if f.byLabel != nil {
 		return f.byLabel[src.Label], nil
 	}
@@ -3265,5 +3269,33 @@ func TestLooksOfAnotherMachinesQueueAreReadWhereItHasNobodyToDoThem(t *testing.T
 	}
 	if !strings.Contains(strings.Join(f.term.sent, "\n"), "Do the eye check of #7") {
 		t.Fatalf("sent = %q, want the look of #7 handed over", f.term.sent)
+	}
+}
+
+func TestGitHubsRateLimitIsNotAUsageLimit(t *testing.T) {
+	for text, want := range map[string]bool{
+		"gh issue list: exit status 1: GraphQL: API rate limit already exceeded for user ID 1464400.": false,
+		"gh api: exit status 1: You have exceeded a secondary rate limit.":                            false,
+		"claude: Claude usage limit reached. Your limit will reset at 3pm":                            true,
+		"claude: API Error: Rate limit reached":                                                       true,
+		"claude: You've hit your limit · resets 5pm":                                                  true,
+	} {
+		if got := isLimit(errors.New(text)); got != want {
+			t.Errorf("isLimit(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+func TestAWorkerWhoseQueueGitHubRateLimitsIsNotPausedAsLimited(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	f.tick(2 * time.Minute)
+	f.lister.err = errors.New("gh issue list: exit status 1: GraphQL: API rate limit already exceeded for user ID 1464400.")
+	f.tick(20 * time.Minute)
+	c := f.lastCheckin(t)
+	if c.Verdict == runlog.VerdictLimited || strings.Contains(c.Reason, "usage limit") {
+		t.Fatalf("check-in = %+v: GitHub's rate limit was read as a usage limit", c)
+	}
+	if !strings.HasPrefix(c.Reason, "GitHub's API rate limit stopped the read of its queue") {
+		t.Fatalf("reason = %q", c.Reason)
 	}
 }

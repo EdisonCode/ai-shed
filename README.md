@@ -35,7 +35,10 @@ The exit code is 1 when anything needs you, so a script or a notifier can act on
 
 `shed observe` shows the fleet live in the browser, at
 `http://127.0.0.1:7777` (`shed ui` is the same command). It reads the fleet
-every 30 seconds (`-every`) and pushes each new report to the page. Until the
+every 2 minutes (`-every`) and pushes each new report to the page. Each read
+lists every queue on GitHub with your `gh`, the same account the supervisors
+read with, and GitHub limits each account's API calls per hour: read more
+often only on a small fleet. Until the
 first read is back, the page says how long it has taken: on a large fleet it
 can take a minute or more. The page has two views:
 
