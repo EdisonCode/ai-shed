@@ -150,6 +150,9 @@ type Supervisor struct {
 	Lister         backlog.Lister
 	// Merger queues a pull request for its merge. Nil queues nothing.
 	Merger Merger
+	// Closer closes a finished issue in a repository with close_finished.
+	// Nil closes nothing.
+	Closer Closer
 	// Readier marks a parked draft ready when its repository has room under
 	// its limit of ready pull requests. Nil leaves parked drafts parked.
 	Readier Readier
@@ -243,6 +246,10 @@ type Supervisor struct {
 	// ciRestarted holds the pull request heads whose CI was started again,
 	// as repo#pr@sha: each is started once.
 	ciRestarted map[string]bool
+	// closeChecked holds when GitHub was last asked whether a finished
+	// issue may close, and closed the issues shed closed.
+	closeChecked map[string]time.Time
+	closed       map[string]bool
 	// unparked holds the parked drafts this agent marked ready, by
 	// "owner/repo#pr": the issue lists may show them as drafts a while yet.
 	unparked map[string]bool
@@ -1647,6 +1654,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	items = s.withVerifies(ctx, w, items, own, checkins)
 	s.queueMerges(ctx, own, checkins)
 	s.restartStuckCI(ctx, own, checkins)
+	s.closeFinished(ctx, own, checkins)
 	s.unpark(ctx, own, checkins)
 	// The holds and the pace come first: the reserve is offered when nothing
 	// beside it can be acted on, held and paced work included. Then they
@@ -2323,6 +2331,7 @@ func (s *Supervisor) remainingBrief(b *strings.Builder) {
 		return
 	}
 	fmt.Fprintf(b, "When an issue takes more than one pull request, list what is still to do after `%s` in each hand-back but the last. A hand-back whose pull request merges and that lists nothing still to do is the issue's last: the issue is not handed out again.\n", review.Remaining)
+	fmt.Fprintf(b, "When you find that merged work of another issue broke something, write `%s #<number>` in your comment or in the issue you open, so that issue is not closed as done.\n", backlog.RegressionPhrase)
 	fmt.Fprintf(b, "A step only the owner can do, such as one on production, goes after `%s` in your hand-back. A hand-back with no open pull request, nothing still to do and no question is not handed out again until someone writes on the issue: it waits on the owner.\n", backlog.OwnerActPhrase)
 	if s.Settings.Stack {
 		b.WriteString("While a pull request of yours waits for review and its hand-back lists what is still to do, the supervisor may send you on with the issue. Build the rest on a new branch from that pull request's branch, open the next pull request against that branch, and hand back as before.\n")

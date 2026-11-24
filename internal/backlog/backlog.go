@@ -760,11 +760,40 @@ func Finished(issue Issue, signals []config.Signal) int {
 		return 0
 	}
 	for _, c := range issue.Comments[index+1:] {
-		if !isHandBack(c.Body, signals) {
+		if !settled(c.Body, signals) {
 			return 0
 		}
 	}
 	return pr
+}
+
+// shedPhrases begin the comments shed writes itself on an issue. None of
+// them asks a worker for anything.
+var shedPhrases = []string{QueuedPhrase, BatchPhrase, ReleasedPhrase, "Unparked:"}
+
+// settled reports whether a comment after a hand-back leaves the work as it
+// was: another hand-back, a verifier's pass, a passed look, or one of shed's
+// own comments. Anything else, such as the owner asking for more, may be
+// work for a worker.
+func settled(body string, signals []config.Signal) bool {
+	if isHandBack(body, signals) || strings.Contains(body, "<!-- shed-cost ") {
+		return true
+	}
+	if m := verdictRE.FindStringSubmatch(body); m != nil && strings.EqualFold(m[1], VerifiedPhrase) {
+		return true
+	}
+	trimmed := strings.TrimLeft(body, " \t\r\n*_#>")
+	for _, phrase := range shedPhrases {
+		if strings.HasPrefix(trimmed, phrase) {
+			return true
+		}
+	}
+	for _, s := range signals {
+		if s.Name == config.EyesSignal && answeredIn(strings.ToLower(body), s) {
+			return true
+		}
+	}
+	return false
 }
 
 // failedLook reports whether the last hand-back of the issue reports a failed

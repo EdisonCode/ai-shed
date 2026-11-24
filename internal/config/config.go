@@ -154,6 +154,23 @@ type Repo struct {
 	// the limit: a worker opens its pull request as a draft and parks it,
 	// and the agent marks the oldest parked draft ready when there is room.
 	MaxOpenPRsCount string `yaml:"max_open_prs_count"`
+	// CloseFinished lets shed close an issue whose work is done: every pull
+	// request merged, verified where the repository verifies, its eye check
+	// passed, the checks on the merge commit green, and no regression
+	// reported in CloseAfter since. Off by default.
+	CloseFinished bool `yaml:"close_finished"`
+	// CloseAfter is the quiet period after the merge, or the passed look if
+	// later, before shed closes a finished issue. 24h by default.
+	CloseAfter string `yaml:"close_after"`
+}
+
+// DefaultCloseAfter is the quiet period before shed closes a finished issue.
+const DefaultCloseAfter = 24 * time.Hour
+
+// CloseAfterOrDefault returns the repository's quiet period. Validation has
+// already rejected a value that does not parse.
+func (r Repo) CloseAfterOrDefault() time.Duration {
+	return durationOr(r.CloseAfter, DefaultCloseAfter)
 }
 
 // What counts toward max_open_prs.
@@ -1326,8 +1343,15 @@ func (c *Config) validate() error {
 		switch {
 		case deploys && r.Staging.Commit == "":
 			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
-		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0:
-			fail("%s: give it staging, gates, verify or max_open_prs, or leave it out", where)
+		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0 && !r.CloseFinished:
+			fail("%s: give it staging, gates, verify, max_open_prs or close_finished, or leave it out", where)
+		}
+		if r.CloseAfter != "" {
+			if d, err := time.ParseDuration(r.CloseAfter); err != nil || d < 0 {
+				fail("%s: close_after %q is not a duration such as 24h", where, r.CloseAfter)
+			} else if !r.CloseFinished {
+				fail("%s: close_after needs close_finished", where)
+			}
 		}
 		if r.MaxOpenPRs < 0 {
 			fail("%s: max_open_prs %d must not be negative", where, r.MaxOpenPRs)

@@ -483,10 +483,12 @@ func TestARepoMayBeListedForItsGatesAlone(t *testing.T) {
 
 func TestARepoNeedsStagingOrGatesAndAGatesTimeoutIsADuration(t *testing.T) {
 	for _, tc := range []struct{ repo, want string }{
-		{"{repo: org/app}", "give it staging, gates, verify or max_open_prs"},
+		{"{repo: org/app}", "give it staging, gates, verify, max_open_prs or close_finished"},
 		{"{repo: org/app, gates: {command: make, timeout: soon}}", "gates.timeout"},
 		{"{repo: org/app, gates: {timeout: 5m}, staging: {commit: echo x}}", "gates.timeout needs gates.command"},
 		{"{repo: org/app, staging: {url: https://s.example.com}}", "staging.commit is required"},
+		{"{repo: org/app, close_finished: true, close_after: soon}", "close_after \"soon\" is not a duration"},
+		{"{repo: org/app, gates: {command: make}, close_after: 12h}", "close_after needs close_finished"},
 	} {
 		_, err := Parse([]byte(minimal + "repos: [" + tc.repo + "]\n"))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -763,5 +765,18 @@ func TestCoversTellsWhetherAQueueHoldsAnIssueOnlyWhereEveryQueueIsALabel(t *test
 	}
 	if _, known := withSearch.Covers("org/app", []string{"needs-owner"}); known {
 		t.Error("a queue that is a search could hold any issue: want unknown")
+	}
+}
+
+func TestCloseFinishedAloneIsARepoEntryAndWaitsADayByDefault(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + "repos: [{repo: org/app, close_finished: true}, {repo: org/api, close_finished: true, close_after: 2h}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Repos[0].CloseAfterOrDefault(); got != 24*time.Hour {
+		t.Errorf("default close_after = %s", got)
+	}
+	if got := cfg.Repos[1].CloseAfterOrDefault(); got != 2*time.Hour {
+		t.Errorf("close_after = %s", got)
 	}
 }

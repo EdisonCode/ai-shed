@@ -301,6 +301,10 @@ Run this as a checklist and report each line.
      issue itself. Answer the blocker, give it a queue label, or end the
      hold with `No longer depends on #N` on the held issue, as the owner
      decides.
+   - `Closed by shed:` on an issue: the repository has `close_finished`,
+     and the comment lists why it was done. If the owner says it was not,
+     reopen it and write `Regression of #N` on the issue that found the
+     fault, so shed leaves it open.
    - `rework` in the issues list needs nothing from the owner: the pull
      request cannot merge and a worker is being sent back to it. A `!` line
      that says `after 2 tries by a worker` is the owner's: the workers could
