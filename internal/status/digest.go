@@ -83,11 +83,18 @@ type RepoMerged struct {
 // Digest collects the report and the pull requests merged since a time, for
 // every repository a machine takes issues from.
 func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged MergedLister, since, now time.Time) Digest {
+	return c.DigestFrom(ctx, cfg, merged, c.CollectAll(ctx, cfg), since, now)
+}
+
+// DigestFrom is Digest on a report already collected: a page that reads the
+// report often reads the rest of the digest less often, without a second
+// read of the fleet.
+func (c Collector) DigestFrom(ctx context.Context, cfg *config.Config, merged MergedLister, report Report, since, now time.Time) Digest {
 	if c.Closed != nil {
 		// Several parts of the digest read the same closed issues.
 		c.Closed = &onceClosed{lister: c.Closed, read: map[config.IssueSourceKey]closedRead{}}
 	}
-	d := Digest{Since: since, Now: now, Report: c.CollectAll(ctx, cfg), Merged: []RepoMerged{}}
+	d := Digest{Since: since, Now: now, Report: report, Merged: []RepoMerged{}}
 	for _, m := range d.Report.Machines {
 		if m.Probe == nil {
 			continue

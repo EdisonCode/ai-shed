@@ -57,6 +57,57 @@ func TestTheReportIsServedAsJSON(t *testing.T) {
 	}
 }
 
+func TestTheDeckIsReadFromTheReportAndSentWithTheNextOne(t *testing.T) {
+	s, _ := newServer(t, func(context.Context) status.Report { return report("box") })
+	read := make(chan status.Report, 1)
+	s.DeckEvery = time.Hour
+	s.Digest = func(_ context.Context, r status.Report) status.Digest {
+		read <- r
+		return status.Digest{Report: r, Goals: []status.GoalProgress{{Repo: "org/app", Label: "goal:export", Closed: 7, Total: 10}}}
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	s.refresh(context.Background())
+	if r := <-read; r.Machines[0].Name != "box" {
+		t.Fatalf("the deck read report %+v", r)
+	}
+	lines := bufio.NewScanner(resp.Body)
+	for lines.Scan() {
+		data, ok := strings.CutPrefix(lines.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var got Snapshot
+		if err := json.Unmarshal([]byte(data), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Deck == nil {
+			continue // the report, sent before the deck was read
+		}
+		if len(got.Deck.Goals) != 1 || len(got.Deck.Report.Machines) != 0 || got.Report.Machines[0].Name != "box" {
+			t.Fatalf("snapshot = %+v", got)
+		}
+		break
+	}
+	// Within DeckEvery, a new report does not read the deck again, and keeps it.
+	s.refresh(context.Background())
+	select {
+	case <-read:
+		t.Fatal("the deck was read again within DeckEvery")
+	case <-time.After(50 * time.Millisecond):
+	}
+	var got Snapshot
+	json.Unmarshal(s.snapshot(), &got)
+	if got.Deck == nil {
+		t.Fatal("the next report dropped the deck")
+	}
+}
+
 func TestBeforeTheFirstReportTheAPISaysSo(t *testing.T) {
 	s, _ := newServer(t, nil)
 	rec := httptest.NewRecorder()
