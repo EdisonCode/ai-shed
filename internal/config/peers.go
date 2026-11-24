@@ -75,6 +75,34 @@ func (c *Config) resolvePeers() error {
 			}
 		}
 	}
+	// A crew is every crew worker of the fleet, each a peer of the others.
+	var crew []ref
+	for mi, m := range c.Machines {
+		for wi, w := range m.Workers {
+			if !w.Crew {
+				continue
+			}
+			if w.Ask {
+				fail("machine %q: worker %q answers questions and cannot be crew: remove crew, or remove ask", m.Name, w.Name)
+				continue
+			}
+			crew = append(crew, ref{mi, wi})
+		}
+	}
+	if len(crew) > 0 && c.Supervisor.GoalLabels == "" {
+		fail("crew workers build goals together: set supervisor.goal_labels to the prefix of your goal labels, for example \"goal:\"")
+	}
+	for x, a := range crew {
+		for _, b := range crew[x+1:] {
+			wa, wb := c.Machines[a.m].Workers[a.w], c.Machines[b.m].Workers[b.w]
+			if a.m != b.m && !(remoteControl(wa.CommandOrDefault()) && remoteControl(wb.CommandOrDefault())) {
+				fail("machine %q: worker %q and machine %q: worker %q are crew on different machines, so both commands need --remote-control: messages between machines go through it", c.Machines[a.m].Name, wa.Name, c.Machines[b.m].Name, wb.Name)
+				continue
+			}
+			add(a, b)
+			add(b, a)
+		}
+	}
 	for a := range pairs {
 		m, w := c.Machines[a.m], c.Machines[a.m].Workers[a.w]
 		if ownName(w.CommandOrDefault()) {

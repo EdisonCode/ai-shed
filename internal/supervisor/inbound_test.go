@@ -149,3 +149,18 @@ func TestAWorkerWithoutPeersGetsNoPeersSection(t *testing.T) {
 		t.Fatalf("brief = %q", b.String())
 	}
 }
+
+func TestACrewWorkersBriefSaysToBuildTheGoalWithItsCrew(t *testing.T) {
+	var b strings.Builder
+	w := crewWorker()
+	peersBrief(&b, w)
+	if !strings.Contains(b.String(), "## Your crew") || !strings.Contains(b.String(), "message them what changes and why") {
+		t.Fatalf("brief:\n%s", b.String())
+	}
+	b.Reset()
+	w.Crew = false
+	peersBrief(&b, w)
+	if strings.Contains(b.String(), "## Your crew") {
+		t.Fatalf("a worker that is not crew is told of a crew:\n%s", b.String())
+	}
+}

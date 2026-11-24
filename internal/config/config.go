@@ -679,6 +679,12 @@ type Worker struct {
 	// one of another machine as machine/worker. Naming a peer makes it
 	// mutual.
 	Peers []string `yaml:"peers"`
+	// Crew makes the worker one of the fleet's crew: every crew worker is a
+	// peer of every other. Those that build issues of the same goal work on
+	// it together: each one's roster names who builds which part, and a
+	// pull request one of them hands back is reviewed by another before it
+	// is verified.
+	Crew bool `yaml:"crew"`
 	// PeerList and Session are filled in when the fleet file is read. They
 	// are empty for a worker with no peers.
 	PeerList []Peer `yaml:"-"`
@@ -1624,6 +1630,26 @@ func (c *Config) EyeCheckRepos() []string {
 			}
 		}
 	}
+	return repos
+}
+
+// CrewRepos lists the repositories crew workers take issues from, across
+// the fleet: where the parts of a goal are built.
+func (c *Config) CrewRepos() []string {
+	var repos []string
+	for _, m := range c.Machines {
+		for _, w := range m.Workers {
+			if !w.Crew {
+				continue
+			}
+			for _, src := range m.SourcesFor(w) {
+				if !slices.Contains(repos, src.Repo) {
+					repos = append(repos, src.Repo)
+				}
+			}
+		}
+	}
+	slices.Sort(repos)
 	return repos
 }
 
