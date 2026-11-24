@@ -149,6 +149,9 @@ type IssueStatus struct {
 	// Session is the session that signed the issue's plan: who builds it,
 	// for a worker with peers or crew.
 	Session string `json:"session,omitempty"`
+	// Droppable are the open dependencies the issue's text names, as
+	// "#12" or "org/api#7": the ones a "No longer depends on" line ends.
+	Droppable []string `json:"droppable,omitempty"`
 	// Crew is where a crew-mate's review of its pull request stands: due,
 	// passed or changes; empty when there is none to do.
 	Crew string `json:"crew,omitempty"`
@@ -568,6 +571,9 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 			State: Queued, Asks: backlog.Effects(issue, signals, now), Rework: backlog.Rework(issue, signals),
 			Decided: backlog.Decided(issue, signals), deps: backlog.OpenDeps(issue),
 			Session: backlog.PlanSession(issue)}
+		for _, d := range backlog.DroppableDeps(issue) {
+			st.Droppable = append(st.Droppable, backlog.DepWords([]backlog.Dep{d}, issue.Repo))
+		}
 		if st.Session != "" && crewSession(m, st.Session) {
 			st.Crew = backlog.CrewReview(issue, signals).State
 		}

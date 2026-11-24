@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>shed</title>
+<meta name="shed-token" content="">
 <style>
   :root {
     --bg: #0d0f13; --panel: #151820; --panel2: #1a1e27; --line: #252a35; --text: #d7dbe3; --dim: #8a93a6;
@@ -122,6 +123,16 @@
   aside pre { flex: 1; margin: 0; padding: 12px 14px; overflow: auto; white-space: pre-wrap; }
   aside .log { max-height: 35%; overflow: auto; border-top: 1px solid var(--line); padding: 8px 14px; font-size: 12px; }
   [hidden] { display: none !important; }
+  .answers li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .answers .q { color: var(--dim); font-size: 12px; white-space: pre-wrap; flex-basis: 100%; margin: 2px 0 0 0; max-height: 4.5em; overflow: hidden; }
+  button.act { background: #1f3326; border-color: #2a5a44; color: var(--ok); padding: 2px 8px; }
+  button.act:hover { background: #26402f; }
+  .confirm { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 8; display: flex; align-items: center; justify-content: center; }
+  .confirm .box { background: #151820; border: 1px solid #343b4a; border-radius: 10px; padding: 16px 18px; width: min(620px, 92vw); }
+  .confirm h3 { margin: 0 0 8px; font-size: 15px; }
+  .confirm pre { background: #0d0f13; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; max-height: 40vh; overflow: auto; }
+  .confirm .row2 { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .confirm button.post { background: #2a5a44; border-color: #2a5a44; color: #fff; }
 </style>
 </head>
 <body>
@@ -186,6 +197,7 @@ function ago(t, now) {
 }
 function short(repo) { return repo.split("/").pop(); }
 
+const token = (document.querySelector('meta[name="shed-token"]') || {}).content || "";
 let last = null;
 let view = "deck";
 const opened = new Set(); // needs-you groups the owner opened
@@ -394,8 +406,21 @@ function renderAttention(snap) {
   for (const i of unique) groups.find(g => g.re.test(i.text)).items.push(i);
   document.getElementById("needs-note").textContent = unique.length ? unique.length + " item(s)" : "";
   const box = document.getElementById("attn");
-  if (!unique.length) { box.replaceChildren(el("div", { class: "empty good" }, "Nothing needs you.")); return; }
-  box.replaceChildren(...groups.filter(g => g.items.length).map(g => {
+  const actions = snap.actions || [];
+  if (!unique.length && !actions.length) { box.replaceChildren(el("div", { class: "empty good" }, "Nothing needs you.")); return; }
+  const titles = issueTitles(snap);
+  const answers = actions.length ? (() => {
+    const d = el("details", { class: "group answers" }, el("summary", {}, "Quick answers", el("span", { class: "n" }, actions.length)),
+      el("ul", {}, ...actions.map(a => el("li", {},
+        el("a", { href: "https://github.com/" + a.repo + "/issues/" + a.number, target: "_blank", rel: "noopener", class: "mono" }, short(a.repo) + "#" + a.number),
+        el("span", {}, titles.get(a.repo + "#" + a.number) || ""),
+        el("button", { class: "act", onclick: () => confirmAction(a) }, a.label),
+        a.context ? el("div", { class: "q" }, a.context) : null))));
+    d.open = !opened.has("answers-closed");
+    d.addEventListener("toggle", () => d.open ? opened.delete("answers-closed") : opened.add("answers-closed"));
+    return d;
+  })() : null;
+  box.replaceChildren(...[answers].filter(Boolean), ...groups.filter(g => g.items.length).map(g => {
     const d = el("details", { class: "group" }, el("summary", {}, g.title, el("span", { class: "n" }, g.items.length)),
       el("ul", {}, ...g.items.map(i => el("li", {}, el("span", { class: "where" }, i.where + ": "), linkify(i.text)))));
     d.open = opened.has(g.id);
@@ -403,6 +428,42 @@ function renderAttention(snap) {
     return d;
   }));
 }
+function issueTitles(snap) {
+  const t = new Map();
+  for (const m of snap.report.machines || []) for (const i of m.issues || []) t.set(i.repo + "#" + i.number, i.title);
+  return t;
+}
+
+// confirmAction shows what an answer posts, and to what, before it does.
+function confirmAction(a) {
+  const close = () => c.remove();
+  const post = el("button", { class: "post" }, "Post on GitHub");
+  const c = el("div", { class: "confirm", onclick: e => { if (e.target === c) close(); } },
+    el("div", { class: "box" },
+      el("h3", {}, a.label + " · " + short(a.repo) + "#" + a.number),
+      a.context ? el("div", {}, el("div", { class: "meta" }, "What it answers"), el("pre", {}, a.context)) : null,
+      el("div", { class: "meta" }, "Posts this comment as you"),
+      el("pre", {}, a.comment),
+      el("div", { class: "row2" }, el("button", { onclick: close }, "Cancel"), post)));
+  post.addEventListener("click", async () => {
+    post.disabled = true;
+    post.textContent = "Posting…";
+    try {
+      const r = await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json", "X-Shed-Token": token }, body: JSON.stringify({ id: a.id }) });
+      const text = await r.text();
+      if (!r.ok) throw new Error(text.trim());
+      close();
+      toast("Posted on " + short(a.repo) + "#" + a.number + ": " + a.comment);
+    } catch (e) {
+      post.disabled = false;
+      post.textContent = "Post on GitHub";
+      toast("Not posted: " + e.message);
+    }
+  });
+  document.body.append(c);
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape") { const c = document.querySelector(".confirm"); if (c) c.remove(); } });
+
 // linkify turns owner/repo#123 into a link to the issue, as text nodes.
 function linkify(text) {
   const span = el("span", {});
@@ -506,8 +567,10 @@ function card(i, now) {
 function menu(e, i) {
   closeMenu();
   const machine = i.machines[0];
+  const answers = ((last && last.actions) || []).filter(a => a.repo === i.repo && a.number === i.number);
   const items = [
     ["Open on GitHub", null, () => window.open(i.url, "_blank", "noopener")],
+    ...answers.map(a => [a.label, null, () => confirmAction(a), a.comment]),
     null,
     ["Bump to the front", "shed bump " + machine + " " + i.number],
     ["Put back in its place", "shed bump -undo " + machine + " " + i.number],
@@ -517,8 +580,8 @@ function menu(e, i) {
   const m = el("div", { class: "menu", id: "menu" });
   for (const it of items) {
     if (!it) { m.append(el("div", { class: "sep" })); continue; }
-    const [label, cmd, act] = it;
-    m.append(el("div", { class: "item", onclick: () => { closeMenu(); if (act) act(); else copy(cmd); } }, label, cmd ? el("code", {}, cmd) : null));
+    const [label, cmd, act, posts] = it;
+    m.append(el("div", { class: "item", onclick: () => { closeMenu(); if (act) act(); else copy(cmd); } }, label, cmd ? el("code", {}, cmd) : posts ? el("code", {}, "posts: " + posts) : null));
   }
   document.body.append(m);
   m.style.left = Math.min(e.clientX, innerWidth - m.offsetWidth - 8) + "px";

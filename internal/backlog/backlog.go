@@ -517,6 +517,10 @@ type Ask struct {
 	// Left is what a hand-back that left no worker step says the owner has
 	// to do, after OwnerActPhrase; empty when it says nothing.
 	Left string `json:"left,omitempty"`
+	// Text is what the worker wrote under the ask: the question and its
+	// recommendation, or what to look at. Empty for one that follows a pull
+	// request.
+	Text string `json:"text,omitempty"`
 }
 
 // What names the ask and the pull request it waits on, as in "review #41".
@@ -560,6 +564,8 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 				ask.WaitsFor = draftNote(line)
 			}
 			ask.PR, ask.NoPR = pr, pr == 0
+		} else {
+			ask.Text = askSection(issue, s)
 		}
 		asks = append(asks, ask)
 	}
@@ -929,6 +935,35 @@ func signalState(issue Issue, s config.Signal) (open bool, pr int, since time.Ti
 		}
 	}
 	return open, pr, since, line
+}
+
+// askTextLimit bounds the text of an ask a page shows.
+const askTextLimit = 1500
+
+// askSection returns what the last comment that asks the signal wrote under
+// its phrase, up to the next bold label or heading.
+func askSection(issue Issue, s config.Signal) string {
+	body := ""
+	for _, c := range issue.Comments {
+		if _, found := asked(strings.ToLower(c.Body), s); found {
+			body = c.Body
+		}
+	}
+	at := strings.Index(strings.ToLower(body), strings.ToLower(s.Ask))
+	if at < 0 {
+		return ""
+	}
+	text := strings.TrimLeft(body[at+len(s.Ask):], "*_ \t")
+	for _, stop := range []string{"\n**", "\n#"} {
+		if end := strings.Index(text, stop); end >= 0 {
+			text = text[:end]
+		}
+	}
+	text = strings.TrimSpace(text)
+	if len(text) > askTextLimit {
+		text = text[:askTextLimit] + "…"
+	}
+	return text
 }
 
 var draftRE = regexp.MustCompile(`(?i)\(draft\b[\s:,;-]*([^)]*)\)`)

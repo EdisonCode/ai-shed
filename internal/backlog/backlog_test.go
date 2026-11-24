@@ -194,7 +194,7 @@ func TestAsksSayHowLongTheOwnerHasBeenAskedAndForWhichPullRequest(t *testing.T) 
 		{Body: "## Hand-back\n**PR:** #41 (draft)\n**Decisions needed:**\n1. Keep the column? See #3.", CreatedAt: first},
 		{Body: "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders", CreatedAt: second},
 	}}
-	want := []Ask{{Name: "decision", Since: first}, {Name: "eyes", Since: second}, {Name: "review", Since: second, PR: 41}}
+	want := []Ask{{Name: "decision", Since: first, Text: "1. Keep the column? See #3."}, {Name: "eyes", Since: second, Text: "open /orders"}, {Name: "review", Since: second, PR: 41}}
 	if got := Asks(issue, config.DefaultSignals()); !slices.Equal(got, want) {
 		t.Fatalf("asks = %+v, want %+v", got, want)
 	}

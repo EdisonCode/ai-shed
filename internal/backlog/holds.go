@@ -135,6 +135,19 @@ func depOrigins(i Issue, deps []Dep) string {
 	return strings.Join(each, "; ")
 }
 
+// DroppableDeps returns the issue's open dependencies that a "No longer
+// depends on" line ends: those its text names. GitHub's blocked-by is ended
+// on GitHub.
+func DroppableDeps(i Issue) []Dep {
+	var out []Dep
+	for _, d := range OpenDeps(i) {
+		if depOrigin(i, d) != "GitHub's blocked-by" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // OpenDeps returns the issue's dependencies that are still open.
 func OpenDeps(i Issue) []Dep {
 	var open []Dep

@@ -65,9 +65,27 @@ can take a minute or more. The page has two views:
   the `shed` command that bumps it, puts it back, recycles its worker or
   pauses its machine, ready to copy.
 
+**Quick answers.** Needs you opens with the answers you can give in one
+click, each with what the worker wrote under its ask. Board cards offer the
+same on right-click:
+- **Accept the recommendation** on a decision posts `Owner ruling: accepted`.
+- **Ready now** on an issue that was not ready.
+- **Looked: it passes** on an eye check posts `Eyes checked: passed on staging.`
+- **Drop the dependency on #N** on a held issue posts `No longer depends on #N`.
+  It is offered only for a dependency the issue's text names; GitHub's
+  blocked-by is ended on GitHub.
+
+Each answer first shows the exact comment it posts, as you, through your
+`gh`, and posts nothing until you confirm. The page sends back only which
+answer you chose. The server works the answer out again from its latest read,
+and refuses one that no longer applies. Answers are offered only when the page
+listens on loopback. A request must carry a token made for this run and come
+from the page itself: its Host must name this machine, and its Origin must
+match.
+
 Click a worker to watch its screen and its latest check-ins, read again
-every few seconds over ssh while the panel is open. The page changes nothing:
-answering, merging and queueing stay with `shed` commands. It runs on your
+every few seconds over ssh while the panel is open. Besides the answers, the
+page changes nothing: merging and queueing stay with `shed` commands. It runs on your
 own machine with your `ssh` and `gh`, like `shed status`, so nothing on the
 fleet depends on it: close the laptop and the agents go on. A machine whose
 `host:` is a Tailscale name is reached over the tailnet with nothing more to

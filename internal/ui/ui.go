@@ -56,6 +56,12 @@ type Snapshot struct {
 	// Its own report is left out; Report is the current one. Nil until
 	// the first is read.
 	Deck *status.Digest `json:"deck,omitempty"`
+	// Actions are the answers the owner can give from the page; empty when
+	// actions are off.
+	Actions []Action `json:"actions,omitempty"`
+	// readStart is when the read of this report began: an answer posted
+	// after it is not in the report yet.
+	readStart time.Time
 }
 
 // Server keeps the latest report of the fleet and sends each new one to the
@@ -70,6 +76,10 @@ type Server struct {
 	// of goals and flow does not hold the report back.
 	Digest    func(context.Context, status.Report) status.Digest
 	DeckEvery time.Duration
+	// Commenter posts the owner's answers, and Token is this run's secret
+	// that a page must send with one. Either empty turns actions off.
+	Commenter Commenter
+	Token     string
 
 	mu      sync.Mutex
 	latest  []byte
@@ -77,6 +87,8 @@ type Server struct {
 	snap    *Snapshot
 	deckAt  time.Time
 	reading bool
+	// posted is when each action was posted from the page.
+	posted map[string]time.Time
 }
 
 // Run reads the fleet at once and then every Every, until ctx ends.
@@ -96,7 +108,10 @@ func (s *Server) Run(ctx context.Context) {
 func (s *Server) refresh(ctx context.Context) {
 	start := time.Now()
 	r := s.Collect(ctx)
-	snap := Snapshot{At: time.Now(), Took: time.Since(start).Round(100 * time.Millisecond).String(), Every: s.Every.String(), Report: r}
+	snap := Snapshot{At: time.Now(), Took: time.Since(start).Round(100 * time.Millisecond).String(), Every: s.Every.String(), Report: r, readStart: start}
+	if s.actionsOn() {
+		snap.Actions = actionsFor(r, s.signals())
+	}
 	for _, m := range r.Machines {
 		snap.NeedsYou += len(m.Attention)
 	}
@@ -144,7 +159,16 @@ func (s *Server) publish() {
 	if s.snap == nil {
 		return
 	}
-	data, err := json.Marshal(s.snap)
+	// An answer posted since the read began is not in the report yet: the
+	// page does not offer it again.
+	shown := *s.snap
+	shown.Actions = nil
+	for _, a := range s.snap.Actions {
+		if at, ok := s.posted[a.ID]; !ok || at.Before(s.snap.readStart) {
+			shown.Actions = append(shown.Actions, a)
+		}
+	}
+	data, err := json.Marshal(shown)
 	if err != nil {
 		// A report that cannot be encoded is a bug in shed: say so in its
 		// place, so the page does not go on showing an old one as current.
@@ -172,7 +196,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
-		w.Write(page)
+		token := ""
+		if s.actionsOn() {
+			token = s.Token
+		}
+		w.Write(bytes.Replace(page, []byte(`<meta name="shed-token" content="">`), []byte(`<meta name="shed-token" content="`+token+`">`), 1))
 	})
 	mux.HandleFunc("GET /api/report", func(w http.ResponseWriter, r *http.Request) {
 		data := s.snapshot()
@@ -186,13 +214,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/screen", s.screen)
 	mux.HandleFunc("GET /api/log", s.log)
+	mux.HandleFunc("POST /api/act", s.act)
 	return readOnly(mux)
 }
 
-// readOnly answers every method but GET and HEAD with 405: the page
-// changes nothing.
+// readOnly answers every method but GET and HEAD with 405, apart from the
+// one way the page acts: posting an answer the server worked out itself.
 func readOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/act" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET")
 			http.Error(w, "the shed page is read-only", http.StatusMethodNotAllowed)
