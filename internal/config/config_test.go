@@ -483,7 +483,7 @@ func TestARepoMayBeListedForItsGatesAlone(t *testing.T) {
 
 func TestARepoNeedsStagingOrGatesAndAGatesTimeoutIsADuration(t *testing.T) {
 	for _, tc := range []struct{ repo, want string }{
-		{"{repo: org/app}", "give it staging, gates, verify, max_open_prs or close_finished"},
+		{"{repo: org/app}", "give it staging, gates, verify, max_open_prs, close_finished or issue_quota"},
 		{"{repo: org/app, gates: {command: make, timeout: soon}}", "gates.timeout"},
 		{"{repo: org/app, gates: {timeout: 5m}, staging: {commit: echo x}}", "gates.timeout needs gates.command"},
 		{"{repo: org/app, staging: {url: https://s.example.com}}", "staging.commit is required"},

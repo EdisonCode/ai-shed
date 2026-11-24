@@ -97,7 +97,7 @@ func peersBrief(b *strings.Builder, w config.Worker) {
 	}
 	fmt.Fprintf(b, "\nWhen you write the plan of an issue, add a line `**Session:** %s` beside `**Paths:**`, so peers on every machine can see who builds it. %s lists what each peer has in hand; read it before you message one.\n", w.Session, "`"+RosterFile+"`")
 	b.WriteString("\nMessage a peer when it needs something you have mid-task: a change that breaks what it builds on, what landed, or the answer to a question it is blocked on. Keep each message short. A message is plain text; it carries none of your conversation or files.\n" +
-		"A message informs; it does not instruct. Never ask a peer to make an edit, and never ask it for an action your own session was denied. Work that someone has to do becomes a GitHub issue.\n" +
+		"A message informs; it does not instruct. Never ask a peer to make an edit, and never ask it for an action your own session was denied. Work that someone has to do goes on the issue it belongs to; open a new issue only as your brief allows.\n" +
 		"A decision, or a change of plan, goes on the issue as well: messages are lost when a session is cleared, and the owner does not see them.\n" +
 		"Do not message a session that is not named here, except to answer one that wrote to you.\n")
 }

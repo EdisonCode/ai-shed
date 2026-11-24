@@ -154,6 +154,11 @@ type Repo struct {
 	// the limit: a worker opens its pull request as a draft and parks it,
 	// and the agent marks the oldest parked draft ready when there is room.
 	MaxOpenPRsCount string `yaml:"max_open_prs_count"`
+	// IssueQuota is how many issues workers may open in the repository in
+	// a day, fleet-wide: the ones that carry the "Found while building #N"
+	// marker. Past it, such an issue is held until the owner admits it with
+	// "Ready now". 0, the default, holds nothing.
+	IssueQuota int `yaml:"issue_quota"`
 	// CloseFinished lets shed close an issue whose work is done: every pull
 	// request merged, verified where the repository verifies, its eye check
 	// passed, the checks on the merge commit green, and no regression
@@ -1343,8 +1348,11 @@ func (c *Config) validate() error {
 		switch {
 		case deploys && r.Staging.Commit == "":
 			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
-		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0 && !r.CloseFinished:
-			fail("%s: give it staging, gates, verify, max_open_prs or close_finished, or leave it out", where)
+		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0 && !r.CloseFinished && r.IssueQuota == 0:
+			fail("%s: give it staging, gates, verify, max_open_prs, close_finished or issue_quota, or leave it out", where)
+		}
+		if r.IssueQuota < 0 {
+			fail("%s: issue_quota %d must not be negative", where, r.IssueQuota)
 		}
 		if r.CloseAfter != "" {
 			if d, err := time.ParseDuration(r.CloseAfter); err != nil || d < 0 {
