@@ -183,8 +183,9 @@ issue that leans on another thread stalls a worker: paste what it needs.
 
 ## The digest
 
-`shed digest` (or `-since 12h`) reports what merged, how the eye checks
-went and what waits on the owner, oldest first. Use it for the report at the
+`shed digest` (or `-since 12h`) reports what merged, whether each backlog
+shrank (its `Flow` lines: lead with the net), how the eye checks went and
+what waits on the owner, oldest first. Use it for the report at the
 end of a session or the start of a day, in place of writing one by hand.
 
 ## Write or change a brief

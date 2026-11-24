@@ -28,7 +28,7 @@ func cmdDigest(args []string) int {
 	if *since <= 0 {
 		return fail(fmt.Errorf("-since must be a positive duration such as 24h"))
 	}
-	collector := status.Collector{Runner: probe.ShellRunner{}, Lister: backlog.GH{},
+	collector := status.Collector{Runner: probe.ShellRunner{}, Lister: backlog.GH{}, Flow: looks.GH{},
 		Looks: &looks.Reader{GitHub: looks.GH{}, Run: looks.Shell, Now: time.Now},
 		Usage: remoteUsage{Runner: probe.ShellRunner{}, Now: time.Now}, Times: looks.GH{}, Closed: looks.GH{}}
 	now := time.Now()

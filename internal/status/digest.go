@@ -62,6 +62,8 @@ type Digest struct {
 	// Releases counts, by machine/worker, the releases to the fleet on the
 	// issues closed in the window.
 	Releases map[string]int `json:"releases,omitempty"`
+	// Flow is, by repository, whether its backlog shrank in the window.
+	Flow map[string]RepoFlow `json:"flow,omitempty"`
 	// Problems lists what could not be read.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -76,6 +78,10 @@ type RepoMerged struct {
 // Digest collects the report and the pull requests merged since a time, for
 // every repository a machine takes issues from.
 func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged MergedLister, since, now time.Time) Digest {
+	if c.Closed != nil {
+		// Several parts of the digest read the same closed issues.
+		c.Closed = &onceClosed{lister: c.Closed, read: map[config.IssueSourceKey]closedRead{}}
+	}
 	d := Digest{Since: since, Now: now, Report: c.CollectAll(ctx, cfg), Merged: []RepoMerged{}}
 	for _, m := range d.Report.Machines {
 		if m.Probe == nil {
@@ -112,15 +118,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 	}
 	d.Imbalance = imbalance(cfg, d.MachineIdle, d.Peaks)
 	c.collectUsage(ctx, cfg, &d)
-	var repos []string
-	for _, m := range cfg.Machines {
-		for _, src := range m.AllSources() {
-			if !slices.Contains(repos, src.Repo) {
-				repos = append(repos, src.Repo)
-			}
-		}
-	}
-	for _, repo := range repos {
+	for _, repo := range digestRepos(cfg) {
 		pulls, err := merged.MergedSince(ctx, repo, since)
 		if err != nil {
 			d.Problems = append(d.Problems, err.Error())
@@ -133,6 +131,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 		slices.SortFunc(rm.Pulls, func(a, b looks.Pull) int { return a.MergedAt.Compare(b.MergedAt) })
 		d.Merged = append(d.Merged, rm)
 	}
+	c.collectFlow(ctx, cfg, &d)
 	c.collectStages(ctx, &d)
 	c.collectEscapes(ctx, cfg, &d)
 	c.collectLessons(ctx, cfg, &d)
@@ -166,6 +165,7 @@ func RenderDigest(w io.Writer, d Digest) {
 	}
 	tw.Flush()
 
+	renderFlow(w, d)
 	renderStages(w, d.Stages)
 	renderEscapes(w, d.Verification)
 	renderDefaults(w, d.Defaults)

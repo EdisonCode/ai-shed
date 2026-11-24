@@ -2077,6 +2077,14 @@ Merged: 3 pull request(s)
   my-org/my-app#138  6h ago   Paginate the audit log
   my-org/my-app#140  2h ago   Show the total on the order page
 
+Flow: my-org/my-app
+  issues         opened 5, closed 3, net +2; 2 opened by workers (40%)
+  pull requests  1.3 per closed issue, most #123 (2)
+  rework         0.7 sends per merged pull request, most #125 (2)
+  eye checks     1 of 2 passed on the first look (50%)
+  oldest wait    30h  my-org/my-app#124
+  longest chain  #126 → #129 → #133 (3)
+
 Where the time went: 3 merged pull request(s), median and worst
   build   42m  3h   my-org/my-app#140  first commit to ready for review
   checks  11m  28m  my-org/my-app#138  the merged head's checks, first started to last finished
@@ -2098,6 +2106,33 @@ Waiting on you: 2
 Also needs you: 1
   ! mac-mini: unreachable: me@mac-mini: exit status 255: Operation timed out
 ```
+
+`Flow` says whether each repository's backlog shrank in the window. A
+fleet can merge a lot while its open issues grow: each split adds an issue,
+and often a link to a chain.
+
+- **issues**: opened and closed in the window, and the net, opened minus
+  closed. Above zero, the backlog grew. An issue a worker opened carries
+  the line `Found while building #N`; those are counted apart, with their
+  share of all opened.
+- **pull requests**: the pull requests that close the closed issues (open
+  or merged; one closed without merging is not counted), per closed issue,
+  and the issue with the most.
+- **rework**: how often a worker was sent back to a pull request in the
+  window, per pull request merged, and the issue sent back most. It is read
+  from each machine's check-in log, as the idle hours are.
+- **eye checks**: of the looks done on the issues closed in the window, how
+  many were an issue's first look and passed. Shown where there were looks.
+- **oldest wait**: the oldest item that waits on you, as `Waiting on you`
+  lists it.
+- **longest chain**: the longest chain of open dependencies (`Depends on
+  #N`) that ends at an open queued issue, the first dependency first. A
+  dependency in no queue ends the chain.
+
+There are no counts per worker: they reward closing work that is not
+finished, and the worker given the hard issues looks worst. `-json` carries
+the same numbers under `flow`, by repository. Each repository adds one
+`gh issue list` of the issues updated in the window, without comments.
 
 `Where the time went` splits each merged pull request into three stages,
 read from GitHub, and names the pull request that was slowest at each:

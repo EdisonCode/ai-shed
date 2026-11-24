@@ -138,6 +138,9 @@ type IssueStatus struct {
 	// returns to one, and ReturnsIdle says that worker has no work now.
 	ReturnsTo   string `json:"returns_to,omitempty"`
 	ReturnsIdle bool   `json:"returns_idle,omitempty"`
+	// deps are the issues and pull requests it depends on that are open,
+	// for the digest's longest dependency chain.
+	deps []backlog.Dep
 }
 
 // One-off task states.
@@ -205,6 +208,9 @@ type Collector struct {
 	// Times reads when each step of a merged pull request happened. It is
 	// needed only for a digest, and nil leaves the stages out.
 	Times PullTimer
+	// Flow lists the issues opened and closed in a digest's window. Nil
+	// leaves the digest's flow out.
+	Flow FlowLister
 	// Batches reads the open batches of a repository with merge_train:
 	// batch. Nil leaves them out.
 	Batches BatchReader
@@ -479,7 +485,7 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 	for _, issue := range issues {
 		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
 			State: Queued, Asks: backlog.Effects(issue, signals, now), Rework: backlog.Rework(issue, signals),
-			Decided: backlog.Decided(issue, signals)}
+			Decided: backlog.Decided(issue, signals), deps: backlog.OpenDeps(issue)}
 		workerLook := workerLooks[issueKey(issue.Repo, issue.Number)]
 		// A look a worker does waits for the merge: it is nobody's yet.
 		afterMerge := false
