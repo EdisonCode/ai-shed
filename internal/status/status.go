@@ -146,6 +146,12 @@ type IssueStatus struct {
 	ReturnsIdle bool   `json:"returns_idle,omitempty"`
 	// Goal is the issue's goal_labels label; empty for none.
 	Goal string `json:"goal,omitempty"`
+	// Session is the session that signed the issue's plan: who builds it,
+	// for a worker with peers or crew.
+	Session string `json:"session,omitempty"`
+	// Crew is where a crew-mate's review of its pull request stands: due,
+	// passed or changes; empty when there is none to do.
+	Crew string `json:"crew,omitempty"`
 	// group is what its decisions are grouped under in the digest: its
 	// goal, else its overlap_labels label, else its repository. Empty when
 	// the fleet has no goal labels.
@@ -218,6 +224,20 @@ type PeerLink struct {
 	Day  int       `json:"day"`
 	Hour int       `json:"hour"`
 	Last time.Time `json:"last,omitzero"`
+}
+
+// crewSession reports whether a session is one of the fleet's crew, as the
+// machine's crew workers know it.
+func crewSession(m config.Machine, session string) bool {
+	for _, w := range m.Workers {
+		if !w.Crew {
+			continue
+		}
+		if w.Session == session || slices.ContainsFunc(w.PeerList, func(p config.Peer) bool { return p.Session == session }) {
+			return true
+		}
+	}
+	return false
 }
 
 // peerLinks reads what the worker sent each of its peers. A peer it sent
@@ -546,7 +566,11 @@ func AssessWith(m config.Machine, signals []config.Signal, now time.Time, res *p
 	for _, issue := range issues {
 		st := IssueStatus{Repo: issue.Repo, Number: issue.Number, Title: issue.Title, URL: issue.URL,
 			State: Queued, Asks: backlog.Effects(issue, signals, now), Rework: backlog.Rework(issue, signals),
-			Decided: backlog.Decided(issue, signals), deps: backlog.OpenDeps(issue)}
+			Decided: backlog.Decided(issue, signals), deps: backlog.OpenDeps(issue),
+			Session: backlog.PlanSession(issue)}
+		if st.Session != "" && crewSession(m, st.Session) {
+			st.Crew = backlog.CrewReview(issue, signals).State
+		}
 		workerLook := workerLooks[issueKey(issue.Repo, issue.Number)]
 		// A look a worker does waits for the merge: it is nobody's yet.
 		afterMerge := false

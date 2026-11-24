@@ -1633,3 +1633,23 @@ func TestAHoldOnlyTheOwnerCanEndNeedsThem(t *testing.T) {
 		t.Fatalf("attention = %q", report.Attention)
 	}
 }
+
+func TestAnIssueSaysWhoSignedItsPlanAndWhereItsCrewReviewStands(t *testing.T) {
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b", Crew: true, Session: "box-app",
+		PeerList: []config.Peer{{Session: "mini-web"}}}}}
+	crew := issue(12, "## Plan\n**Session:** box-app", "## Hand-back\n**PR:** #41 (ready)")
+	crew.OpenPRs = map[int]backlog.PR{41: {}}
+	solo := issue(13, "## Plan\n**Session:** box-docs", "## Hand-back\n**PR:** #42 (ready)")
+	solo.OpenPRs = map[int]backlog.PR{42: {}}
+	r := Assess(m, signals, now, healthy(), []backlog.Issue{crew, solo})
+	byNumber := map[int]IssueStatus{}
+	for _, i := range r.Issues {
+		byNumber[i.Number] = i
+	}
+	if i := byNumber[12]; i.Session != "box-app" || i.Crew != backlog.CrewDue {
+		t.Errorf("crew issue = %+v, want box-app's, its crew review due", i)
+	}
+	if i := byNumber[13]; i.Session != "box-docs" || i.Crew != "" {
+		t.Errorf("issue outside the crew = %+v, want no crew review", i)
+	}
+}
