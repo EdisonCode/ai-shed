@@ -139,6 +139,9 @@ type Checkin struct {
 	// Rework is set when the issue was handed back to a worker because its
 	// pull request could not merge; it says why.
 	Rework string `json:"rework,omitempty"`
+	// Head is the head commit of the issue's pull request when it was sent
+	// back as rework, so the next hand-back can be checked against it.
+	Head string `json:"head,omitempty"`
 	// Look is set when the issue was handed over for an eye check on
 	// staging, not to be built.
 	Look bool `json:"look,omitempty"`
@@ -327,6 +330,18 @@ func ReworkSpent(checkins []Checkin, issue int, now time.Time) bool {
 		}
 	}
 	return count >= ReworkLimit
+}
+
+// LastRework returns the head commit the issue's pull request had when it
+// was last sent back as rework, and when; "" when it never was or no head
+// was recorded.
+func LastRework(checkins []Checkin, issue int) (head string, at time.Time) {
+	for _, c := range checkins {
+		if c.Sent && c.Issue == issue && c.Rework != "" {
+			head, at = c.Head, c.Time
+		}
+	}
+	return head, at
 }
 
 // BuildingInHand is IssueInHand for a worker that builds the issue: 0 when

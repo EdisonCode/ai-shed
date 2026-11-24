@@ -177,6 +177,10 @@ at a time, in this order:
      sent back for: the worker saw it, and sending it back changes nothing.
      The supervisor starts that pull request's CI again, once per head. A
      run that passes clears it; one that fails again is rework.
+   - *The fix was reported but not pushed.* A hand-back after rework that
+     leaves the pull request at the head it was sent back with, and does not
+     say that nothing needed to change, goes back again. A report is a
+     claim; the head is the check.
    - *The pull request is an unfinished draft.* The hand-back names a draft
      and says nothing about what it waits for. The worker is told to finish
      it, or to hand back with the reason.
