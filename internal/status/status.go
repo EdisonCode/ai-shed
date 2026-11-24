@@ -144,6 +144,12 @@ type IssueStatus struct {
 	// returns to one, and ReturnsIdle says that worker has no work now.
 	ReturnsTo   string `json:"returns_to,omitempty"`
 	ReturnsIdle bool   `json:"returns_idle,omitempty"`
+	// Goal is the issue's goal_labels label; empty for none.
+	Goal string `json:"goal,omitempty"`
+	// group is what its decisions are grouped under in the digest: its
+	// goal, else its overlap_labels label, else its repository. Empty when
+	// the fleet has no goal labels.
+	group string
 	// deps are the issues and pull requests it depends on that are open,
 	// for the digest's longest dependency chain.
 	deps []backlog.Dep
@@ -217,6 +223,9 @@ type Collector struct {
 	// Flow lists the issues opened and closed in a digest's window. Nil
 	// leaves the digest's flow out.
 	Flow FlowLister
+	// Goals counts the issues of each goal label, for a digest's goals.
+	// Nil leaves them out.
+	Goals GoalCounter
 	// Batches reads the open batches of a repository with merge_train:
 	// batch. Nil leaves them out.
 	Batches BatchReader
@@ -432,6 +441,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
 	report.unlisted = unlisted
 	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels, cfg.Repos, cfg.Signals, cfg.Covers)
+	markGoals(&report, issues, cfg.Supervisor.GoalLabels, cfg.Supervisor.OverlapLabels)
 	MarkSharedQueues(&report, m.Name, issues, cfg.QueuesOf)
 	MarkAgentHolds(&report)
 	if res != nil {

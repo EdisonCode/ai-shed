@@ -17,6 +17,8 @@ type FlowIssue struct {
 	ClosedAt time.Time
 	// Pulls are the open or merged pull requests that close the issue.
 	Pulls []int
+	// Labels are the names of its labels, for the goal it serves.
+	Labels []string
 }
 
 // flowLimit is how many issues of a window are read for one repository.
@@ -32,7 +34,7 @@ func (GH) IssuesSince(ctx context.Context, repo string, since time.Time) ([]Flow
 	var found [2][]FlowIssue
 	for n, filter := range []string{"created:>=" + day, "closed:>=" + day} {
 		out, err := gh(ctx, "issue", "list", "--repo", repo, "--state", "all", "--limit", fmt.Sprint(flowLimit),
-			"--search", filter, "--json", "number,body,createdAt,closedAt,closedByPullRequestsReferences")
+			"--search", filter, "--json", "number,body,createdAt,closedAt,closedByPullRequestsReferences,labels")
 		if err != nil {
 			return nil, err
 		}
@@ -65,6 +67,9 @@ func parseFlowIssues(data []byte) ([]FlowIssue, error) {
 		ClosedBy  []struct {
 			Number int `json:"number"`
 		} `json:"closedByPullRequestsReferences"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("gh issue list: parse output: %w", err)
@@ -77,6 +82,9 @@ func parseFlowIssues(data []byte) ([]FlowIssue, error) {
 		}
 		for _, pr := range r.ClosedBy {
 			i.Pulls = append(i.Pulls, pr.Number)
+		}
+		for _, l := range r.Labels {
+			i.Labels = append(i.Labels, l.Name)
 		}
 		issues = append(issues, i)
 	}

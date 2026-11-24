@@ -440,6 +440,11 @@ type Supervisor struct {
 	// same label of that prefix touch the same code: one is held while a
 	// worker has the other in hand, as for issues whose Paths overlap.
 	OverlapLabels string `yaml:"overlap_labels"`
+	// GoalLabels is a label prefix, such as "goal:". Issues with the same
+	// label of that prefix serve one goal: the digest shows each goal's
+	// progress, and within one priority rank the queue hands out an issue
+	// of the goal nearest done first. Empty for no goals.
+	GoalLabels string `yaml:"goal_labels"`
 	// AffinityTTL is how long work stays reserved for the worker that has
 	// its code open: rework for the worker that built it, and an issue that
 	// overlaps one a worker has in hand for that worker. A reservation lapses

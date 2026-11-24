@@ -188,6 +188,11 @@ shrank (its `Flow` lines: lead with the net), how the eye checks went and
 what waits on the owner, oldest first. Use it for the report at the
 end of a session or the start of a day, in place of writing one by hand.
 
+Where the fleet file sets `goal_labels`, the digest's `Goals` lines say how
+far each goal is from done and what holds its next slice. Report by goal,
+and put each issue you file for a goal under its goal label: within a
+priority rank, the queue hands out the goal nearest done first.
+
 `PRs no queue covers` (in the digest and in `shed status`) lists open pull
 requests that no worker will be sent back to: their issue is in no machine's
 queue, or they close no issue. Tell the owner, and offer to fix the cause:
