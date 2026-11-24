@@ -189,6 +189,9 @@ type Supervisor struct {
 	// a queue of the fleet, and whether labels can tell. A hold whose
 	// blocker no queue covers says so. Nil leaves that out.
 	Covers func(repo string, labels []string) (covered, known bool)
+	// Filed lists the issues workers opened, for issue_quota. Nil holds
+	// none.
+	Filed FiledLister
 	// LookSources are the queues of other machines whose eye checks this
 	// machine's workers do: those machines have no worker that does them.
 	LookSources []config.IssueSource
@@ -250,10 +253,16 @@ type Supervisor struct {
 	// ciRestarted holds the pull request heads whose CI was started again,
 	// as repo#pr@sha: each is started once.
 	ciRestarted map[string]bool
+	// reserved holds work kept for the worker that has its code open, by
+	// repo#number.
+	reserved map[string]reservation
 	// closeChecked holds when GitHub was last asked whether a finished
 	// issue may close, and closed the issues shed closed.
 	closeChecked map[string]time.Time
 	closed       map[string]bool
+	// filed holds, per repository with issue_quota, which issues workers
+	// opened past their day's quota.
+	filed map[string]filedState
 	// unparked holds the parked drafts this agent marked ready, by
 	// "owner/repo#pr": the issue lists may show them as drafts a while yet.
 	unparked map[string]bool
@@ -1042,7 +1051,8 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	// already empty.
 	// A verification starts from nothing: it judges the work on its own
 	// evidence, not on a conversation that built something else.
-	fresh := newIssue && ((w.FreshPerIssue && st.worked) || item.Verify != "")
+	// Its own follow-on keeps the context that knows its code.
+	fresh := newIssue && ((w.FreshPerIssue && st.worked && !item.affine) || item.Verify != "")
 	coldClear := c.Cold && s.Settings.ClearWhenCold()
 	big := s.contextOver(w, st, idle)
 	cleared := switchModel || fresh || coldClear || big > 0
@@ -1664,6 +1674,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	// beside it can be acted on, held and paced work included. Then they
 	// apply to the reserve, whose priority work the pace lets through.
 	elsewhere := s.inFlightElsewhere(ctx, w)
+	s.refreshFiled(ctx)
 	s.applyHolds(w, items, open, elsewhere, checkins)
 	if _, err := writeRoster(w, rosterText(w, open, elsewhere, checkins)); err != nil {
 		// The roster helps a worker message the right peer; its queue
@@ -2340,6 +2351,7 @@ func (s *Supervisor) remainingBrief(b *strings.Builder) {
 	}
 	fmt.Fprintf(b, "When an issue takes more than one pull request, list what is still to do after `%s` in each hand-back but the last. A hand-back whose pull request merges and that lists nothing still to do is the issue's last: the issue is not handed out again.\n", review.Remaining)
 	fmt.Fprintf(b, "When you find that merged work of another issue broke something, write `%s #<number>` in your comment or in the issue you open, so that issue is not closed as done.\n", backlog.RegressionPhrase)
+	b.WriteString(s.filingRule(review.Remaining))
 	fmt.Fprintf(b, "A step only the owner can do, such as one on production, goes after `%s` in your hand-back. A hand-back with no open pull request, nothing still to do and no question is not handed out again until someone writes on the issue: it waits on the owner.\n", backlog.OwnerActPhrase)
 	if s.Settings.Stack {
 		b.WriteString("While a pull request of yours waits for review and its hand-back lists what is still to do, the supervisor may send you on with the issue. Build the rest on a new branch from that pull request's branch, open the next pull request against that branch, and hand back as before.\n")
@@ -2414,13 +2426,13 @@ How to do one:
 - Read the issue's last hand-back. What to look at, and what a pass looks like, is after `+"`%s`"+`.
 - Look on staging, in a browser. Change no product code.
 - On staging, do anything the orders above do not forbid.
-- The check needs a state staging does not have (a customer, an order, a setting): make it first, by acts on staging or with the repository's tool for staging states. When that tool has no way to make it, add one in a small pull request, run it, then look. "Change no product code" does not cover a staging-state scenario.
+- The check needs a state staging does not have (a customer, an order, a setting): make it first, by acts on staging or with the repository's tool for staging states. "Change no product code" does not cover running a staging-state scenario. When neither can make it, do not build the seed yourself: post a comment on the issue that starts with `+"`%s: %s:`"+` and names the state staging lacks. The look goes back to its builder as rework, to add the seed.
 - Look at the viewport the check names. Read the size your browser really has (`+"`window.innerWidth`"+` by `+"`window.innerHeight`"+`); do not take it from what you asked for. Whatever you post, say that size in it, as in `+"`viewport 1440x900`"+`.
 - You cannot get the size the check names: if what is to be judged does not depend on the size, look at the size you have. If it does, you are blocked, and your comment says the size you had and the size that was asked.
 - It passes: post a comment on the issue that starts with `+"`%s:`"+` and says what you saw.
 - It fails: reopen the issue (`+"`gh issue reopen`"+`) and post a comment headed `+"`%s`"+`. Write `+"`%s:`"+` with what you saw against what was expected (the screen and the viewport). Then, for each failure, decide the fix by the owner's defaults and record it after `+"`%s`"+`. Then write `+"`%s`"+` as `+"`none`"+`, unless a fix touches this ground: %s. That one is the question for the owner, with your recommendation. A failed look goes back to a worker as rework. Do not fix it yourself in this session.
-- You could not do it (staging is down, the description is too vague to judge, the check needs an act the orders forbid): you are blocked. Missing data and a sign-in are not reasons to stop: make the data, and sign in as the orders say or with a user you make. Post a comment on the issue that starts with `+"`%s:`"+` and says, on that line, what stopped you and what the owner must do about it. Post nothing that says checked or failed. Then say so here and stop: the check is the owner's to clear, and the supervisor gives you your next item. A check you could not do has not passed.
-`, eyes.Ask, eyes.AnsweredBy, eyes.HandBack, eyes.FailedBy, decision.Decided, decision.Ask, decision.Risky, eyes.BlockedBy)
+- You could not do it (staging is down, the description is too vague to judge, the check needs an act the orders forbid): you are blocked. Data you can make and a sign-in are not reasons to stop: make the data, and sign in as the orders say or with a user you make. Post a comment on the issue that starts with `+"`%s:`"+` and says, on that line, what stopped you and what the owner must do about it. Post nothing that says checked or failed. Then say so here and stop: the check is the owner's to clear, and the supervisor gives you your next item. A check you could not do has not passed.
+`, eyes.Ask, eyes.BlockedBy, backlog.NoDataNote, eyes.AnsweredBy, eyes.HandBack, eyes.FailedBy, decision.Decided, decision.Ask, decision.Risky, eyes.BlockedBy)
 }
 
 // lookModel is the model a look runs on: the one its pull request's risk
@@ -2447,6 +2459,25 @@ func (s *Supervisor) signal(name string) config.Signal {
 		}
 	}
 	return config.Signal{}
+}
+
+// filingRule tells a worker when a new issue is worth opening. Splitting
+// ends the worker's issue now and leaves the cost to the chain it makes:
+// each link a full pull request, checks and merge.
+func (s *Supervisor) filingRule(remaining string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Do small work next to your issue in the same pull request, or list it after `%s` on the same issue. The rest of your own issue's scope is never a new issue. Open a new issue only for a large discovery or follow-up that is truly separate from your issue's goal, and start its body with `%s #<your issue>`.", remaining, backlog.FoundWhilePhrase)
+	var quotas []string
+	for _, r := range s.Repos {
+		if r.IssueQuota > 0 {
+			quotas = append(quotas, fmt.Sprintf("%d a day in %s", r.IssueQuota, r.Name))
+		}
+	}
+	if len(quotas) > 0 {
+		fmt.Fprintf(&b, " Workers may open %s, all workers together; past that an issue waits for the owner. Do not spend the quota on what fits in your issue.", strings.Join(quotas, ", "))
+	}
+	b.WriteString(" When your issue is too big for one pull request, do not split it: hand back with `Not ready: too big:` and the slices you see, and the owner shapes it.\n")
+	return b.String()
 }
 
 // scope is what the worker must stay inside: its brief, the owner's standing

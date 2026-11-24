@@ -119,6 +119,13 @@ type QueueItem struct {
 	// The item is not held: each machine builds in its own checkout, and the
 	// second pull request rebases after the first merges.
 	Elsewhere string
+	// Reserved says which other worker this item waits for: the worker that
+	// built it, for rework, or the one whose work in hand it follows. It is
+	// not this worker's to take while the reservation lasts.
+	Reserved string
+	// affine is set when the item is this worker's own follow-on: rework of
+	// what it built, or work reserved for it. Its context is kept.
+	affine bool
 	// overlaps is set on rework that touches the same code as an issue
 	// another worker has in hand: it is not held, but waits on that one.
 	overlaps string
@@ -129,6 +136,9 @@ type QueueItem struct {
 // Workable reports whether a worker can act on the item: it needs a worker
 // again, it is an eye check, or it does not wait on the owner.
 func (q QueueItem) Workable() bool {
+	if q.Reserved != "" {
+		return false
+	}
 	return q.Rework != "" || q.Look != "" || q.Verify != "" || (len(q.Waiting) == 0 && q.Paced == "" && q.Blocked == "")
 }
 
@@ -146,6 +156,8 @@ func (q QueueItem) hold() string {
 	switch {
 	case q.actionable():
 		return ""
+	case q.Reserved != "":
+		return "held: " + q.Reserved
 	case q.overlaps != "":
 		return "rework that waits: it " + q.overlaps
 	case len(q.Waiting) > 0:
@@ -298,6 +310,9 @@ func Prompt(in ReviewInput) string {
 		}
 		if q.Blocked != "" {
 			fmt.Fprintf(&b, " [held: %s]", q.Blocked)
+		}
+		if q.Reserved != "" {
+			fmt.Fprintf(&b, " [held: %s]", q.Reserved)
 		}
 		if q.StackOn != "" {
 			fmt.Fprintf(&b, " [stack on: %s; build this on a new branch from it]", q.StackOn)

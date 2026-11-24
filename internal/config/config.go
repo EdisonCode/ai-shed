@@ -154,6 +154,11 @@ type Repo struct {
 	// the limit: a worker opens its pull request as a draft and parks it,
 	// and the agent marks the oldest parked draft ready when there is room.
 	MaxOpenPRsCount string `yaml:"max_open_prs_count"`
+	// IssueQuota is how many issues workers may open in the repository in
+	// a day, fleet-wide: the ones that carry the "Found while building #N"
+	// marker. Past it, such an issue is held until the owner admits it with
+	// "Ready now". 0, the default, holds nothing.
+	IssueQuota int `yaml:"issue_quota"`
 	// CloseFinished lets shed close an issue whose work is done: every pull
 	// request merged, verified where the repository verifies, its eye check
 	// passed, the checks on the merge commit green, and no regression
@@ -440,6 +445,12 @@ type Supervisor struct {
 	// progress, and within one priority rank the queue hands out an issue
 	// of the goal nearest done first. Empty for no goals.
 	GoalLabels string `yaml:"goal_labels"`
+	// AffinityTTL is how long work stays reserved for the worker that has
+	// its code open: rework for the worker that built it, and an issue that
+	// overlaps one a worker has in hand for that worker. A reservation lapses
+	// sooner when that worker is stuck, limited or the machine is paused.
+	// 2h by default; "0s" turns the routing off.
+	AffinityTTL string `yaml:"affinity_ttl"`
 	// MessageLimit is how many messages a worker may send to one other
 	// session within an hour before the supervisor tells it to stop: two
 	// sessions that answer each other can go on without end, and every
@@ -1240,6 +1251,11 @@ func (c *Config) validate() error {
 			fail("supervisor: %s %q is not a positive duration such as 1h", name, value)
 		}
 	}
+	if v := c.Supervisor.AffinityTTL; v != "" {
+		if d, err := time.ParseDuration(v); err != nil || d < 0 {
+			fail("supervisor: affinity_ttl %q is not a duration such as 2h", v)
+		}
+	}
 	if w := c.Supervisor.WhenCold; w != "" && w != ColdClear && w != ColdResume {
 		fail("supervisor: when_cold %q must be %s or %s", w, ColdClear, ColdResume)
 	}
@@ -1348,8 +1364,11 @@ func (c *Config) validate() error {
 		switch {
 		case deploys && r.Staging.Commit == "":
 			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
-		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0 && !r.CloseFinished:
-			fail("%s: give it staging, gates, verify, max_open_prs or close_finished, or leave it out", where)
+		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0 && !r.CloseFinished && r.IssueQuota == 0:
+			fail("%s: give it staging, gates, verify, max_open_prs, close_finished or issue_quota, or leave it out", where)
+		}
+		if r.IssueQuota < 0 {
+			fail("%s: issue_quota %d must not be negative", where, r.IssueQuota)
 		}
 		if r.CloseAfter != "" {
 			if d, err := time.ParseDuration(r.CloseAfter); err != nil || d < 0 {
@@ -1663,6 +1682,16 @@ func (s Supervisor) CacheTTLOrDefault() time.Duration {
 
 func (s Supervisor) ScopeEveryOrDefault() time.Duration {
 	return durationOr(s.ScopeEvery, DefaultScopeEvery)
+}
+
+// DefaultAffinityTTL is how long work stays reserved for the worker that has
+// its code open.
+const DefaultAffinityTTL = 2 * time.Hour
+
+// AffinityTTLOrDefault is how long work stays reserved for the worker that
+// has its code open; 0 when the routing is off.
+func (s Supervisor) AffinityTTLOrDefault() time.Duration {
+	return durationOr(s.AffinityTTL, DefaultAffinityTTL)
 }
 
 // OwnWaitMaxOrDefault is how long an idle worker may wait on work of its

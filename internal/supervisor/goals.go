@@ -59,12 +59,13 @@ func (s *Supervisor) goalDone(ctx context.Context, repo, goal string) float64 {
 		return c.done
 	}
 	closed, total, err := s.Goals.GoalCounts(ctx, repo, goal)
-	if err != nil {
-		s.Logf("goal %s of %s: %v", goal, repo, err)
-		return 0
-	}
 	c := goalCount{at: s.Now()}
-	if total > 0 {
+	switch {
+	case err != nil:
+		// Kept as no goal until the next read, so a failing count is not
+		// asked and logged on every check-in.
+		s.Logf("goal %s of %s: %v", goal, repo, err)
+	case total > 0:
 		c.done = float64(closed) / float64(total)
 	}
 	if s.goals.shares == nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
@@ -51,12 +52,17 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 				if other, ok := byNumber[number]; ok {
 					if why := backlog.Overlap(issue, other, s.Settings.OverlapLabels); why != "" {
 						item.overlaps = fmt.Sprintf("overlaps #%d, which %s has in hand: %s", number, others[number], why)
+						s.reserve(item, others[number], fmt.Sprintf("reserved for %s: it follows #%d, which %s built", others[number], number, others[number]))
 						break
 					}
 				}
 			}
 		}
 		if !ok || item.Look != "" || item.Rework != "" || item.Stack != "" || item.Number == inHand {
+			continue
+		}
+		if hold := s.quotaHold(issue); hold != "" && !item.Bumped {
+			item.Blocked = hold
 			continue
 		}
 		if hold, _ := backlog.FollowHold(issue, listed, s.Signals, s.Covers); hold != "" {
@@ -81,6 +87,7 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 			}
 			if why := backlog.Overlap(issue, other, s.Settings.OverlapLabels); why != "" {
 				item.Blocked = fmt.Sprintf("overlaps #%d, which %s has in hand: %s", number, others[number], why)
+				s.reserve(item, others[number], fmt.Sprintf("reserved for %s: it follows #%d, which %s built", others[number], number, others[number]))
 				break
 			}
 		}
@@ -96,6 +103,7 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 			}
 		}
 	}
+	s.applyAffinity(w, items, inHand, checkins)
 }
 
 // prLimit is the repository's limit of open pull requests, 0 for none, and
@@ -205,4 +213,127 @@ func (s *Supervisor) elsewhereNote(w config.Worker, other backlog.Issue, why str
 		note += fmt.Sprintf("; tell your peers there (%s) what you change that #%d builds on", strings.Join(peers, ", "), other.Number)
 	}
 	return note + fmt.Sprintf("; rebase on the default branch after #%d's pull request merges", other.Number)
+}
+
+// FiledLister lists the issues workers opened in a repository since a time.
+type FiledLister interface {
+	FiledSince(ctx context.Context, repo string, since time.Time) ([]backlog.Filed, error)
+}
+
+// filedRecheck is how long the issues workers opened are kept before they
+// are read again, and filedWindow how far back they are read: an issue
+// held over its day's quota stays held until the owner admits it, so its
+// day must stay in view.
+const (
+	filedRecheck = 10 * time.Minute
+	filedWindow  = 7 * 24 * time.Hour
+)
+
+// filedState is what was last read of one repository's issues opened by
+// workers: which are past their day's quota.
+type filedState struct {
+	at   time.Time
+	over map[int]bool
+}
+
+// refreshFiled reads again, at most every filedRecheck, which issues workers
+// opened past their day's quota in each repository with issue_quota. A read
+// that fails keeps what was read before and is logged.
+func (s *Supervisor) refreshFiled(ctx context.Context) {
+	if s.Filed == nil {
+		return
+	}
+	now := s.Now()
+	for _, repo := range s.Repos {
+		if repo.IssueQuota <= 0 || now.Sub(s.filed[repo.Name].at) < filedRecheck {
+			continue
+		}
+		if s.filed == nil {
+			s.filed = map[string]filedState{}
+		}
+		filed, err := s.Filed.FiledSince(ctx, repo.Name, now.Add(-filedWindow))
+		if err != nil {
+			s.Logf("read the issues workers opened in %s: %v", repo.Name, err)
+			continue
+		}
+		s.filed[repo.Name] = filedState{at: now, over: backlog.OverQuota(filed, repo.IssueQuota, now.Location())}
+	}
+}
+
+// quotaHold says why an issue a worker opened is held: it came past its
+// day's quota, and the owner has not admitted it. "" when it is not held.
+func (s *Supervisor) quotaHold(issue backlog.Issue) string {
+	if !s.filed[issue.Repo].over[issue.Number] || backlog.Admitted(issue, s.Signals) {
+		return ""
+	}
+	quota := 0
+	if repo, ok := s.repoConfig(issue.Repo); ok {
+		quota = repo.IssueQuota
+	}
+	return fmt.Sprintf("over the quota of %d issue(s) workers open a day: it waits for triage; write `Ready now` on it to admit it", quota)
+}
+
+// reservation is work kept for the worker that has its code open.
+type reservation struct {
+	worker string
+	why    string
+	since  time.Time
+}
+
+// reserve keeps the item for a worker, from now on unless it already was.
+func (s *Supervisor) reserve(item *QueueItem, worker, why string) {
+	if s.Settings.AffinityTTLOrDefault() <= 0 {
+		return
+	}
+	key := fmt.Sprintf("%s#%d", item.Repo, item.Number)
+	if r, ok := s.reserved[key]; ok && r.worker == worker {
+		return
+	}
+	if s.reserved == nil {
+		s.reserved = map[string]reservation{}
+	}
+	s.reserved[key] = reservation{worker: worker, why: why, since: s.Now()}
+}
+
+// applyAffinity routes work to the worker that has its code open: rework
+// waits for the worker that built it, and an issue that followed work in a
+// worker's hands stays reserved for that worker. A reservation changes who
+// takes the work, not its place in the queue. It lapses after affinity_ttl,
+// or when that worker is stuck or limited, or the machine is paused: work
+// must not hang on a worker that cannot take it.
+func (s *Supervisor) applyAffinity(w config.Worker, items []QueueItem, inHand int, checkins []runlog.Checkin) {
+	ttl := s.Settings.AffinityTTLOrDefault()
+	if ttl <= 0 {
+		return
+	}
+	latest := runlog.LatestCheckins(checkins)
+	available := func(worker string) bool {
+		if s.Machine.TakesWork(worker) != nil || s.paused() {
+			return false
+		}
+		v := latest[worker].Verdict
+		return v != runlog.VerdictStuck && v != runlog.VerdictLimited
+	}
+	for n := range items {
+		item := &items[n]
+		if item.Number == inHand || item.Look != "" || item.Verify != "" || item.Bumped || item.Blocked != "" || len(item.Waiting) > 0 {
+			continue
+		}
+		builder := ""
+		if item.Rework != "" {
+			builder = runlog.Builder(checkins, item.Number)
+			if builder != "" && builder != w.Name && s.Machine.TakesWork(builder) == nil {
+				s.reserve(item, builder, fmt.Sprintf("rework for %s, which built it and has its context", builder))
+			}
+		}
+		key := fmt.Sprintf("%s#%d", item.Repo, item.Number)
+		r, ok := s.reserved[key]
+		live := ok && s.Now().Sub(r.since) < ttl && available(r.worker)
+		switch {
+		case live && r.worker != w.Name:
+			item.Reserved = r.why
+		case live, builder == w.Name:
+			item.affine = true
+		}
+	}
 }

@@ -162,6 +162,21 @@ func TestAVerifierFailsAnEyeCheckAskTooVagueToCheck(t *testing.T) {
 	}
 }
 
+func TestAVerifierFailsAnEyeCheckAskWhoseStateNothingCanMake(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	withVerifier(t, f)
+	f.tick(0)
+	brief, _ := os.ReadFile(filepath.Join(f.Machine.Workers[1].Dir, BriefFile))
+	for _, want := range []string{
+		"the pull request must make it: a seed it adds, or the\n  repository's tool for staging states, with how to run it.",
+		"A state that\n  nothing in the pull request or that tool can make is a finding: name the\n  state, and the verification fails.",
+	} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+}
+
 func TestAVerifierOfAFleetWithNoEyeCheckAskJudgesNoAsk(t *testing.T) {
 	f := newFixture(t, config.Supervisor{})
 	withVerifier(t, f)
