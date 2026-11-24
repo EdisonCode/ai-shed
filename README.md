@@ -237,6 +237,23 @@ The supervisor holds both kinds back, and hands out what can go ahead.
   and `shed status` says so: `depends on #12, which is not an issue or pull
   request`.
   A worker that finds a dependency writes the line itself and hands back.
+  The latest line about a number wins: `No longer depends on #12` in a
+  later comment ends the hold an earlier line made. The phrase inside a code
+  span, a fenced block or a `>` quote holds nothing, so a comment that
+  explains the rule does not make a hold. The hold names where it came from:
+  `waits for #12 to close (named by my-bot on Nov 16)`, `(named in the issue
+  body)` or `(GitHub's blocked-by)`, so a stale line can be found without a
+  search.
+- **Holds only you can end.** A hold reads as handled, so shed follows it to
+  the other end of the wait. When nothing a worker does will end it, the
+  hold says so, and `shed status` lists it with a `!` line for you:
+  - `waits for #12, which waits on you (decision)`: the blocker is queued
+    on the same machine and waits on you;
+  - `waits for #12, which no queue covers`: the blocker is an issue no queue
+    of the fleet lists, so no worker will close it. This is said only where
+    every queue of the repository is a label; a queue that is a search
+    could hold any issue;
+  - `#11 and #12 wait for each other`: two issues each hold the other.
 - **With `stack: true`**, an issue with one open dependency whose pull
   request is ready and waits for review goes ahead: the worker builds it on
   a new branch from that pull request's branch and opens its pull request
@@ -1718,7 +1735,26 @@ A hand-back with no pull request, such as a plan for you to rule on, writes
 `**PR:** none`: there is nothing to review, so the review signal stays closed.
 Your `Owner ruling` then closes the decision and the issue is in the queue
 again like any other. It is not rework, which needs an open pull request, so
-it takes its turn by the queue order. A `**PR:**` line that says anything else
+it takes its turn by the queue order.
+
+A hand-back with no open pull request, nothing after `Still to do:` and no
+question leaves no step for a worker: handed out again, the worker would
+find nothing to do and hand back again. So it is not handed out again until
+something changes on the issue: a comment that is not a hand-back, an edit
+of the body, or a label. Until then it waits on you as `no worker step`, with
+what the hand-back wrote after `Owner act:`, a step only you can do, such as
+one on production:
+
+```
+**PR:** none
+**Decisions needed:** none
+**Owner act:** run the backfill on production
+```
+
+It does not count as work a worker can act on, so the reserve is offered
+beside it.
+
+A `**PR:**` line that says anything else
 without a number opens a review that no merge can close; `shed status` and
 `shed digest` show it as `review (no pull request named)`.
 
