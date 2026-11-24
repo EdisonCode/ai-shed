@@ -187,6 +187,14 @@ issue that leans on another thread stalls a worker: paste what it needs.
 went and what waits on the owner, oldest first. Use it for the report at the
 end of a session or the start of a day, in place of writing one by hand.
 
+`PRs no queue covers` (in the digest and in `shed status`) lists open pull
+requests that no worker will be sent back to: their issue is in no machine's
+queue, or they close no issue. Tell the owner, and offer to fix the cause:
+put a machine label on the issue, or add `Closes #N` to the pull request.
+Do not push to it yourself. `Drafts with no commit for 48h` shows each quiet
+draft with what it waits for; `no hold given`, or a hold that has ended, is
+for the owner to decide.
+
 ## Write or change a brief
 
 A worker's `brief` in the fleet file says what the worker is for and what it
