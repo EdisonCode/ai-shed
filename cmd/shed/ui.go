@@ -32,8 +32,17 @@ func cmdUI(args []string) int {
 	if *every < 5*time.Second {
 		return fail(fmt.Errorf("-every %s is too often: each read is one ssh round trip per machine and a GitHub search per queue; use 5s or more", *every))
 	}
-	if !ui.Loopback(*listen) {
-		fmt.Fprintf(os.Stderr, "shed observe: %s is not loopback: anyone who can reach it sees the fleet, its issues and its workers' screens\n", *listen)
+	// Answers post as the owner, so the page offers them only on loopback,
+	// with a token of this run's.
+	var commenter ui.Commenter
+	token := ""
+	if ui.Loopback(*listen) {
+		commenter = backlog.GH{}
+		if token, err = ui.NewToken(); err != nil {
+			return fail(err)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "shed observe: %s is not loopback: anyone who can reach it sees the fleet, its issues and its workers' screens; answers from the page are off\n", *listen)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -55,6 +64,8 @@ func cmdUI(args []string) int {
 			return deck.DigestFrom(ctx, cfg, looks.GH{}, r, now.Add(-24*time.Hour), now)
 		},
 		DeckEvery: *deckEvery,
+		Commenter: commenter,
+		Token:     token,
 	}
 	go srv.Run(ctx)
 

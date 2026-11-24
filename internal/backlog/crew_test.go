@@ -69,3 +69,19 @@ func TestWithCrewLowALowCrewPassIsTheVerification(t *testing.T) {
 		t.Fatalf("a high crew pass still needs the verifier: %+v", v)
 	}
 }
+
+func TestAnAskCarriesWhatTheWorkerWroteUnderIt(t *testing.T) {
+	i := Issue{Number: 5, Comments: []Comment{{Body: "## Hand-back\n**PR:** none\n**Decisions needed:** Which currency is the default?\n- Recommend: USD, since every account bills in it.\n**Decided without you:** none"}}}
+	asks := Asks(i, config.DefaultSignals())
+	if len(asks) != 1 || asks[0].Text != "Which currency is the default?\n- Recommend: USD, since every account bills in it." {
+		t.Fatalf("asks = %+v", asks)
+	}
+}
+
+func TestOnlyADependencyItsTextNamesCanBeDropped(t *testing.T) {
+	i := Issue{Repo: "org/app", Number: 5, Body: "Depends on #3", Deps: []Dep{{Repo: "org/app", Number: 3, Open: true}, {Repo: "org/app", Number: 4, Open: true}}}
+	got := DroppableDeps(i)
+	if len(got) != 1 || got[0].Number != 3 {
+		t.Fatalf("droppable = %+v, want #3 only: #4 is GitHub's blocked-by", got)
+	}
+}
