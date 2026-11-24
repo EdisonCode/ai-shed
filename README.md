@@ -436,14 +436,17 @@ It is a view, not a new role:
   with one `gh issue list` of its label, at most once an hour per machine.
   An issue with no goal counts as a goal at zero.
 - **The digest** shows each goal: closed of all its issues, net opened
-  minus closed in the window, and what holds its next slice: the first of
-  its open queued issues a worker could take, or why the first one nobody
-  has in hand waits.
+  minus closed in the window, when it will be done, and what holds its
+  next slice: the first of its open queued issues a worker could take, or
+  why the first one nobody has in hand waits. When it will be done comes
+  from the last seven days: issues closed less issues opened, per day, into
+  the open count. A goal that opens issues as fast as it closes them is
+  *not converging*, and has no date.
 
   ```
   Goals: 2
-    my-org/my-app  goal:export   7 of 10 closed  net -1  next #14 is held: waits for #12
-    my-org/my-app  goal:refunds  0 of 4 closed   net +2  next #21 is workable
+    my-org/my-app  goal:export   7 of 10 closed  net -1  done about Dec 1 at 1.5 a day                    next #14 is held: waits for #12
+    my-org/my-app  goal:refunds  0 of 4 closed   net +2  not converging: 4 opened, 0 closed in 7 days  next #21 is workable
   ```
 
 - **Decided without you** is grouped by goal, then by `overlap_labels`

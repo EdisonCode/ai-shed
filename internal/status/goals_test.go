@@ -12,10 +12,27 @@ import (
 	"github.com/edisoncode/ai-shed/internal/looks"
 )
 
+// fakeGoalCounts gives each goal label closed of total issues, the closed
+// ones closed a month ago and every one opened before that.
 type fakeGoalCounts map[string][2]int
 
-func (f fakeGoalCounts) GoalCounts(_ context.Context, _, label string) (int, int, error) {
-	return f[label][0], f[label][1], nil
+func (f fakeGoalCounts) GoalIssues(_ context.Context, _, label string) ([]backlog.GoalIssue, error) {
+	var issues []backlog.GoalIssue
+	for n := range f[label][1] {
+		i := backlog.GoalIssue{CreatedAt: now.Add(-60 * 24 * time.Hour)}
+		if n < f[label][0] {
+			i.Closed, i.ClosedAt = true, now.Add(-30*24*time.Hour)
+		}
+		issues = append(issues, i)
+	}
+	return issues, nil
+}
+
+// fakeGoalIssues gives each goal label its issues.
+type fakeGoalIssues map[string][]backlog.GoalIssue
+
+func (f fakeGoalIssues) GoalIssues(_ context.Context, _, label string) ([]backlog.GoalIssue, error) {
+	return f[label], nil
 }
 
 func withLabels(i backlog.Issue, labels ...string) backlog.Issue {
@@ -54,9 +71,31 @@ func TestTheDigestShowsEachGoalClosedOfTotalNetAndWhatHoldsItsNextSlice(t *testi
 	RenderDigest(&out, d)
 	wantLines(t, out.String(),
 		"Goals: 2",
-		"org/app  goal:export   7 of 10 closed  net -1  next #14 is held: waits for #12",
-		"org/app  goal:refunds  0 of 4 closed   net +0  next #21 is workable",
+		"org/app  goal:export   7 of 10 closed  net -1  not converging: 0 opened, 0 closed in 7 days  next #14 is held: waits for #12",
+		"org/app  goal:refunds  0 of 4 closed   net +0  not converging: 0 opened, 0 closed in 7 days  next #21 is workable",
 	)
+}
+
+func TestTheDigestShowsWhenEachGoalWillBeDoneAtItsPace(t *testing.T) {
+	day := 24 * time.Hour
+	var issues []backlog.GoalIssue
+	for range 7 {
+		issues = append(issues, backlog.GoalIssue{Closed: true, CreatedAt: now.Add(-30 * day), ClosedAt: now.Add(-day)})
+	}
+	for range 3 {
+		issues = append(issues, backlog.GoalIssue{CreatedAt: now.Add(-30 * day)})
+	}
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{withLabels(issue(21), "goal:export")}},
+		Goals: fakeGoalIssues{"goal:export": issues}}
+
+	d := c.Digest(context.Background(), goalsConfig(), &fakeMerged{}, now.Add(-24*time.Hour), now)
+
+	if g := d.Goals[0]; g.Closed != 7 || g.Total != 10 || g.Pace.PerDay != 1 || !g.Pace.ETA.Equal(now.Add(3*day)) {
+		t.Fatalf("goal = %+v", g)
+	}
+	var out bytes.Buffer
+	RenderDigest(&out, d)
+	wantLines(t, out.String(), "org/app  goal:export  7 of 10 closed  net +0  done about Oct 7 at 1.0 a day  next #21 is workable")
 }
 
 func TestDecisionsWithoutTheOwnerAreGroupedByGoalThenAreaThenRepository(t *testing.T) {

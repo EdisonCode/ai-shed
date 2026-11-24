@@ -17,7 +17,7 @@ import (
 // GoalCounter counts the issues of a repository with a goal label: how many
 // are closed, of how many in all.
 type GoalCounter interface {
-	GoalCounts(ctx context.Context, repo, label string) (closed, total int, err error)
+	GoalIssues(ctx context.Context, repo, label string) ([]backlog.GoalIssue, error)
 }
 
 // GoalProgress is how far one goal is from done.
@@ -33,6 +33,9 @@ type GoalProgress struct {
 	// Next says what holds the goal's next slice: the first of its open
 	// queued issues that a worker could take, or why none can be taken.
 	Next string `json:"next"`
+	// Pace is how fast the goal moves over the last week, and when it will
+	// be done at that rate.
+	Pace backlog.Pace `json:"pace"`
 	// Error says why the goal could not be counted.
 	Error string `json:"error,omitempty"`
 }
@@ -76,12 +79,13 @@ func (c Collector) collectGoals(ctx context.Context, cfg *config.Config, d *Dige
 	goals := slices.SortedFunc(maps.Keys(byGoal), func(a, b [2]string) int { return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1])) })
 	for _, g := range goals {
 		p := GoalProgress{Repo: g[0], Label: g[1], Next: nextSlice(byGoal[g])}
-		closed, total, err := c.Goals.GoalCounts(ctx, g[0], g[1])
+		issues, err := c.Goals.GoalIssues(ctx, g[0], g[1])
 		if err != nil {
 			p.Error = err.Error()
 			d.Problems = append(d.Problems, err.Error())
 		}
-		p.Closed, p.Total = closed, total
+		p.Pace = backlog.GoalPace(issues, d.Now)
+		p.Total, p.Closed = len(issues), len(issues)-p.Pace.Open
 		for _, i := range d.flowIssues[g[0]] {
 			if !slices.Contains(i.Labels, g[1]) {
 				continue
@@ -134,11 +138,11 @@ func renderGoals(w io.Writer, goals []GoalProgress) {
 	fmt.Fprintf(w, "\nGoals: %d\n", len(goals))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, g := range goals {
-		count := fmt.Sprintf("%d of %d closed", g.Closed, g.Total)
+		count, pace := fmt.Sprintf("%d of %d closed", g.Closed, g.Total), g.Pace.Words()
 		if g.Error != "" {
-			count = "cannot be counted"
+			count, pace = "cannot be counted", ""
 		}
-		fmt.Fprintf(tw, "  %s\t%s\t%s\tnet %+d\t%s\n", g.Repo, g.Label, count, g.Net, g.Next)
+		fmt.Fprintf(tw, "  %s\t%s\t%s\tnet %+d\t%s\t%s\n", g.Repo, g.Label, count, g.Net, pace, g.Next)
 	}
 	tw.Flush()
 }
