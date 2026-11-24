@@ -122,6 +122,8 @@ type QueueItem struct {
 	// overlaps is set on rework that touches the same code as an issue
 	// another worker has in hand: it is not held, but waits on that one.
 	overlaps string
+	// goalDone is the closed share of the issue's goal; 0 for none.
+	goalDone float64
 }
 
 // Workable reports whether a worker can act on the item: it needs a worker

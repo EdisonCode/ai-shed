@@ -64,6 +64,11 @@ type Digest struct {
 	Releases map[string]int `json:"releases,omitempty"`
 	// Flow is, by repository, whether its backlog shrank in the window.
 	Flow map[string]RepoFlow `json:"flow,omitempty"`
+	// Goals is each goal label's progress, for goal_labels.
+	Goals []GoalProgress `json:"goals,omitempty"`
+	// flowIssues are, by repository, the issues opened or closed in the
+	// window, as the flow read them.
+	flowIssues map[string][]looks.FlowIssue
 	// Problems lists what could not be read.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -132,6 +137,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 		d.Merged = append(d.Merged, rm)
 	}
 	c.collectFlow(ctx, cfg, &d)
+	c.collectGoals(ctx, cfg, &d)
 	c.collectStages(ctx, &d)
 	c.collectEscapes(ctx, cfg, &d)
 	c.collectLessons(ctx, cfg, &d)
@@ -166,6 +172,7 @@ func RenderDigest(w io.Writer, d Digest) {
 	tw.Flush()
 
 	renderFlow(w, d)
+	renderGoals(w, d.Goals)
 	renderStages(w, d.Stages)
 	renderEscapes(w, d.Verification)
 	renderDefaults(w, d.Defaults)
@@ -277,24 +284,7 @@ func RenderDigest(w io.Writer, d Digest) {
 
 	// What the workers chose by themselves. It asks nothing of the owner,
 	// who may overrule a choice with a ruling on the issue.
-	var decided []string
-	seen = map[string]bool{}
-	for _, m := range d.Report.Machines {
-		for _, i := range m.Issues {
-			if key := issueKey(i.Repo, i.Number); !seen[key] {
-				seen[key] = true
-				for _, choice := range i.Decided {
-					decided = append(decided, fmt.Sprintf("%s  %s", key, choice))
-				}
-			}
-		}
-	}
-	if len(decided) > 0 {
-		fmt.Fprintf(w, "\nDecided without you: %d\n", len(decided))
-		for _, line := range decided {
-			fmt.Fprintf(w, "  %s\n", line)
-		}
-	}
+	renderDecided(w, d)
 
 	// Everything else that needs the owner: a machine, a worker, a task.
 	var other []string

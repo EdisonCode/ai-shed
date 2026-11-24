@@ -148,6 +148,10 @@ type Supervisor struct {
 	Terminal       Terminal
 	Reviewer       Reviewer
 	Lister         backlog.Lister
+	// Goals counts the issues of a goal label, for goal_labels. Nil leaves
+	// goals out of the queue's order.
+	Goals GoalCounter
+	goals goalCache
 	// Merger queues a pull request for its merge. Nil queues nothing.
 	Merger Merger
 	// Closer closes a finished issue in a repository with close_finished.
@@ -1676,6 +1680,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	// beside them to hold it as it holds queued work.
 	s.applyHolds(w, items, append(slices.Clone(open), offered...), elsewhere, checkins)
 	s.applyPace(w, items, checkins)
+	s.shareGoals(ctx, items, open)
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
 		switch {
@@ -1696,6 +1701,9 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 			return x.Verify != ""
 		case x.rank != y.rank:
 			return x.rank < y.rank
+		case x.goalDone != y.goalDone:
+			// Drive the goal nearest done to done.
+			return x.goalDone > y.goalDone
 		case x.Repo != y.Repo:
 			return x.Repo < y.Repo
 		}

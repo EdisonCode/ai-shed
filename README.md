@@ -379,6 +379,50 @@ evidence to name that area in `risky`. The digest changes nothing itself. The wo
 of `risky` are in each worker's brief and in front of the reviewer, so write
 them for both.
 
+### Goals
+
+The queue picks the next issue, not the next outcome. To drive an outcome
+to done, label the issues that serve it with one label and name the
+prefix:
+
+```yaml
+supervisor:
+  goal_labels: "goal:"   # goal:export, goal:refunds
+```
+
+It is a view, not a new role:
+
+- **The queue.** Within one priority rank, an issue of the goal with the
+  highest closed share goes first, then the oldest. Each goal is counted
+  with one `gh issue list` of its label, at most once an hour per machine.
+  An issue with no goal counts as a goal at zero.
+- **The digest** shows each goal: closed of all its issues, net opened
+  minus closed in the window, and what holds its next slice: the first of
+  its open queued issues a worker could take, or why the first one nobody
+  has in hand waits.
+
+  ```
+  Goals: 2
+    my-org/my-app  goal:export   7 of 10 closed  net -1  next #14 is held: waits for #12
+    my-org/my-app  goal:refunds  0 of 4 closed   net +2  next #21 is workable
+  ```
+
+- **Decided without you** is grouped by goal, then by `overlap_labels`
+  label, then by repository:
+
+  ```
+  Decided without you: 3
+    goal:export
+      my-org/my-app#126  Kept the old column.
+    area:billing
+      my-org/my-app#118  Rounded half up.
+    my-org/my-app
+      my-org/my-app#130  Logged at info.
+  ```
+
+Without `goal_labels`, nothing changes. `shed digest -json` carries the
+goals under `goals`, and `shed status -json` each issue's `goal`.
+
 ### Putting an issue first
 
 ### Why a worker has no work
@@ -1593,6 +1637,7 @@ supervisor:
   stack: true                         # optional: go on with an issue on a branch from its pull request while it waits for review
   context_budget: 20000               # optional: tokens a worker may load before its first item
   overlap_labels: "area:"             # optional: issues sharing a label with this prefix are not worked at once
+  goal_labels: "goal:"                # optional: issues sharing a label with this prefix serve one goal
   own_wait_max: 45m                   # optional: how long an idle worker may wait on its own work before it is told to check it; "0" for no bound
 ```
 

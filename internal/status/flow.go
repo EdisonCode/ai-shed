@@ -83,6 +83,10 @@ func (c Collector) collectFlow(ctx context.Context, cfg *config.Config, d *Diges
 			f.Error = err.Error()
 		}
 		countOpenedClosed(&f, issues, d.Since)
+		if d.flowIssues == nil {
+			d.flowIssues = map[string][]looks.FlowIssue{}
+		}
+		d.flowIssues[repo] = issues
 		countRework(&f, d, repo)
 		c.countLooks(ctx, cfg, &f, d, repo)
 		oldestWait(&f, d, repo)

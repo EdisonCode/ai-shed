@@ -435,6 +435,11 @@ type Supervisor struct {
 	// same label of that prefix touch the same code: one is held while a
 	// worker has the other in hand, as for issues whose Paths overlap.
 	OverlapLabels string `yaml:"overlap_labels"`
+	// GoalLabels is a label prefix, such as "goal:". Issues with the same
+	// label of that prefix serve one goal: the digest shows each goal's
+	// progress, and within one priority rank the queue hands out an issue
+	// of the goal nearest done first. Empty for no goals.
+	GoalLabels string `yaml:"goal_labels"`
 	// MessageLimit is how many messages a worker may send to one other
 	// session within an hour before the supervisor tells it to stop: two
 	// sessions that answer each other can go on without end, and every

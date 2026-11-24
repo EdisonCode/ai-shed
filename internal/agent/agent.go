@@ -242,6 +242,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		},
 		Reviewer:    supervisor.CommandReviewer{Command: m.Command(cfg.Supervisor.CommandOrDefault()), Dir: a.StateDir, UsageDir: a.StateDir},
 		Lister:      backlog.GH{},
+		Goals:       backlog.GH{},
 		Claimer:     backlog.GH{},
 		Releaser:    backlog.GH{},
 		Merger:      backlog.GH{},
