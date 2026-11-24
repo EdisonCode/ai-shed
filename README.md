@@ -1688,7 +1688,26 @@ A hand-back with no pull request, such as a plan for you to rule on, writes
 `**PR:** none`: there is nothing to review, so the review signal stays closed.
 Your `Owner ruling` then closes the decision and the issue is in the queue
 again like any other. It is not rework, which needs an open pull request, so
-it takes its turn by the queue order. A `**PR:**` line that says anything else
+it takes its turn by the queue order.
+
+A hand-back with no open pull request, nothing after `Still to do:` and no
+question leaves no step for a worker: handed out again, the worker would
+find nothing to do and hand back again. So it is not handed out again until
+something changes on the issue: a comment that is not a hand-back, an edit
+of the body, or a label. Until then it waits on you as `no worker step`, with
+what the hand-back wrote after `Owner act:`, a step only you can do, such as
+one on production:
+
+```
+**PR:** none
+**Decisions needed:** none
+**Owner act:** run the backfill on production
+```
+
+It does not count as work a worker can act on, so the reserve is offered
+beside it.
+
+A `**PR:**` line that says anything else
 without a number opens a review that no merge can close; `shed status` and
 `shed digest` show it as `review (no pull request named)`.
 

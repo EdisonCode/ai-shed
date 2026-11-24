@@ -280,6 +280,13 @@ Run this as a checklist and report each line.
      (`Eyes unblocked`) on the issue so a worker tries again, or do the look
      yourself with the owner. Never post `Eyes checked` for a look nobody
      did.
+   - `issue waits on you (no worker step)`: the last hand-back named no
+     open pull request, listed nothing still to do and asked nothing, so a
+     worker handed it again would find nothing to do. The words after it
+     are what the hand-back put after `Owner act:`. Do that step with the
+     owner, then close the issue, or write on the issue what a worker should
+     do next: any comment that is not a hand-back, an edit of the body or a
+     label change puts it back in the queue.
    - `rework` in the issues list needs nothing from the owner: the pull
      request cannot merge and a worker is being sent back to it. A `!` line
      that says `after 2 tries by a worker` is the owner's: the workers could

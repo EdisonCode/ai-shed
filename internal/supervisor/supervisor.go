@@ -2319,6 +2319,7 @@ func (s *Supervisor) remainingBrief(b *strings.Builder) {
 		return
 	}
 	fmt.Fprintf(b, "When an issue takes more than one pull request, list what is still to do after `%s` in each hand-back but the last. A hand-back whose pull request merges and that lists nothing still to do is the issue's last: the issue is not handed out again.\n", review.Remaining)
+	fmt.Fprintf(b, "A step only the owner can do, such as one on production, goes after `%s` in your hand-back. A hand-back with no open pull request, nothing still to do and no question is not handed out again until someone writes on the issue: it waits on the owner.\n", backlog.OwnerActPhrase)
 	if s.Settings.Stack {
 		b.WriteString("While a pull request of yours waits for review and its hand-back lists what is still to do, the supervisor may send you on with the issue. Build the rest on a new branch from that pull request's branch, open the next pull request against that branch, and hand back as before.\n")
 	}
