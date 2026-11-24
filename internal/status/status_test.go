@@ -1208,9 +1208,9 @@ func TestStatusShowsWhyAQueuedIssueIsHeld(t *testing.T) {
 		{Repo: "org/app", Number: 11, State: Queued}, {Repo: "org/app", Number: 12, State: Working, Worker: "docs"},
 		{Repo: "org/app", Number: 13, State: Queued}, {Repo: "org/app", Number: 14, State: Queued},
 	}}
-	MarkHeld(&report, issues, "area:", nil, nil)
+	MarkHeld(&report, issues, "area:", nil, nil, nil)
 	want := []struct{ state, held string }{
-		{Held, "waits for #9 to close"}, {Working, ""}, {Held, "overlaps #12 in hand: both are area:billing"}, {Queued, ""},
+		{Held, "waits for #9 to close (GitHub's blocked-by)"}, {Working, ""}, {Held, "overlaps #12 in hand: both are area:billing"}, {Queued, ""},
 	}
 	for n, w := range want {
 		if got := report.Issues[n]; got.State != w.state || got.Held != w.held {
@@ -1468,7 +1468,7 @@ func TestStatusShowsANewIssueHeldAtItsRepositorysOpenPullRequestLimit(t *testing
 	report := MachineReport{Issues: []IssueStatus{
 		{Repo: "org/app", Number: 11, State: Queued}, {Repo: "org/app", Number: 12, State: Queued, Bumped: true},
 	}}
-	MarkHeld(&report, []backlog.Issue{held, bumped}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}, config.DefaultSignals())
+	MarkHeld(&report, []backlog.Issue{held, bumped}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}, config.DefaultSignals(), nil)
 	if got, want := report.Issues[0].Held, "org/app has 2 open pull requests, at or over its limit of 2: they are finished first"; report.Issues[0].State != Held || got != want {
 		t.Errorf("#11 = %s %q, want held %q", report.Issues[0].State, got, want)
 	}
@@ -1481,7 +1481,7 @@ func TestStatusDoesNotHoldANewIssueWhereTheLimitParksIt(t *testing.T) {
 	queued := issue(11, "")
 	queued.OpenPRs = map[int]backlog.PR{41: {}, 42: {}}
 	report := MachineReport{Issues: []IssueStatus{{Repo: "org/app", Number: 11, State: Queued}}}
-	MarkHeld(&report, []backlog.Issue{queued}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2, MaxOpenPRsCount: config.PRCountReady}}, config.DefaultSignals())
+	MarkHeld(&report, []backlog.Issue{queued}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2, MaxOpenPRsCount: config.PRCountReady}}, config.DefaultSignals(), nil)
 	if got := report.Issues[0]; got.State != Queued {
 		t.Fatalf("#11 = %s %q, want queued: a worker takes it and parks its pull request", got.State, got.Held)
 	}
@@ -1494,7 +1494,7 @@ func TestStatusSaysWorkersHaveNoWorkBecauseTheRepositoryIsAtItsOpenPullRequestLi
 	queued := issue(7)
 	queued.OpenPRs = map[int]backlog.PR{41: {}, 42: {}, 43: {}}
 	r := Assess(m, signals, now, res, []backlog.Issue{queued})
-	MarkHeld(&r, []backlog.Issue{queued}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}, signals)
+	MarkHeld(&r, []backlog.Issue{queued}, "", []config.Repo{{Name: "org/app", MaxOpenPRs: 2}}, signals, nil)
 	wantAttention(t, r, "1 of 2 workers have no work: 1 queued issue(s) are held: org/app has 3 open pull requests, at or over its limit of 2")
 }
 
@@ -1606,5 +1606,20 @@ func TestStatusCountsTheMessagesAWorkerSentInTheLastHour(t *testing.T) {
 	Render(&out, []MachineReport{r}, nil)
 	if !strings.Contains(out.String(), "[2 message(s) sent in the last hour] fine") || strings.Contains(out.String(), "docs  no issue  on_track  5m ago  [") {
 		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+func TestAHoldOnlyTheOwnerCanEndNeedsThem(t *testing.T) {
+	held := issue(11, "Depends on #9")
+	held.Deps = []backlog.Dep{{Repo: "org/app", Number: 9, Open: true}}
+	held.DepLabels = map[string][]string{"org/app#9": {"needs-owner"}}
+	report := MachineReport{Issues: []IssueStatus{{Repo: "org/app", Number: 11, State: Queued}}}
+	covers := func(string, []string) (bool, bool) { return false, true }
+	MarkHeld(&report, []backlog.Issue{held}, "", nil, config.DefaultSignals(), covers)
+	if got := report.Issues[0]; got.State != Held || got.Held != "waits for #9, which no queue covers" {
+		t.Fatalf("#11 = %s %q", got.State, got.Held)
+	}
+	if len(report.Attention) != 1 || !strings.Contains(report.Attention[0], "org/app#11 is held and only you can end it: waits for #9, which no queue covers") {
+		t.Fatalf("attention = %q", report.Attention)
 	}
 }

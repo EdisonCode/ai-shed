@@ -1535,6 +1535,20 @@ func (c *Config) QueuesOf(repo string, labels []string) []string {
 	return machines
 }
 
+// Covers reports whether an issue of the repository with these labels is in
+// a queue of the fleet, and whether that can be told from labels at all: a
+// queue that is a search or an assignee could hold any issue.
+func (c *Config) Covers(repo string, labels []string) (covered, known bool) {
+	for _, m := range c.Machines {
+		for _, src := range m.AllSources() {
+			if src.Repo == repo && !src.Backfill && (src.Query != "" || src.Assignee != "") {
+				return false, false
+			}
+		}
+	}
+	return len(c.QueuesOf(repo, labels)) > 0, true
+}
+
 // QueueLabels returns the labels that put an issue in a queue of the fleet.
 // An issue with one of them is taken, whatever a backfill source lists.
 // EyeCheckRepos lists the repositories whose eye checks a worker does on

@@ -24,7 +24,7 @@ func TestAnIssueWaitsForItsDependencyToClose(t *testing.T) {
 	f := started(t, config.Supervisor{}, done)
 	f.lister.issues = []backlog.Issue{dependsOn(11, 12, true), labeled(12)}
 	f.tick(2 * time.Minute)
-	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#11 Issue [held: waits for #12 to close]") {
+	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#11 Issue [held: waits for #12 to close (GitHub's blocked-by)]") {
 		t.Fatalf("prompt does not show the hold:\n%s", prompt)
 	}
 	f.tick(10 * time.Minute)
@@ -39,7 +39,7 @@ func TestADependencyThatNamesNothingHoldsOnlyItsIssue(t *testing.T) {
 	missing.Deps = []backlog.Dep{{Repo: "org/app", Number: 6300, Missing: true}}
 	f.lister.issues = []backlog.Issue{missing, labeled(12)}
 	f.tick(2 * time.Minute)
-	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#11 Issue [held: depends on #6300, which is not an issue or pull request]") {
+	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#11 Issue [held: depends on #6300, which is not an issue or pull request (GitHub's blocked-by)]") {
 		t.Fatalf("prompt does not show the hold:\n%s", prompt)
 	}
 	f.tick(10 * time.Minute)
@@ -316,7 +316,7 @@ func TestTheReserveHoldsAnIssueThatWaitsForADependency(t *testing.T) {
 	reserveOf(f, dependsOn(50, 12, true))
 	f.tick(2 * time.Minute)
 
-	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#50 Issue [held: waits for #12 to close] [backlog]") {
+	if prompt := f.reviewer.prompts[0]; !strings.Contains(prompt, "org/app#50 Issue [held: waits for #12 to close (GitHub's blocked-by)] [backlog]") {
 		t.Fatalf("prompt does not show the hold:\n%s", prompt)
 	}
 	f.tick(10 * time.Minute)
@@ -335,6 +335,23 @@ func TestTheReserveIsOfferedWhenThePaceHoldsTheQueue(t *testing.T) {
 	f.tick(2 * time.Minute)
 	prompt := f.reviewer.prompts[0]
 	for _, want := range []string{"org/app#5 Issue [held: the account is ahead of its weekly pace", "#50 Issue [backlog]"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+}
+
+// A hand-back that left no worker step must not be handed out again, and
+// must not hide the reserve: nothing beside it can be acted on.
+func TestAnIssueWithNoWorkerStepWaitsOnTheOwnerAndTheReserveIsOffered(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	rested := labeled(12)
+	rested.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** none\n**Decisions needed:** none\n**Owner act:** run the backfill"}}
+	rested.OpenPRs = map[int]backlog.PR{}
+	withBackfill(f, rested)
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	for _, want := range []string{"#12 Issue [waits on the owner: no worker step]", "#50 Issue [backlog]"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
 		}

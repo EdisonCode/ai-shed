@@ -53,7 +53,7 @@ func effect(issue Issue, signals []config.Signal, a Ask, now time.Time) string {
 			return EffectGrace
 		}
 		return EffectReturns
-	case s.Name == config.ReadySignal:
+	case s.Name == config.ReadySignal, a.Name == NoStepAsk:
 		return EffectReturns
 	}
 	return EffectRead

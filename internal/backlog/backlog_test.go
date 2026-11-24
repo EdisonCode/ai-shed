@@ -63,7 +63,7 @@ func TestReviewSignalFollowsItsPullRequest(t *testing.T) {
 		{"first is still open but the latest hand-back's is merged", []string{handBackClean, laterHandBack}, map[int]PR{41: {}}, nil},
 		{"open pull requests unknown: stay open", []string{handBackClean}, nil, []string{"review"}},
 		{"no pull request number: stay open", []string{"## Hand-back\n**PR:** not opened yet, branch pushed"}, map[int]PR{}, []string{"review"}},
-		{"no pull request at all: nothing to review", []string{"## Hand-back\n**PR:** none (plan-only pass)\n**Decisions needed:** none"}, map[int]PR{}, nil},
+		{"no pull request and no ask: nothing to review, and no worker step", []string{"## Hand-back\n**PR:** none (plan-only pass)\n**Decisions needed:** none"}, map[int]PR{}, []string{NoStepAsk}},
 		{"a merged pull request does not answer a decision", []string{handBackAsking}, map[int]PR{}, []string{"decision"}},
 	}
 	for _, tc := range cases {

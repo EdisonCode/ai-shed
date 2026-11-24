@@ -241,6 +241,11 @@ func RenderDigest(w io.Writer, d Digest) {
 	})
 	renderLessons(w, d)
 
+	if !d.Report.Pulls.empty() {
+		fmt.Fprintln(w)
+		renderPulls(w, d.Report.Pulls, d.Now)
+	}
+
 	fmt.Fprintf(w, "\nWaiting on you: %d\n", len(waiting))
 	groups := []struct{ effect, title string }{
 		{backlog.EffectReturns, "returns to a worker when you answer"},

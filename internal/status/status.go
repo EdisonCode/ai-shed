@@ -67,6 +67,9 @@ type Report struct {
 	// Balance names each machine whose workers are idle while another has
 	// work nobody has started and no room for it.
 	Balance []string `json:"balance,omitempty"`
+	// Pulls are the open pull requests no queue covers and the drafts gone
+	// quiet; nil when the collector reads no pull requests.
+	Pulls *OpenPulls `json:"pulls,omitempty"`
 }
 
 // ReleasedIssue is an issue on an overflow label, waiting for a machine with
@@ -102,6 +105,9 @@ type MachineReport struct {
 	// sharedWith names, for the terminal, the machines that share this
 	// one's account.
 	sharedWith string
+	// unlisted names the repositories of the sources whose issues could not
+	// be listed: what is queued there is not known.
+	unlisted []string
 	// Now is when the report was made, by the watcher's clock. The age of
 	// what waits on the owner is counted from it.
 	Now time.Time `json:"now"`
@@ -214,6 +220,9 @@ type Collector struct {
 	// Batches reads the open batches of a repository with merge_train:
 	// batch. Nil leaves them out.
 	Batches BatchReader
+	// Pulls lists the open pull requests of the fleet's repositories, for
+	// the ones no queue covers and the quiet drafts. Nil leaves them out.
+	Pulls PullLister
 }
 
 // LookReader reads the eye checks a repository's merged work still owes.
@@ -372,7 +381,8 @@ func (c Collector) CollectAll(ctx context.Context, cfg *config.Config) Report {
 		}
 	}
 	machines := c.collectMachines(ctx, cfg, workerLooks)
-	return Report{Machines: machines, Repos: repos, Released: c.collectReleased(ctx, cfg), Balance: Balance(cfg, machines)}
+	return Report{Machines: machines, Repos: repos, Released: c.collectReleased(ctx, cfg), Balance: Balance(cfg, machines),
+		Pulls: c.collectPulls(ctx, cfg, machines, time.Now())}
 }
 
 func issueKey(repo string, number int) string {
@@ -403,10 +413,12 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 
 	var issues []backlog.Issue
 	var issueErrs []error
+	var unlisted []string
 	for _, src := range m.AllSources() {
 		found, err := c.Lister.List(ctx, src)
 		if err != nil {
 			issueErrs = append(issueErrs, err)
+			unlisted = append(unlisted, src.Repo)
 			continue
 		}
 		issues = append(issues, found...)
@@ -418,7 +430,8 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 	}
 
 	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
-	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels, cfg.Repos, cfg.Signals)
+	report.unlisted = unlisted
+	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels, cfg.Repos, cfg.Signals, cfg.Covers)
 	MarkSharedQueues(&report, m.Name, issues, cfg.QueuesOf)
 	MarkAgentHolds(&report)
 	if res != nil {
@@ -938,7 +951,7 @@ func deployWords(d runlog.Deploy) string {
 // why: an issue they depend on that is still open, a repository at its limit
 // of open pull requests, or an issue a worker has in hand that touches the
 // same code. It reads what the supervisor reads.
-func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels string, repos []config.Repo, signals []config.Signal) {
+func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels string, repos []config.Repo, signals []config.Signal, covers func(repo string, labels []string) (bool, bool)) {
 	limits, parks := map[string]int{}, map[string]bool{}
 	for _, r := range repos {
 		limits[r.Name], parks[r.Name] = r.MaxOpenPRs, r.ParksAtPRLimit()
@@ -954,8 +967,12 @@ func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels strin
 		if st.State != Queued || !ok {
 			continue
 		}
-		if hold := backlog.DepHold(issue); hold != "" {
+		if hold, owner := backlog.FollowHold(issue, byKey, signals, covers); hold != "" {
 			st.State, st.Held = Held, hold
+			if owner {
+				// Nothing a worker does ends it, so the hold is the owner's.
+				report.Attention = append(report.Attention, fmt.Sprintf("%s#%d is held and only you can end it: %s: %s", issue.Repo, issue.Number, hold, issue.Title))
+			}
 			continue
 		}
 		// A bumped issue and one whose question the owner answered go

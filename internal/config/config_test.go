@@ -745,3 +745,23 @@ machines:
 		t.Fatalf("linux-box does the looks of %+v, want none: it has no worker for them", got)
 	}
 }
+
+func TestCoversTellsWhetherAQueueHoldsAnIssueOnlyWhereEveryQueueIsALabel(t *testing.T) {
+	labelsOnly, err := Parse([]byte(strings.Replace(twoQueues, `, {repo: org/app, label: "area:ui", query: "is:issue -label:area:api"}`, "", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if covered, known := labelsOnly.Covers("org/app", []string{"machine:mac-mini"}); !covered || !known {
+		t.Errorf("a queue label: covered = %v, known = %v", covered, known)
+	}
+	if covered, known := labelsOnly.Covers("org/app", []string{"fleet:ready"}); covered || !known {
+		t.Errorf("a backfill pool only: covered = %v, known = %v; want not covered", covered, known)
+	}
+	withSearch, err := Parse([]byte(twoQueues))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, known := withSearch.Covers("org/app", []string{"needs-owner"}); known {
+		t.Error("a queue that is a search could hold any issue: want unknown")
+	}
+}

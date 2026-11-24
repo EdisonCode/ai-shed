@@ -43,6 +43,10 @@ type Issue struct {
 	// its text names and the ones GitHub's blocked-by relation names. Nil
 	// when the lister did not look them up.
 	Deps []Dep `json:"-"`
+	// DepLabels holds the labels of each issue in Deps, by repo#number, so
+	// that a hold can say whether any queue of the fleet covers its blocker.
+	// A pull request, and a dependency the lister did not look up, has none.
+	DepLabels map[string][]string `json:"-"`
 }
 
 // PR is the state of an open pull request.
@@ -84,6 +88,12 @@ func (i Issue) LabelNames() []string {
 type Comment struct {
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"createdAt"`
+	Author    Author    `json:"author"`
+}
+
+// Author is who wrote a comment.
+type Author struct {
+	Login string `json:"login"`
 }
 
 // Lister returns the open issues of one source, comments oldest first.
@@ -280,7 +290,7 @@ const listedComments = 100
 // allComments reads every comment of the issue, oldest first.
 func allComments(ctx context.Context, repo string, number int) ([]Comment, error) {
 	cmd := exec.CommandContext(ctx, "gh", "api", "--paginate", fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repo, number),
-		"--jq", ".[] | {body, createdAt: .created_at}")
+		"--jq", ".[] | {body, createdAt: .created_at, author: {login: .user.login}}")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -494,6 +504,9 @@ type Ask struct {
 	// Effect is what answering the ask does: returns, in grace, read or
 	// merge. Empty when it was not worked out.
 	Effect string `json:"effect,omitempty"`
+	// Left is what a hand-back that left no worker step says the owner has
+	// to do, after OwnerActPhrase; empty when it says nothing.
+	Left string `json:"left,omitempty"`
 }
 
 // What names the ask and the pull request it waits on, as in "review #41".
@@ -505,6 +518,8 @@ func (a Ask) What() string {
 		return fmt.Sprintf("%s #%d", a.Name, a.PR)
 	case a.NoPR:
 		return a.Name + " (no pull request named)"
+	case a.Left != "":
+		return a.Name + ": " + a.Left
 	}
 	return a.Name
 }
@@ -537,6 +552,11 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 			ask.PR, ask.NoPR = pr, pr == 0
 		}
 		asks = append(asks, ask)
+	}
+	if len(asks) == 0 && !rework {
+		if since, left, ok := rested(issue, signals); ok {
+			asks = append(asks, Ask{Name: NoStepAsk, Since: since, Left: left})
+		}
 	}
 	return asks
 }

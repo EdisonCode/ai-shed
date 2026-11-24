@@ -30,35 +30,109 @@ type Dep struct {
 
 func (d Dep) key() string { return d.Repo + "#" + strconv.Itoa(d.Number) }
 
-// depRE finds "Depends on #12", "blocked by: org/api#7, #9" and the like.
+// depRE finds "Depends on #12", "blocked by: org/api#7, #9" and the like,
+// and "No longer depends on #12", which ends what an earlier line said.
 var (
-	depRE = regexp.MustCompile(`(?i)\b(?:depends on|blocked by)\s*:?\s*((?:[\w.-]+/[\w.-]+)?#\d+(?:\s*(?:,|and|&)\s*(?:[\w.-]+/[\w.-]+)?#\d+)*)`)
+	depRE = regexp.MustCompile(`(?i)\b(no longer\s+)?(?:depends on|blocked by)\s*:?\s*((?:[\w.-]+/[\w.-]+)?#\d+(?:\s*(?:,|and|&)\s*(?:[\w.-]+/[\w.-]+)?#\d+)*)`)
 	refRE = regexp.MustCompile(`(?:([\w.-]+/[\w.-]+))?#(\d+)`)
+	// quotedRE finds what a comment quotes or shows as code: a fenced block,
+	// a code span, a quoted line. A rule explained there holds nothing.
+	quotedRE = regexp.MustCompile("(?s)```.*?```|`[^`\n]*`|(?m)^[ \t]*>.*$")
 )
 
-// DependencyRefs returns the issues the issue's body and comments say it
-// depends on, in the order they are named. Their state is not known.
-func DependencyRefs(i Issue) []Dep {
+// depStatement is one line's word about a dependency: that the issue
+// depends on it, or no longer does, and which text said so.
+type depStatement struct {
+	dep     Dep
+	release bool
+	text    int // -1 for the body, else the comment's index
+}
+
+// depStatements reads every statement about a dependency in the issue's
+// body and then its comments, in order.
+func depStatements(i Issue) []depStatement {
 	texts := []string{i.Body}
 	for _, c := range i.Comments {
 		texts = append(texts, c.Body)
 	}
-	var deps []Dep
-	for _, text := range texts {
-		for _, m := range depRE.FindAllStringSubmatch(text, -1) {
-			for _, ref := range refRE.FindAllStringSubmatch(m[1], -1) {
-				n, _ := strconv.Atoi(ref[2])
-				d := Dep{Repo: i.Repo, Number: n}
+	var out []depStatement
+	for n, text := range texts {
+		for _, m := range depRE.FindAllStringSubmatch(quotedRE.ReplaceAllString(text, ""), -1) {
+			for _, ref := range refRE.FindAllStringSubmatch(m[2], -1) {
+				num, _ := strconv.Atoi(ref[2])
+				d := Dep{Repo: i.Repo, Number: num}
 				if ref[1] != "" {
 					d.Repo = ref[1]
 				}
-				if !slices.Contains(deps, d) && !(d.Repo == i.Repo && d.Number == i.Number) {
-					deps = append(deps, d)
+				if d.Repo == i.Repo && d.Number == i.Number {
+					continue
 				}
+				out = append(out, depStatement{dep: d, release: m[1] != "", text: n - 1})
 			}
 		}
 	}
-	return deps
+	return out
+}
+
+// DependencyRefs returns the issues the issue's body and comments say it
+// depends on, in the order they are first named. The latest statement about
+// each wins: "No longer depends on #12" after "Depends on #12" ends it.
+// Their state is not known.
+func DependencyRefs(i Issue) []Dep {
+	var order []Dep
+	active := map[Dep]bool{}
+	for _, st := range depStatements(i) {
+		if !slices.Contains(order, st.dep) {
+			order = append(order, st.dep)
+		}
+		active[st.dep] = !st.release
+	}
+	return slices.DeleteFunc(order, func(d Dep) bool { return !active[d] })
+}
+
+// depOrigin says where the dependency on d was named: the comment of the
+// last statement that made it, or the issue body, or GitHub's blocked-by
+// relation when no text names it.
+func depOrigin(i Issue, d Dep) string {
+	text := -2
+	for _, st := range depStatements(i) {
+		if st.dep.key() == d.key() && !st.release {
+			text = st.text
+		}
+	}
+	switch {
+	case text == -2:
+		return "GitHub's blocked-by"
+	case text == -1:
+		return "named in the issue body"
+	}
+	c := i.Comments[text]
+	when := ""
+	if !c.CreatedAt.IsZero() {
+		when = " on " + c.CreatedAt.Format("Jan 2")
+	}
+	if c.Author.Login != "" {
+		return "named by " + c.Author.Login + when
+	}
+	return "named in a comment" + when
+}
+
+// depOrigins names where each dependency was named: one phrase when they
+// share it, else one per dependency.
+func depOrigins(i Issue, deps []Dep) string {
+	var each []string
+	same := true
+	for n, d := range deps {
+		each = append(each, depOrigin(i, d))
+		same = same && each[n] == each[0]
+	}
+	if same {
+		return each[0]
+	}
+	for n, d := range deps {
+		each[n] = DepWords([]Dep{d}, i.Repo) + " " + each[n]
+	}
+	return strings.Join(each, "; ")
 }
 
 // OpenDeps returns the issue's dependencies that are still open.
@@ -88,10 +162,10 @@ func MissingDeps(i Issue) []Dep {
 // do not: a number that names nothing, or a dependency still open.
 func DepHold(i Issue) string {
 	if missing := MissingDeps(i); len(missing) > 0 {
-		return fmt.Sprintf("depends on %s, which is not an issue or pull request", DepWords(missing, i.Repo))
+		return fmt.Sprintf("depends on %s, which is not an issue or pull request (%s)", DepWords(missing, i.Repo), depOrigins(i, missing))
 	}
 	if open := OpenDeps(i); len(open) > 0 {
-		return fmt.Sprintf("waits for %s to close", DepWords(open, i.Repo))
+		return fmt.Sprintf("waits for %s to close (%s)", DepWords(open, i.Repo), depOrigins(i, open))
 	}
 	return ""
 }
@@ -256,11 +330,11 @@ func resolveDeps(ctx context.Context, repo string, issues []Issue) error {
 		fmt.Fprintf(&q, "r%d: repository(owner: %q, name: %q) {\n", n, owner, name)
 		if n == 0 {
 			for _, i := range issues {
-				fmt.Fprintf(&q, "i%d: issue(number: %d) { blockedBy(first: 20) { nodes { number state repository { nameWithOwner } } } }\n", i.Number, i.Number)
+				fmt.Fprintf(&q, "i%d: issue(number: %d) { blockedBy(first: 20) { nodes { number state repository { nameWithOwner } labels(first: 50) { nodes { name } } } } }\n", i.Number, i.Number)
 			}
 		}
 		for _, number := range refs[r] {
-			fmt.Fprintf(&q, "d%d: issueOrPullRequest(number: %d) { ... on Issue { state } ... on PullRequest { state } }\n", number, number)
+			fmt.Fprintf(&q, "d%d: issueOrPullRequest(number: %d) { ... on Issue { state labels(first: 50) { nodes { name } } } ... on PullRequest { state } }\n", number, number)
 		}
 		q.WriteString("}\n")
 	}
@@ -279,7 +353,83 @@ func resolveDeps(ctx context.Context, repo string, issues []Issue) error {
 		return fmt.Errorf("%s dependencies: %w", repo, err)
 	}
 	applyDeps(issues, native, state)
+	applyDepLabels(issues, parseDepLabels(out, repos))
 	return nil
+}
+
+// applyDepLabels gives each issue the labels of the issues it depends on.
+func applyDepLabels(issues []Issue, labels map[string][]string) {
+	for n := range issues {
+		for _, d := range issues[n].Deps {
+			if l, ok := labels[d.key()]; ok {
+				if issues[n].DepLabels == nil {
+					issues[n].DepLabels = map[string][]string{}
+				}
+				issues[n].DepLabels[d.key()] = l
+			}
+		}
+	}
+}
+
+// parseDepLabels reads the labels of each issue in the answer to
+// resolveDeps' query, by repo#number: the blocked-by issues and the issues
+// the text names. A pull request has none listed. An answer parseDeps
+// rejects gives none.
+func parseDepLabels(data []byte, repos []string) map[string][]string {
+	type labeled struct {
+		Labels *struct {
+			Nodes []Label `json:"nodes"`
+		} `json:"labels"`
+	}
+	var answer struct {
+		Data map[string]map[string]*struct {
+			labeled
+			BlockedBy struct {
+				Nodes []struct {
+					labeled
+					Number     int `json:"number"`
+					Repository struct {
+						NameWithOwner string `json:"nameWithOwner"`
+					} `json:"repository"`
+				} `json:"nodes"`
+			} `json:"blockedBy"`
+		} `json:"data"`
+	}
+	out := map[string][]string{}
+	if json.Unmarshal(data, &answer) != nil {
+		return out
+	}
+	names := func(l labeled) []string {
+		list := []string{}
+		for _, n := range l.Labels.Nodes {
+			list = append(list, n.Name)
+		}
+		return list
+	}
+	for alias, fields := range answer.Data {
+		idx, err := strconv.Atoi(strings.TrimPrefix(alias, "r"))
+		if err != nil || idx < 0 || idx >= len(repos) {
+			continue
+		}
+		for field, issue := range fields {
+			if issue == nil || len(field) < 2 {
+				continue
+			}
+			switch field[0] {
+			case 'i':
+				for _, b := range issue.BlockedBy.Nodes {
+					if b.Labels != nil {
+						out[fmt.Sprintf("%s#%d", b.Repository.NameWithOwner, b.Number)] = names(b.labeled)
+					}
+				}
+			case 'd':
+				if issue.Labels != nil {
+					out[repos[idx]+"#"+field[1:]] = names(issue.labeled)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // applyDeps sets each issue's dependencies from what parseDeps read. A
@@ -384,4 +534,38 @@ func InFlight(issue Issue, signals []config.Signal) bool {
 		}
 	}
 	return plan >= 0 && plan > back
+}
+
+// FollowHold follows the issue's dependency hold to the other end of the
+// wait, and says whether only the owner can end it: the blocker waits on
+// the owner, no queue of the fleet covers it, or the two issues wait for
+// each other. listed holds the issues the fleet's queues list, by
+// repo#number. covered says whether an issue of the repository with these
+// labels is in a queue of the fleet, and whether it can tell: a queue that
+// is a search cannot be matched by labels. With no hold it returns "".
+func FollowHold(i Issue, listed map[string]Issue, signals []config.Signal, covered func(repo string, labels []string) (covered, known bool)) (hold string, owner bool) {
+	hold = DepHold(i)
+	if hold == "" || len(MissingDeps(i)) > 0 {
+		return hold, false
+	}
+	for _, d := range OpenDeps(i) {
+		words := DepWords([]Dep{d}, i.Repo)
+		if blocker, ok := listed[d.key()]; ok {
+			if slices.ContainsFunc(OpenDeps(blocker), func(b Dep) bool { return b.Repo == i.Repo && b.Number == i.Number }) {
+				return fmt.Sprintf("#%d and %s wait for each other", i.Number, words), true
+			}
+			if waiting := Waiting(blocker, signals); len(waiting) > 0 {
+				return fmt.Sprintf("waits for %s, which waits on you (%s)", words, strings.Join(waiting, ", ")), true
+			}
+			continue
+		}
+		labels, isIssue := i.DepLabels[d.key()]
+		if !isIssue || covered == nil {
+			continue
+		}
+		if in, known := covered(d.Repo, labels); known && !in {
+			return fmt.Sprintf("waits for %s, which no queue covers", words), true
+		}
+	}
+	return hold, false
 }

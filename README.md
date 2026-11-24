@@ -237,6 +237,23 @@ The supervisor holds both kinds back, and hands out what can go ahead.
   and `shed status` says so: `depends on #12, which is not an issue or pull
   request`.
   A worker that finds a dependency writes the line itself and hands back.
+  The latest line about a number wins: `No longer depends on #12` in a
+  later comment ends the hold an earlier line made. The phrase inside a code
+  span, a fenced block or a `>` quote holds nothing, so a comment that
+  explains the rule does not make a hold. The hold names where it came from:
+  `waits for #12 to close (named by my-bot on Nov 16)`, `(named in the issue
+  body)` or `(GitHub's blocked-by)`, so a stale line can be found without a
+  search.
+- **Holds only you can end.** A hold reads as handled, so shed follows it to
+  the other end of the wait. When nothing a worker does will end it, the
+  hold says so, and `shed status` lists it with a `!` line for you:
+  - `waits for #12, which waits on you (decision)`: the blocker is queued
+    on the same machine and waits on you;
+  - `waits for #12, which no queue covers`: the blocker is an issue no queue
+    of the fleet lists, so no worker will close it. This is said only where
+    every queue of the repository is a label; a queue that is a search
+    could hold any issue;
+  - `#11 and #12 wait for each other`: two issues each hold the other.
 - **With `stack: true`**, an issue with one open dependency whose pull
   request is ready and waits for review goes ahead: the worker builds it on
   a new branch from that pull request's branch and opens its pull request
@@ -1611,6 +1628,36 @@ and the two typed commands to what that tool understands.
 An issue counts as *working* when a tmux window on its machine has the issue
 number in its name (`app-123`).
 
+### Pull requests no queue covers
+
+A worker is sent back to a pull request through its issue. A pull request
+whose issue is in no machine's queue, or that closes no issue, has no
+worker: it can sit red for days with auto-merge armed. `shed status` and
+`shed digest` list each one in the fleet's repositories, with its age and
+the state of its checks. They also list each draft with no commit for 48
+hours, with what it waits for:
+
+```
+PRs no queue covers: 2
+  3d   my-org/my-app#41  CI failed  closes no issue     Add the export button
+  16h  my-org/my-app#44  CI passed  #12 is in no queue  Show the total on the order page
+Drafts with no commit for 48h: 1
+  6d  my-org/my-app#39  waits for #36  Split the importer
+```
+
+A pull request is covered when an issue it closes (`Closes #12` in its
+body) is in a machine's queue. Give it an issue with a machine label, add
+the closing line, or close it. shed's own merge train batches are not
+listed. When a machine's queue cannot be read, its repository's pull
+requests are not called uncovered.
+
+What a draft waits for comes from the hand-back of its issue, `#39 (draft,
+waits for #36)`, or else from the line of its body that says `waits for`.
+`no hold given` means neither says: the hold may have quietly ended. A
+draft parked at a pull request limit shows `parked`.
+
+`-json` carries both under `pulls`, as `uncovered` and `stale_drafts`.
+
 On a machine with supervised workers, a window that runs an agent tool and
 is not a worker's own is marked `unsupervised` under `windows`, with one
 line that counts them: a manual session, or one left from another workflow.
@@ -1688,7 +1735,26 @@ A hand-back with no pull request, such as a plan for you to rule on, writes
 `**PR:** none`: there is nothing to review, so the review signal stays closed.
 Your `Owner ruling` then closes the decision and the issue is in the queue
 again like any other. It is not rework, which needs an open pull request, so
-it takes its turn by the queue order. A `**PR:**` line that says anything else
+it takes its turn by the queue order.
+
+A hand-back with no open pull request, nothing after `Still to do:` and no
+question leaves no step for a worker: handed out again, the worker would
+find nothing to do and hand back again. So it is not handed out again until
+something changes on the issue: a comment that is not a hand-back, an edit
+of the body, or a label. Until then it waits on you as `no worker step`, with
+what the hand-back wrote after `Owner act:`, a step only you can do, such as
+one on production:
+
+```
+**PR:** none
+**Decisions needed:** none
+**Owner act:** run the backfill on production
+```
+
+It does not count as work a worker can act on, so the reserve is offered
+beside it.
+
+A `**PR:**` line that says anything else
 without a number opens a review that no merge can close; `shed status` and
 `shed digest` show it as `review (no pull request named)`.
 
@@ -2207,6 +2273,10 @@ pull request's cost adds every worker and pass that worked on it; the top
 five are named. One with no cost comment, such as one merged by hand, is
 counted in `of 7` only. `shed usage` on a machine prints the same totals
 for one machine.
+
+Before `Waiting on you`, the digest lists the pull requests no queue covers
+and the drafts with no commit for 48 hours, as `shed status` does (see
+[Pull requests no queue covers](#pull-requests-no-queue-covers)).
 
 It changes nothing and exits 1 when something needs you. To get it every
 morning, run it from a scheduler on the watcher and send the output wherever
