@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -1603,6 +1604,13 @@ func TestStatusCountsOnlyTheMessagesAWorkerSentItsPeersInTheLastHour(t *testing.
 	r := Assess(m, signals, now, res, nil)
 	if r.Workers[0].Messages != 2 || r.Workers[1].Messages != 0 {
 		t.Fatalf("workers = %+v", r.Workers)
+	}
+	want := []PeerLink{
+		{Session: "box-docs", Machine: "box", Worker: "docs", Day: 2, Hour: 1, Last: now.Add(-10 * time.Minute)},
+		{Session: "mini-web", Machine: "mini", Worker: "web", Day: 1, Hour: 1, Last: now.Add(-time.Minute)},
+	}
+	if !reflect.DeepEqual(r.Workers[0].Peers, want) {
+		t.Fatalf("peer links = %+v, want %+v", r.Workers[0].Peers, want)
 	}
 	var out bytes.Buffer
 	Render(&out, []MachineReport{r}, nil)
