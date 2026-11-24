@@ -318,6 +318,10 @@ Run this as a checklist and report each line.
    - `held: rework for <worker>` or `held: reserved for <worker>` needs
      nothing: the work waits for the worker that has its code open, until
      `affinity_ttl` or until that worker is stuck or limited.
+   - `held: the default branch ... is red`: the repository has
+     `circuit_breaker`, and new work waits for its default branch to be
+     green. A worker with `health: true` has a task to fix it; without one,
+     tell the owner the branch is red and which check failed.
    - `rework` in the issues list needs nothing from the owner: the pull
      request cannot merge and a worker is being sent back to it. A `!` line
      that says `after 2 tries by a worker` is the owner's: the workers could
