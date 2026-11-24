@@ -1046,6 +1046,9 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	c.Message, c.Issue, c.Repo = verdict.Message, verdict.Issue, item.Repo
 	model := item.Model
 	c.Rework = item.Rework
+	if item.Rework != "" {
+		c.Head = item.head
+	}
 	apply := cmp.Or(item.Apply, s.Settings.Models.Apply)
 	tellOnly := apply == config.ModelTell
 	switchModel := newIssue && !tellOnly && model != "" && model != st.model
@@ -1789,7 +1792,14 @@ func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []ru
 			item.ParksAt = ask.Since.Add(grace)
 		}
 	}
-	if reason := backlog.Rework(i, s.Signals); reason != "" {
+	item.head = i.OpenPRs[item.PR].Head
+	reason := backlog.Rework(i, s.Signals)
+	if reason == "" {
+		// A report that the fix was pushed is a claim: the head is the check.
+		head, sent := runlog.LastRework(checkins, i.Number)
+		reason = backlog.Unpushed(i, s.Signals, head, sent)
+	}
+	if reason != "" {
 		if runlog.ReworkSpent(checkins, i.Number, s.Now()) {
 			item.Waiting = append(item.Waiting, fmt.Sprintf("%s after %d tries", reason, runlog.ReworkLimit))
 		} else {

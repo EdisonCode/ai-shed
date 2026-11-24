@@ -123,6 +123,9 @@ type QueueItem struct {
 	// built it, for rework, or the one whose work in hand it follows. It is
 	// not this worker's to take while the reservation lasts.
 	Reserved string
+	// head is the head commit of the item's pull request, recorded when it
+	// is sent back as rework.
+	head string
 	// affine is set when the item is this worker's own follow-on: rework of
 	// what it built, or work reserved for it. Its context is kept.
 	affine bool

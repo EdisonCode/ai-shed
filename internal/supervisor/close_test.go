@@ -9,6 +9,7 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
 type fakeCloser struct {
@@ -103,5 +104,28 @@ func TestTheMergeOfAFinishedIssueIsNotAskedOnEveryCheckIn(t *testing.T) {
 	f.tick(5 * time.Minute)
 	if closer.asked != 1 {
 		t.Fatalf("asked = %d, want once within half an hour", closer.asked)
+	}
+}
+
+func TestAHandBackAfterReworkThatLeftTheHeadWhereItWasGoesBack(t *testing.T) {
+	f := started(t, config.Supervisor{CacheTTL: "1h"},
+		Verdict{Verdict: runlog.VerdictNudge, Message: "PR #41 conflicts with main. Rebase it and nothing else.", Issue: 12, Reason: "its pull request went stale"},
+		done)
+	stale := handedBackWith(12, "conflicts with the base branch")
+	stale.OpenPRs[41] = backlog.PR{Problem: "conflicts with the base branch", Head: "abc1234def"}
+	f.lister.issues = []backlog.Issue{stale}
+	f.tick(2 * time.Minute)
+	if c := f.lastCheckin(t); c.Rework == "" || c.Head != "abc1234def" {
+		t.Fatalf("check-in = %+v, want the rework sent with its head", c)
+	}
+	// The worker reports a pushed fix, but the head never moved.
+	stale.Comments = append(stale.Comments, backlog.Comment{Body: "## Hand-back\n**PR:** #41 (ready)\nPushed the rebase.", CreatedAt: f.now.Add(time.Minute)})
+	stale.OpenPRs[41] = backlog.PR{Head: "abc1234def"}
+	f.lister.issues = []backlog.Issue{stale}
+	f.term.running(f.now.Add(40 * time.Minute))
+	f.tick(42 * time.Minute)
+	prompt := f.reviewer.prompts[len(f.reviewer.prompts)-1]
+	if !strings.Contains(prompt, "[rework: the hand-back after rework left pull request #41 at abc1234") {
+		t.Fatalf("the unmoved head is not rework:\n%s", prompt)
 	}
 }
