@@ -83,6 +83,12 @@ func Verification(issue Issue, signals []config.Signal) VerificationState {
 		index, v.Since = off, sha
 	}
 	for _, c := range issue.Comments[index+1:] {
+		// Where crew_low is set, a crew-mate's pass at low risk is the
+		// verification.
+		if cm := crewRE.FindStringSubmatch(c.Body); cm != nil && issue.CrewLow && cm[1] != "" && strings.EqualFold(cm[3], config.TierLow) {
+			v.State, v.Tier, v.Note, v.At, v.OwnerMerges, v.Since = VerifyPassed, config.TierLow, "crew review: "+strings.TrimSpace(strings.Trim(cm[4], "*_ ")), c.CreatedAt, false, ""
+			continue
+		}
 		m := verdictRE.FindStringSubmatch(c.Body)
 		if m == nil {
 			continue

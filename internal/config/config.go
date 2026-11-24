@@ -211,6 +211,10 @@ type Verify struct {
 	// risk, unless the verifier said the merge is the owner's. It needs
 	// MergeLow. Off unless set.
 	MergeHigh bool `yaml:"merge_high"`
+	// CrewLow lets a crew-mate's pass of a pull request at low risk stand
+	// in for its verification: the crew-mate who builds another part of
+	// the goal has read it. A high-risk one is verified as well.
+	CrewLow bool `yaml:"crew_low"`
 	// MergeMethod is how such a pull request merges where the repository
 	// has no merge queue: merge, squash or rebase.
 	MergeMethod string `yaml:"merge_method"`

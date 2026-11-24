@@ -39,6 +39,9 @@ type Issue struct {
 	// MergeHigh is set by the reader when the repository lets shed queue
 	// the merge of a high-risk pass too (merge_high).
 	MergeHigh bool `json:"-"`
+	// CrewLow is set by the reader when a crew-mate's pass at low risk
+	// stands in for the verification (crew_low).
+	CrewLow bool `json:"-"`
 	// Deps are the issues this one waits for, with their state: the ones
 	// its text names and the ones GitHub's blocked-by relation names. Nil
 	// when the lister did not look them up.
@@ -612,6 +615,9 @@ func Rework(issue Issue, signals []config.Signal) string {
 				break
 			}
 		}
+	}
+	if c := CrewReview(issue, signals); c.State == CrewChanges {
+		reasons = append(reasons, fmt.Sprintf("a crew-mate's review of pull request #%d asked for changes: %s (see the Crew review comment); make them, or answer the crew-mate and hand back saying why not", pr, c.Note))
 	}
 	if v := Verification(issue, signals); v.State == VerifyFailed {
 		reasons = append(reasons, fmt.Sprintf("the verifier sent pull request #%d back: %s; fix what it found and hand back again", pr, v.Note))

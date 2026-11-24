@@ -103,6 +103,10 @@ type QueueItem struct {
 	Verify   string
 	VerifyPR int
 	Tier     string
+	// CrewReview is set when the verification is a crew review: the
+	// session of the crew-mate who built the pull request. The reviewer
+	// keeps its context, which knows the part of the goal it builds.
+	CrewReview string
 	// priority is set when the issue has a label of its source's priority
 	// list.
 	priority bool

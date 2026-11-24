@@ -81,6 +81,7 @@ const (
 	// words: a worker that took it for work to build would start a branch.
 	lookOrder = "Do the eye check of #%d on staging: %s. Follow the Eye checks section of " + BriefFile + " and change no product code."
 	// verifyOrder hands over a verification, for the same reason.
+	crewOrder     = "Crew review: pull request #%d of %s#%d, which %s built for the goal you build too. Follow the Crew review section of " + BriefFile + ": review it against the issue and against how your own part uses it, change no code in its branch, and message %s what you find. Start your comment on the issue with `Crew review passed (%s):` or `Crew review: changes (%s):`."
 	verifyOrder   = "Verify pull request #%d of #%d at tier %s: follow the Verification section of " + BriefFile + " and change no code. Start your comment on the issue with `Verified (%s):` or `Verification failed (%s):`."
 	clearSettling = 2 * time.Second
 	// unaskedStart hands over an item that the reviewer did not: the code
@@ -1047,6 +1048,9 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	}
 	if newIssue && item.Verify != "" {
 		verdict.Message, c.Verify = fmt.Sprintf(verifyOrder, item.VerifyPR, verdict.Issue, item.Verify, item.Tier, item.Tier), true
+		if item.CrewReview != "" {
+			verdict.Message = fmt.Sprintf(crewOrder, item.VerifyPR, item.Repo, verdict.Issue, item.CrewReview, item.CrewReview, item.Tier, item.Tier)
+		}
 	}
 	c.Message, c.Issue, c.Repo = verdict.Message, verdict.Issue, item.Repo
 	model := item.Model
@@ -1069,7 +1073,9 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	// A verification starts from nothing: it judges the work on its own
 	// evidence, not on a conversation that built something else.
 	// Its own follow-on keeps the context that knows its code.
-	fresh := newIssue && ((w.FreshPerIssue && st.worked && !item.affine) || item.Verify != "")
+	// A crew review keeps it: the reviewer reads with what it knows of its
+	// own part of the goal.
+	fresh := newIssue && ((w.FreshPerIssue && st.worked && !item.affine) || (item.Verify != "" && item.CrewReview == ""))
 	coldClear := c.Cold && s.Settings.ClearWhenCold()
 	big := s.contextOver(w, st, idle)
 	cleared := switchModel || fresh || coldClear || big > 0
@@ -1649,6 +1655,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		for n := range issues {
 			issues[n].Verify = s.verifies(issues[n].Repo)
 			issues[n].MergeHigh = s.mergesHigh(issues[n].Repo)
+			issues[n].CrewLow = s.crewLow(issues[n].Repo)
 		}
 		open = append(open, issues...)
 		for _, i := range issues {
@@ -1683,6 +1690,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	}
 	items = s.withLooks(ctx, w, items, own, checkins)
 	items = s.withVerifies(ctx, w, items, own, checkins)
+	items = s.withCrewReviews(ctx, w, items, open, checkins)
 	s.queueMerges(ctx, own, checkins)
 	s.restartStuckCI(ctx, own, checkins)
 	s.closeFinished(ctx, own, checkins)

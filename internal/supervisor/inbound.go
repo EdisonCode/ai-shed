@@ -3,6 +3,7 @@ package supervisor
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/edisoncode/ai-shed/internal/backlog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -105,6 +106,14 @@ func peersBrief(b *strings.Builder, w config.Worker) {
 			"- Before you push a change to something a crew-mate builds on (an API, an event, a schema, a shared type), message them what changes and why, and read their answer before you hand back.\n"+
 			"- When a crew-mate tells you of such a change, check your part against it now, not at the end.\n"+
 			"- When a crew-mate's answer changes your plan, write the change on your issue.\n", "`"+RosterFile+"`")
+		b.WriteString("\n## Crew review\n\nWhen you hand back a pull request of a goal, a crew-mate reviews it before it is verified, and you review theirs. The supervisor names the pull request, its issue, its author and its risk tier. You keep your context: you read with what you know of your own part.\n" +
+			"- Read the issue, the hand-back and the diff (`gh pr diff <number> -R <repo>`). Then check it against your part: does it use what you build the way you build it, and does your part use it the way it now works? Run what you can of both.\n" +
+			"- Low tier: go through it once. High tier: try to break it where the parts meet, with wrong, empty and old input.\n" +
+			"- Change no code in its branch, and push nothing to it.\n" +
+			"- Message the author what you found, before you post. If they answer with a reason, weigh it.\n" +
+			"- Then post a comment on the issue that starts with `" + backlog.CrewPassedPhrase + " (<tier>):` and what you checked, or with `" + backlog.CrewChangesPhrase + " (<tier>):` and one change per line: what is wrong and how to see it. Changes go back to the author as rework.\n" +
+			"- Then say so here and go on with your own work.\n" +
+			"\nWhen a crew-mate's review of your pull request asks for changes, make them, or answer them by message and hand back saying why not.\n")
 	}
 }
 

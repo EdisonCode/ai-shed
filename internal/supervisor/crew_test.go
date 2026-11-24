@@ -100,3 +100,87 @@ func TestAGoalsIssuesAreReadInEveryCrewRepositoryAndReused(t *testing.T) {
 		t.Fatalf("not read again after crewKept: %d reads", l.reads)
 	}
 }
+
+// withCrew makes the fixture's app and a second worker, web, a crew on
+// goal:export: app built #12 and handed it back; web signed #13.
+func withCrew(t *testing.T, f *fixture) {
+	f.Settings.GoalLabels = "goal:"
+	f.CrewRepos = []string{"org/app"}
+	app := &f.Machine.Workers[0]
+	app.Crew, app.Session = true, "box-app"
+	app.PeerList = []config.Peer{{Machine: "box", Worker: "web", Session: "box-web"}}
+	f.Machine.Workers = append(f.Machine.Workers, config.Worker{Name: "web", Dir: t.TempDir(), Brief: "Build.", Crew: true, Session: "box-web",
+		PeerList: []config.Peer{{Machine: "box", Worker: "app", Session: "box-app"}}})
+	built(t, f, 12)
+	mine := handedBackWith(12, "")
+	mine.Labels = append(mine.Labels, backlog.Label{Name: "goal:export"})
+	mine.Comments = append([]backlog.Comment{{Body: "## Plan\n**Session:** box-app"}}, mine.Comments...)
+	theirs := signedBy(labeled(13, "goal:export"), "box-web", "web/export/")
+	f.lister.issues = []backlog.Issue{mine, theirs}
+}
+
+func TestAHandedBackPullRequestOfAGoalGoesToACrewMateKeepingItsContext(t *testing.T) {
+	// An hour of cache: the rest before the review does not clear a cold
+	// context either.
+	f := started(t, config.Supervisor{CacheTTL: "1h"}, done)
+	withCrew(t, f)
+	f.tick(2 * time.Minute)
+	f.tick(10 * time.Minute) // the reviewer is asked, and hands over nothing
+	f.tick(20 * time.Minute) // so the code hands the review over
+	c := lastOf(t, f, "web")
+	if c.Issue != 12 || !c.Verify {
+		t.Fatalf("web's check-in = %+v, want the crew review of #12", c)
+	}
+	for _, want := range []string{"Crew review: pull request #41 of org/app#12, which box-app built", "message box-app what you find", "`Crew review passed (low):`", "`Crew review: changes (low):`"} {
+		if !strings.Contains(c.Message, want) {
+			t.Fatalf("message = %q, lacks %q", c.Message, want)
+		}
+	}
+	for n, sent := range f.term.sent {
+		if sent == "/clear" && n+1 < len(f.term.sent) && strings.Contains(f.term.sent[n+1], "Crew review:") {
+			t.Fatalf("sent = %q: a crew review keeps the reviewer's context", f.term.sent)
+		}
+	}
+	if c := lastOf(t, f, "app"); c.Issue == 12 && c.Verify {
+		t.Fatalf("app was handed its own pull request to review: %+v", c)
+	}
+}
+
+func TestTheVerifierWaitsForTheCrewReviewAndCrewChangesAreRework(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	withCrew(t, f)
+	withVerifier(t, f)
+	f.lister.issues[0].Verify = true
+	f.tick(2 * time.Minute)
+	f.tick(10 * time.Minute)
+	if c := lastOf(t, f, "rev"); c.Issue == 12 {
+		t.Fatalf("rev verified #12 before its crew review: %+v", c)
+	}
+	// The crew-mate asks for changes: the author gets the rework.
+	f.lister.issues[0].Comments = append(f.lister.issues[0].Comments, backlog.Comment{Body: "Crew review: changes (low): the export drops the new field"})
+	f.tick(20 * time.Minute)
+	prompt := f.reviewer.prompts[len(f.reviewer.prompts)-1]
+	if !strings.Contains(prompt, "a crew-mate's review of pull request #41 asked for changes: the export drops the new field") {
+		t.Fatalf("prompt lacks the crew rework:\n%s", prompt)
+	}
+}
+
+func TestEveryMachineChoosesTheSameCrewMateToReview(t *testing.T) {
+	s := &Supervisor{Settings: config.Supervisor{GoalLabels: "goal:"}, CrewRepos: []string{"org/app"}, Now: time.Now, Logf: func(string, ...any) {},
+		Machine: config.Machine{Workers: []config.Worker{{Name: "a", Crew: true, Session: "box-a", PeerList: []config.Peer{{Session: "box-b"}, {Session: "mini-c"}}}}}}
+	goal := func(n int, session string) backlog.Issue { return signedBy(labeled(n, "goal:export"), session, "x/") }
+	s.Lister = &fakeLister{issues: []backlog.Issue{goal(1, "box-a"), goal(2, "box-b"), goal(3, "mini-c")}}
+	for author, want := range map[string]string{"box-a": "box-b", "box-b": "mini-c", "mini-c": "box-a"} {
+		if got := s.crewReviewer(context.Background(), goal(9, author)); got != want {
+			t.Errorf("reviewer of %s's work = %q, want %q", author, got, want)
+		}
+	}
+	if got := s.crewReviewer(context.Background(), goal(9, "box-docs")); got != "" {
+		t.Errorf("an author outside the crew has reviewer %q", got)
+	}
+	s.Lister = &fakeLister{issues: []backlog.Issue{goal(1, "box-a")}}
+	s.crew = nil
+	if got := s.crewReviewer(context.Background(), goal(9, "box-a")); got != "" {
+		t.Errorf("a goal with no other crew-mate has reviewer %q", got)
+	}
+}

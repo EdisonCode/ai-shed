@@ -1400,6 +1400,38 @@ crew-mate builds on (an API, an event, a schema, a shared type), it messages
 that crew-mate and reads the answer before it hands back. A change of plan
 still goes on the issue.
 
+**Crew review.** When a crew worker hands back a pull request of a goal that
+has another crew-mate, a crew-mate reviews it before any verifier does:
+- **Who reviews.** Shed takes the crew's sessions in order and picks the
+  one after the author's, wrapping round. Every machine works this out the
+  same way from GitHub, so no review is handed out twice.
+- **When.** The review waits until the pull request's checks pass, and it
+  goes ahead of new work in the reviewer's queue.
+- **Context.** The reviewer keeps its context. It reads the pull request
+  with what it knows of its own part: whether the change uses that part the
+  way it is built, and whether that part still works with the change.
+- **What it does.** It changes no code in the author's branch. It messages
+  the author what it found, then posts `Crew review passed (<tier>):` or
+  `Crew review: changes (<tier>):` with one change per line.
+- **Changes.** These go back to the author as rework. The author makes them,
+  or answers the reviewer and hands back saying why not, and the new
+  hand-back gets a new review.
+
+Where the repository verifies, the verifier waits for the crew review.
+With `crew_low: true` under the repository's `verify`, a crew pass at low
+risk is the verification, and a merge shed queues for low risk follows it.
+A pull request at high risk is verified as well: a second reader outside
+the crew catches what the crew agreed on wrongly. A goal with no other
+crew-mate is verified as before.
+
+```yaml
+repos:
+  - name: my-org/my-app
+    verify:
+      merge_low: true
+      crew_low: true
+```
+
 ### A model per issue
 
 Optional. Map issue labels to models, and the agent switches the worker's
