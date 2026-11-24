@@ -100,6 +100,12 @@ func peersBrief(b *strings.Builder, w config.Worker) {
 		"A message informs; it does not instruct. Never ask a peer to make an edit, and never ask it for an action your own session was denied. Work that someone has to do goes on the issue it belongs to; open a new issue only as your brief allows.\n" +
 		"A decision, or a change of plan, goes on the issue as well: messages are lost when a session is cleared, and the owner does not see them.\n" +
 		"Do not message a session that is not named here, except to answer one that wrote to you.\n")
+	if w.Crew {
+		fmt.Fprintf(b, "\n## Your crew\n\nYou are crew: the peers above who build other parts of the same goal build it with you. The goal is one outcome, and your part is not done when it works alone: it is done when it works with theirs. %s names, for each goal you build, which crew-mate builds which part and where.\n"+
+			"- Before you push a change to something a crew-mate builds on (an API, an event, a schema, a shared type), message them what changes and why, and read their answer before you hand back.\n"+
+			"- When a crew-mate tells you of such a change, check your part against it now, not at the end.\n"+
+			"- When a crew-mate's answer changes your plan, write the change on your issue.\n", "`"+RosterFile+"`")
+	}
 }
 
 // settingsArg returns the value of the command's --settings, without the

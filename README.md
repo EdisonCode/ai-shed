@@ -1365,6 +1365,41 @@ session three more, it is `stuck`, and `shed status` lists it with the
 session. End the exchange, for example with `shed recycle`. `shed preflight`
 warns about a worker with peers and no such hook.
 
+### Crews
+
+Peers named in pairs talk when one of them thinks to. A crew is for work
+that has to fit together: the parts of one goal, often in different
+repositories. Set `crew: true` on each worker that builds such parts:
+
+```yaml
+supervisor:
+  goal_labels: "goal:"
+machines:
+  - name: tower
+    workers:
+      - {name: api, dir: ~/work/api, brief: ..., crew: true, command: claude --remote-control}
+  - name: mini
+    workers:
+      - {name: web, dir: ~/work/web, brief: ..., crew: true, command: claude --remote-control}
+```
+
+Every crew worker is a peer of every other, with all that peers need (see
+above). Crew on different machines need `--remote-control` on both. A crew
+needs `goal_labels`: the goal is what makes two workers a crew.
+
+At any time, the crew of a goal is the crew workers whose session signed a
+plan on one of its open issues. Each crew worker's roster has a `Your crew`
+section. For each goal it builds, that section names which crew-mate builds
+which issue, in which repository and on which paths. Shed reads the goal's
+open issues in every repository a crew worker takes issues from, at most
+every 5 minutes.
+
+The brief says a crew worker's part is done when it works with the other
+parts, not when it works alone. Before it pushes a change to something a
+crew-mate builds on (an API, an event, a schema, a shared type), it messages
+that crew-mate and reads the answer before it hands back. A change of plan
+still goes on the issue.
+
 ### A model per issue
 
 Optional. Map issue labels to models, and the agent switches the worker's

@@ -206,7 +206,10 @@ type Supervisor struct {
 	// Looks reads the eye checks that merged work still owes. Looks may be
 	// nil: then no worker is handed one.
 	Repos []config.Repo
-	Looks LookReader
+	// CrewRepos are the repositories every crew worker of the fleet takes
+	// issues from: where a goal's other parts are built.
+	CrewRepos []string
+	Looks     LookReader
 	// EyeCheckRepos are the repositories whose eye checks a worker of the
 	// fleet does on staging, after the merge.
 	EyeCheckRepos []string
@@ -277,6 +280,8 @@ type Supervisor struct {
 	unparked map[string]bool
 	// diffs keeps the pull request diffs read for a risk tier.
 	diffs map[string]keptDiff
+	// crew holds the open issues of each goal in each crew repository.
+	crew map[string]crewRead
 	// deploys holds where each repository's staging deploy stands.
 	deploys map[string]*deployState
 	// wasPaused is whether the last tick found the machine paused, so that
@@ -1689,7 +1694,9 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	s.refreshFiled(ctx)
 	s.refreshBreaker(ctx)
 	s.applyHolds(w, items, open, elsewhere, checkins)
-	if _, err := writeRoster(w, rosterText(w, open, elsewhere, checkins)); err != nil {
+	crewGoals := s.crewGoals(w, open, checkins)
+	roster := rosterText(w, open, elsewhere, checkins) + crewText(w, crewGoals, s.crewIssues(ctx, crewGoals))
+	if _, err := writeRoster(w, roster); err != nil {
 		// The roster helps a worker message the right peer; its queue
 		// must not wait on it.
 		s.Logf("%v", err)

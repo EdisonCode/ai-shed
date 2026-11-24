@@ -254,6 +254,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		Cost:        backlog.GH{},
 		Prices:      cfg.Prices(),
 		QueueLabels: cfg.QueueLabels(),
+		CrewRepos:   cfg.CrewRepos(),
 		Covers:      cfg.Covers,
 		Filed:       backlog.GH{},
 		Base:        backlog.GH{},

@@ -6,6 +6,8 @@ import (
 )
 
 const twoBoxes = `
+supervisor:
+  goal_labels: "goal:"
 machines:
   - name: box
     host: local
@@ -66,5 +68,39 @@ func TestInvalidPeersAreRejected(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want %q", c.app, err, c.want)
 		}
+	}
+}
+
+func TestCrewWorkersArePeersOfEachOtherAcrossMachines(t *testing.T) {
+	cfg, err := parsePeers(t, "crew: true, command: claude --remote-control", "", "crew: true, command: claude --remote-control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, api, web := cfg.Machines[0].Workers[0], cfg.Machines[0].Workers[1], cfg.Machines[1].Workers[0]
+	if len(app.PeerList) != 1 || app.PeerList[0].Session != "mini-web" || !app.PeerList[0].Remote {
+		t.Errorf("app's peers = %+v, want mini-web", app.PeerList)
+	}
+	if len(web.PeerList) != 1 || web.PeerList[0].Session != "box-app" || web.Session != "mini-web" {
+		t.Errorf("web = %+v, want box-app as its peer and mini-web as its session", web)
+	}
+	if len(api.PeerList) != 0 {
+		t.Errorf("api is not crew; its peers = %+v", api.PeerList)
+	}
+}
+
+func TestCrewOnTwoMachinesNeedsRemoteControl(t *testing.T) {
+	_, err := parsePeers(t, "crew: true", "", "crew: true")
+	if err == nil || !strings.Contains(err.Error(), `are crew on different machines, so both commands need --remote-control`) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := parsePeers(t, "crew: true, ask: true", "", ""); err == nil || !strings.Contains(err.Error(), "cannot be crew") {
+		t.Fatalf("an ask worker as crew: err = %v", err)
+	}
+}
+
+func TestCrewNeedsGoalLabels(t *testing.T) {
+	_, err := Parse([]byte("machines:\n  - name: box\n    host: local\n    workers:\n      - {name: app, dir: /tmp, brief: b, crew: true}\n"))
+	if err == nil || !strings.Contains(err.Error(), "set supervisor.goal_labels") {
+		t.Fatalf("err = %v", err)
 	}
 }
