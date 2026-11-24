@@ -103,3 +103,79 @@ func crewText(w config.Worker, goals []string, issues map[string][]backlog.Issue
 	}
 	return b.String()
 }
+
+// crewSessions are the sessions of every crew worker of the fleet, as this
+// machine knows them: its own crew workers and their peers.
+func (s *Supervisor) crewSessions() map[string]bool {
+	out := map[string]bool{}
+	for _, w := range s.Machine.Workers {
+		if !w.Crew {
+			continue
+		}
+		out[w.Session] = true
+		for _, p := range w.PeerList {
+			out[p.Session] = true
+		}
+	}
+	return out
+}
+
+// crewReviewer returns the session of the crew-mate who reviews the pull
+// request of an issue: among the crew of its goal, the first after its
+// author's session in order, wrapping around. Every machine works it out
+// the same way from GitHub, so no two hand out the same review. "" when
+// the issue has no goal, its author is not crew, or the goal has no other
+// crew-mate.
+func (s *Supervisor) crewReviewer(ctx context.Context, i backlog.Issue) string {
+	goal := backlog.GoalLabel(i.LabelNames(), s.Settings.GoalLabels)
+	author := backlog.PlanSession(i)
+	crew := s.crewSessions()
+	if goal == "" || !crew[author] {
+		return ""
+	}
+	var sessions []string
+	for _, other := range s.crewIssues(ctx, []string{goal})[goal] {
+		if session := backlog.PlanSession(other); crew[session] && !slices.Contains(sessions, session) {
+			sessions = append(sessions, session)
+		}
+	}
+	if !slices.Contains(sessions, author) {
+		sessions = append(sessions, author)
+	}
+	if len(sessions) < 2 {
+		return ""
+	}
+	slices.Sort(sessions)
+	n := slices.Index(sessions, author)
+	return sessions[(n+1)%len(sessions)]
+}
+
+// withCrewReviews adds to a crew worker's queue the pull requests of its
+// goals that it is the crew-mate to review, each at its risk tier.
+func (s *Supervisor) withCrewReviews(ctx context.Context, w config.Worker, items []QueueItem, open []backlog.Issue, checkins []runlog.Checkin) []QueueItem {
+	goals := s.crewGoals(w, open, checkins)
+	byGoal := s.crewIssues(ctx, goals)
+	for _, goal := range goals {
+		for _, i := range byGoal[goal] {
+			c := backlog.CrewReview(i, s.Signals)
+			if c.State != backlog.CrewDue || s.crewReviewer(ctx, i) != w.Session {
+				continue
+			}
+			tier := config.TierLow
+			if s.Diffs != nil {
+				t, _, err := s.tierOf(ctx, i.Repo, c.PR)
+				if err != nil {
+					s.Logf("worker %s: tier of %s#%d: %v", w.Name, i.Repo, c.PR, err)
+					continue
+				}
+				tier = t
+			}
+			author := backlog.PlanSession(i)
+			item := QueueItem{Repo: i.Repo, Number: i.Number, Title: i.Title, Verify: fmt.Sprintf("crew review for %s of %s's pull request", goal, author),
+				VerifyPR: c.PR, Tier: tier, CrewReview: author}
+			items = slices.DeleteFunc(items, func(q QueueItem) bool { return q.Repo == i.Repo && q.Number == i.Number })
+			items = append(items, item)
+		}
+	}
+	return items
+}

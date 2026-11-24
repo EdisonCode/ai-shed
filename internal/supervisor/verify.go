@@ -37,6 +37,13 @@ func (s *Supervisor) verifies(repo string) bool {
 	return false
 }
 
+// crewLow reports whether a crew-mate's pass at low risk stands in for the
+// repository's verification.
+func (s *Supervisor) crewLow(repo string) bool {
+	r, ok := s.repoConfig(repo)
+	return ok && r.Verify != nil && r.Verify.CrewLow
+}
+
 // mergesHigh reports whether the repository lets shed queue the merge of a
 // high-risk pass too.
 func (s *Supervisor) mergesHigh(repo string) bool {
@@ -68,6 +75,10 @@ func (s *Supervisor) withVerifies(ctx context.Context, w config.Worker, items []
 		}
 		v := backlog.Verification(i, s.Signals)
 		if v.State != backlog.VerifyDue {
+			continue
+		}
+		// A crew-mate reads it first, and changes it asked for come first.
+		if c := backlog.CrewReview(i, s.Signals); c.State == backlog.CrewChanges || (c.State == backlog.CrewDue && s.crewReviewer(ctx, i) != "") {
 			continue
 		}
 		choice := slices.ContainsFunc(s.Machine.Workers, func(other config.Worker) bool {
