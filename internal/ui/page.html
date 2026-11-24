@@ -133,6 +133,9 @@
   .confirm pre { background: #0d0f13; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; max-height: 40vh; overflow: auto; }
   .confirm .row2 { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
   .confirm button.post { background: #2a5a44; border-color: #2a5a44; color: #fff; }
+  .confirm button.post.risky { background: #6a3a2a; border-color: #8a4a35; }
+  .confirm .warn { background: #2a1d14; border: 1px solid #6a4a27; color: var(--warn); border-radius: 6px; padding: 8px 10px; margin: 8px 0; font-size: 12.5px; }
+  .confirm .does { margin: 8px 0; }
 </style>
 </head>
 <body>
@@ -157,7 +160,7 @@
 <main id="boardview" hidden>
   <div class="filters">
     <select id="f-goal"></select><select id="f-repo"></select><select id="f-machine"></select>
-    <span class="meta">Right-click a card for what you can do with it.</span>
+    <span class="meta">Right-click a card to bump it, bump what it waits for, or answer it.</span>
   </div>
   <div id="board" class="board"></div>
 </main>
@@ -406,7 +409,7 @@ function renderAttention(snap) {
   for (const i of unique) groups.find(g => g.re.test(i.text)).items.push(i);
   document.getElementById("needs-note").textContent = unique.length ? unique.length + " item(s)" : "";
   const box = document.getElementById("attn");
-  const actions = snap.actions || [];
+  const actions = (snap.actions || []).filter(a => a.quick);
   if (!unique.length && !actions.length) { box.replaceChildren(el("div", { class: "empty good" }, "Nothing needs you.")); return; }
   const titles = issueTitles(snap);
   const answers = actions.length ? (() => {
@@ -437,13 +440,14 @@ function issueTitles(snap) {
 // confirmAction shows what an answer posts, and to what, before it does.
 function confirmAction(a) {
   const close = () => c.remove();
-  const post = el("button", { class: "post" }, "Post on GitHub");
+  const doLabel = a.comment ? "Post on GitHub" : a.label;
+  const post = el("button", { class: "post" + (a.warn ? " risky" : "") }, doLabel);
   const c = el("div", { class: "confirm", onclick: e => { if (e.target === c) close(); } },
     el("div", { class: "box" },
       el("h3", {}, a.label + " · " + short(a.repo) + "#" + a.number),
-      a.context ? el("div", {}, el("div", { class: "meta" }, "What it answers"), el("pre", {}, a.context)) : null,
-      el("div", { class: "meta" }, "Posts this comment as you"),
-      el("pre", {}, a.comment),
+      a.context ? el("div", {}, el("div", { class: "meta" }, a.for ? "Why it waits" : "What it answers"), el("pre", {}, a.context)) : null,
+      a.warn ? el("div", { class: "warn" }, a.warn) : null,
+      a.comment ? el("div", {}, el("div", { class: "meta" }, "Posts this comment as you"), el("pre", {}, a.comment)) : el("div", { class: "does" }, a.does || ""),
       el("div", { class: "row2" }, el("button", { onclick: close }, "Cancel"), post)));
   post.addEventListener("click", async () => {
     post.disabled = true;
@@ -453,10 +457,10 @@ function confirmAction(a) {
       const text = await r.text();
       if (!r.ok) throw new Error(text.trim());
       close();
-      toast("Posted on " + short(a.repo) + "#" + a.number + ": " + a.comment);
+      toast(a.comment ? "Posted on " + short(a.repo) + "#" + a.number + ": " + a.comment : a.label + ": done");
     } catch (e) {
       post.disabled = false;
-      post.textContent = "Post on GitHub";
+      post.textContent = doLabel;
       toast("Not posted: " + e.message);
     }
   });
@@ -550,7 +554,9 @@ function renderBoard(snap, now) {
 function card(i, now) {
   const ask = (i.asks || [])[0];
   const note = i.held || i.rework || (i.waiting && i.waiting.length ? "waits on you: " + i.waiting.join(", ") : "") || (i.returns_to ? "returns to " + i.returns_to : "");
-  const side = [i.worker, ask && ask.since ? ago(ask.since, now) : ""].filter(Boolean).join(" · ");
+  // An ask whose comment had no time has a zero one: no age to show.
+  const since = ask && ask.since && new Date(ask.since).getFullYear() > 2000 ? ago(ask.since, now) : "";
+  const side = [i.worker, since].filter(Boolean).join(" · ");
   return el("div", { class: "card", oncontextmenu: e => { e.preventDefault(); menu(e, i); } },
     el("div", { class: "row" }, el("span", {}, el("a", { href: i.url, target: "_blank", rel: "noopener", class: "mono", title: i.repo }, "#" + i.number),
       manyRepos ? el("span", { class: "repo-tag" }, " " + short(i.repo)) : null),
@@ -567,21 +573,23 @@ function card(i, now) {
 function menu(e, i) {
   closeMenu();
   const machine = i.machines[0];
-  const answers = ((last && last.actions) || []).filter(a => a.repo === i.repo && a.number === i.number);
+  const key = i.repo + "#" + i.number;
+  const all = (last && last.actions) || [];
+  const mine = all.filter(a => (a.for ? a.for === key : a.repo === i.repo && a.number === i.number));
   const items = [
     ["Open on GitHub", null, () => window.open(i.url, "_blank", "noopener")],
-    ...answers.map(a => [a.label, null, () => confirmAction(a), a.comment]),
+    ...mine.map(a => [a.label, null, () => confirmAction(a), a.comment || (a.warn ? "check it first" : "")]),
     null,
-    ["Bump to the front", "shed bump " + machine + " " + i.number],
-    ["Put back in its place", "shed bump -undo " + machine + " " + i.number],
   ];
+  // Without actions (the page is not on loopback), the commands to copy.
+  if (!all.length) items.push(["Bump to the front", "shed bump " + machine + " " + i.number], ["Put back in its place", "shed bump -undo " + machine + " " + i.number]);
   if (i.worker) items.push(["Recycle its worker", "shed recycle " + machine + " " + i.worker]);
   items.push(["Pause the machine", "shed pause " + machine]);
   const m = el("div", { class: "menu", id: "menu" });
   for (const it of items) {
     if (!it) { m.append(el("div", { class: "sep" })); continue; }
     const [label, cmd, act, posts] = it;
-    m.append(el("div", { class: "item", onclick: () => { closeMenu(); if (act) act(); else copy(cmd); } }, label, cmd ? el("code", {}, cmd) : posts ? el("code", {}, "posts: " + posts) : null));
+    m.append(el("div", { class: "item", onclick: () => { closeMenu(); if (act) act(); else copy(cmd); } }, label, cmd ? el("code", {}, cmd) : posts ? el("code", {}, posts.startsWith("check") ? posts : "posts: " + posts) : null));
   }
   document.body.append(m);
   m.style.left = Math.min(e.clientX, innerWidth - m.offsetWidth - 8) + "px";

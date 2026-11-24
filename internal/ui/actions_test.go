@@ -27,7 +27,9 @@ func askingReport() status.Report {
 	return status.Report{Machines: []status.MachineReport{{Name: "box", Issues: []status.IssueStatus{
 		{Repo: "org/app", Number: 5, State: status.Waiting, Asks: []backlog.Ask{{Name: config.DecisionSignal, Text: "Default currency?\n- Recommend: USD"}}},
 		{Repo: "org/app", Number: 6, State: status.Waiting, Asks: []backlog.Ask{{Name: config.EyesSignal, Text: "open /orders"}, {Name: "review", PR: 41}}},
-		{Repo: "org/app", Number: 7, State: status.Held, Held: "waits for org/api#40, which no queue covers", Droppable: []string{"org/api#40"}},
+		{Repo: "org/app", Number: 7, State: status.Held, Held: "waits for org/api#40, which no queue covers", Blockers: []string{"org/api#40"}, Droppable: []string{"org/api#40"}},
+		{Repo: "org/app", Number: 8, State: status.Held, Held: "waits for #9 to close", Blockers: []string{"#9"}},
+		{Repo: "org/app", Number: 9, State: status.Queued},
 	}}, {Name: "mini", Issues: []status.IssueStatus{
 		{Repo: "org/app", Number: 5, State: status.Waiting, Asks: []backlog.Ask{{Name: config.DecisionSignal, Text: "Default currency?\n- Recommend: USD"}}},
 	}}}}
@@ -37,18 +39,27 @@ func TestTheOwnersAnswersAreWorkedOutFromTheReport(t *testing.T) {
 	got := actionsFor(askingReport(), config.DefaultSignals())
 	var lines []string
 	for _, a := range got {
-		lines = append(lines, a.Kind+" "+a.Repo+"#"+itoa(a.Number)+" "+a.Comment)
+		line := fmt.Sprintf("%s %s#%d %s%s quick=%v", a.Kind, a.Repo, a.Number, a.Machine, a.Comment, a.Quick)
+		if a.For != "" {
+			line += " for " + a.For
+		}
+		lines = append(lines, line)
 	}
 	want := []string{
-		"accept org/app#5 Owner ruling: accepted",
-		"eyes org/app#6 Eyes checked: passed on staging.",
-		"undepend org/app#7 No longer depends on org/api#40",
+		"accept org/app#5 Owner ruling: accepted quick=true",
+		"eyes org/app#6 Eyes checked: passed on staging. quick=true",
+		"undepend org/app#7 No longer depends on org/api#40 quick=false",
+		"bump org/app#9 box quick=false for org/app#8",
+		"bump org/app#9 box quick=false",
 	}
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("actions:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
 	}
 	if got[0].Context != "Default currency?\n- Recommend: USD" {
 		t.Fatalf("the accept does not show the recommendation: %+v", got[0])
+	}
+	if got[2].Warn == "" {
+		t.Fatal("dropping a dependency carries no warning")
 	}
 }
 
@@ -126,5 +137,18 @@ func TestWithoutACommenterThePageOffersNoActionsAndHasNoToken(t *testing.T) {
 	}
 	if rec := post(s, "127.0.0.1:7777", "http://127.0.0.1:7777", "secret", "accept:org/app#5:Owner ruling: accepted"); rec.Code != http.StatusForbidden {
 		t.Fatalf("code = %d", rec.Code)
+	}
+}
+
+func TestABumpFromThePageIsMadeOnTheMachineAsShedBumpMakesIt(t *testing.T) {
+	s, c := actingServer(t)
+	s.Config = &config.Config{Machines: []config.Machine{{Name: "box", Host: "local"}}}
+	r := s.Runner.(*fakeRunner)
+	rec := post(s, "127.0.0.1:7777", "http://127.0.0.1:7777", "secret", "bump:org/app#9:box:for org/app#8")
+	if rec.Code != http.StatusOK || len(c.posted) != 0 {
+		t.Fatalf("code %d, body %s, posted %q", rec.Code, rec.Body, c.posted)
+	}
+	if len(r.commands) != 1 || !strings.Contains(r.commands[0], "box: ") || !strings.Contains(r.commands[0], "bumps") {
+		t.Fatalf("commands = %q, want the bump written on box", r.commands)
 	}
 }
