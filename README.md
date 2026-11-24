@@ -466,7 +466,8 @@ It is a view, not a new role:
   why the first one nobody has in hand waits. When it will be done comes
   from the last seven days: issues closed less issues opened, per day, into
   the open count. A goal that opens issues as fast as it closes them is
-  *not converging*, and has no date.
+  *not converging*, and one with nothing opened or closed in the week is
+  *stalled*; neither has a date.
 
   ```
   Goals: 2
