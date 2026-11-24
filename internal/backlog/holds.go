@@ -30,35 +30,109 @@ type Dep struct {
 
 func (d Dep) key() string { return d.Repo + "#" + strconv.Itoa(d.Number) }
 
-// depRE finds "Depends on #12", "blocked by: org/api#7, #9" and the like.
+// depRE finds "Depends on #12", "blocked by: org/api#7, #9" and the like,
+// and "No longer depends on #12", which ends what an earlier line said.
 var (
-	depRE = regexp.MustCompile(`(?i)\b(?:depends on|blocked by)\s*:?\s*((?:[\w.-]+/[\w.-]+)?#\d+(?:\s*(?:,|and|&)\s*(?:[\w.-]+/[\w.-]+)?#\d+)*)`)
+	depRE = regexp.MustCompile(`(?i)\b(no longer\s+)?(?:depends on|blocked by)\s*:?\s*((?:[\w.-]+/[\w.-]+)?#\d+(?:\s*(?:,|and|&)\s*(?:[\w.-]+/[\w.-]+)?#\d+)*)`)
 	refRE = regexp.MustCompile(`(?:([\w.-]+/[\w.-]+))?#(\d+)`)
+	// quotedRE finds what a comment quotes or shows as code: a fenced block,
+	// a code span, a quoted line. A rule explained there holds nothing.
+	quotedRE = regexp.MustCompile("(?s)```.*?```|`[^`\n]*`|(?m)^[ \t]*>.*$")
 )
 
-// DependencyRefs returns the issues the issue's body and comments say it
-// depends on, in the order they are named. Their state is not known.
-func DependencyRefs(i Issue) []Dep {
+// depStatement is one line's word about a dependency: that the issue
+// depends on it, or no longer does, and which text said so.
+type depStatement struct {
+	dep     Dep
+	release bool
+	text    int // -1 for the body, else the comment's index
+}
+
+// depStatements reads every statement about a dependency in the issue's
+// body and then its comments, in order.
+func depStatements(i Issue) []depStatement {
 	texts := []string{i.Body}
 	for _, c := range i.Comments {
 		texts = append(texts, c.Body)
 	}
-	var deps []Dep
-	for _, text := range texts {
-		for _, m := range depRE.FindAllStringSubmatch(text, -1) {
-			for _, ref := range refRE.FindAllStringSubmatch(m[1], -1) {
-				n, _ := strconv.Atoi(ref[2])
-				d := Dep{Repo: i.Repo, Number: n}
+	var out []depStatement
+	for n, text := range texts {
+		for _, m := range depRE.FindAllStringSubmatch(quotedRE.ReplaceAllString(text, ""), -1) {
+			for _, ref := range refRE.FindAllStringSubmatch(m[2], -1) {
+				num, _ := strconv.Atoi(ref[2])
+				d := Dep{Repo: i.Repo, Number: num}
 				if ref[1] != "" {
 					d.Repo = ref[1]
 				}
-				if !slices.Contains(deps, d) && !(d.Repo == i.Repo && d.Number == i.Number) {
-					deps = append(deps, d)
+				if d.Repo == i.Repo && d.Number == i.Number {
+					continue
 				}
+				out = append(out, depStatement{dep: d, release: m[1] != "", text: n - 1})
 			}
 		}
 	}
-	return deps
+	return out
+}
+
+// DependencyRefs returns the issues the issue's body and comments say it
+// depends on, in the order they are first named. The latest statement about
+// each wins: "No longer depends on #12" after "Depends on #12" ends it.
+// Their state is not known.
+func DependencyRefs(i Issue) []Dep {
+	var order []Dep
+	active := map[Dep]bool{}
+	for _, st := range depStatements(i) {
+		if !slices.Contains(order, st.dep) {
+			order = append(order, st.dep)
+		}
+		active[st.dep] = !st.release
+	}
+	return slices.DeleteFunc(order, func(d Dep) bool { return !active[d] })
+}
+
+// depOrigin says where the dependency on d was named: the comment of the
+// last statement that made it, or the issue body, or GitHub's blocked-by
+// relation when no text names it.
+func depOrigin(i Issue, d Dep) string {
+	text := -2
+	for _, st := range depStatements(i) {
+		if st.dep.key() == d.key() && !st.release {
+			text = st.text
+		}
+	}
+	switch {
+	case text == -2:
+		return "GitHub's blocked-by"
+	case text == -1:
+		return "named in the issue body"
+	}
+	c := i.Comments[text]
+	when := ""
+	if !c.CreatedAt.IsZero() {
+		when = " on " + c.CreatedAt.Format("Jan 2")
+	}
+	if c.Author.Login != "" {
+		return "named by " + c.Author.Login + when
+	}
+	return "named in a comment" + when
+}
+
+// depOrigins names where each dependency was named: one phrase when they
+// share it, else one per dependency.
+func depOrigins(i Issue, deps []Dep) string {
+	var each []string
+	same := true
+	for n, d := range deps {
+		each = append(each, depOrigin(i, d))
+		same = same && each[n] == each[0]
+	}
+	if same {
+		return each[0]
+	}
+	for n, d := range deps {
+		each[n] = DepWords([]Dep{d}, i.Repo) + " " + each[n]
+	}
+	return strings.Join(each, "; ")
 }
 
 // OpenDeps returns the issue's dependencies that are still open.
@@ -88,10 +162,10 @@ func MissingDeps(i Issue) []Dep {
 // do not: a number that names nothing, or a dependency still open.
 func DepHold(i Issue) string {
 	if missing := MissingDeps(i); len(missing) > 0 {
-		return fmt.Sprintf("depends on %s, which is not an issue or pull request", DepWords(missing, i.Repo))
+		return fmt.Sprintf("depends on %s, which is not an issue or pull request (%s)", DepWords(missing, i.Repo), depOrigins(i, missing))
 	}
 	if open := OpenDeps(i); len(open) > 0 {
-		return fmt.Sprintf("waits for %s to close", DepWords(open, i.Repo))
+		return fmt.Sprintf("waits for %s to close (%s)", DepWords(open, i.Repo), depOrigins(i, open))
 	}
 	return ""
 }

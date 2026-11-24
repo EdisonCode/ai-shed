@@ -1210,7 +1210,7 @@ func TestStatusShowsWhyAQueuedIssueIsHeld(t *testing.T) {
 	}}
 	MarkHeld(&report, issues, "area:", nil, nil)
 	want := []struct{ state, held string }{
-		{Held, "waits for #9 to close"}, {Working, ""}, {Held, "overlaps #12 in hand: both are area:billing"}, {Queued, ""},
+		{Held, "waits for #9 to close (GitHub's blocked-by)"}, {Working, ""}, {Held, "overlaps #12 in hand: both are area:billing"}, {Queued, ""},
 	}
 	for n, w := range want {
 		if got := report.Issues[n]; got.State != w.state || got.Held != w.held {
