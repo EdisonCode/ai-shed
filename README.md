@@ -2079,6 +2079,40 @@ mac-mini  me@mac-mini  load 1.20/8  disk 41%  agent ok
   account  me@example.com  (one usage limit with linux-box)
 ```
 
+### Closing finished issues
+
+A merge closes an issue only when the pull request says `Closes #12`, and
+only on the default branch. Work that took several pull requests, or that
+was merged elsewhere, leaves its issue open, and the open count stops
+meaning anything. With `close_finished`, shed closes such an issue itself:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    close_finished: true
+    close_after: 24h      # the default
+```
+
+shed closes an issue only when all of these hold:
+
+- the last hand-back's pull request merged, and the hand-back lists nothing
+  after `Still to do:`;
+- nobody wrote on the issue since, except another hand-back, a verifier's
+  pass, a passed look, or shed itself;
+- a verifier passed it, where the repository has `verify`;
+- its eye check passed, where one was asked;
+- the hand-back has nothing after `Owner act:`. Such an issue waits on you
+  as `no worker step` instead;
+- the checks on the merge commit passed, or none reported;
+- `close_after` has passed since the merge, or since the passed look if
+  that came later, and no issue names `Regression of #12` in that time.
+
+The comment it closes with lists that evidence. Workers are told to write
+`Regression of #12` when they find that merged work broke something, and
+you can write it too: the issue then stays open. Without `close_finished`,
+nothing is closed. Only the machine that built the work closes its issue,
+and GitHub is asked about each finished issue at most every half hour.
+
 ### Tidying up after merged work
 
 A worker starts each issue on a new branch, and its tool makes worktrees for
