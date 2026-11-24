@@ -180,7 +180,10 @@ at a time, in this order:
    - *The fix was reported but not pushed.* A hand-back after rework that
      leaves the pull request at the head it was sent back with, and does not
      say that nothing needed to change, goes back again. A report is a
-     claim; the head is the check.
+     claim; the head is the check. Rework sent only for a failed check or a
+     draft is the exception: a rerun of the CI, or marking the pull request
+     ready, fixes it without a commit, so the check passes once the pull
+     request is neither.
    - *The pull request is an unfinished draft.* The hand-back names a draft
      and says nothing about what it waits for. The worker is told to finish
      it, or to hand back with the reason.
@@ -1324,8 +1327,9 @@ the session it went to and its length, not the text):
 ]
 ```
 
-`shed status` shows a worker's count: `[12 message(s) sent in the last
-hour]`. A worker that sends one session `message_limit` messages within an
+`shed status` shows a worker's count: `[12 peer message(s) sent in the
+last hour]`. It counts only messages to the sessions of its peers; a message
+to one of its own sub-agents goes through the same tool and is left out. A worker that sends one session `message_limit` messages within an
 hour (20 by default, under `supervisor`; a negative number turns the check
 off) is told to stop and to put what is left on the issue. If it sends that
 session three more, it is `stuck`, and `shed status` lists it with the

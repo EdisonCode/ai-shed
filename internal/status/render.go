@@ -304,7 +304,7 @@ func renderMachine(w io.Writer, r MachineReport) {
 				reason = "[fresh session pending] " + reason
 			}
 			if wk.Messages > 0 {
-				reason = fmt.Sprintf("[%d message(s) sent in the last hour] %s", wk.Messages, reason)
+				reason = fmt.Sprintf("[%d peer message(s) sent in the last hour] %s", wk.Messages, reason)
 			}
 			hand := inHand(wk)
 			// The tool's own state has a column only on a machine where

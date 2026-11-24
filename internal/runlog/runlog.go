@@ -335,13 +335,13 @@ func ReworkSpent(checkins []Checkin, issue int, now time.Time) bool {
 // LastRework returns the head commit the issue's pull request had when it
 // was last sent back as rework, and when; "" when it never was or no head
 // was recorded.
-func LastRework(checkins []Checkin, issue int) (head string, at time.Time) {
+func LastRework(checkins []Checkin, issue int) (head, why string, at time.Time) {
 	for _, c := range checkins {
 		if c.Sent && c.Issue == issue && c.Rework != "" {
-			head, at = c.Head, c.Time
+			head, why, at = c.Head, c.Rework, c.Time
 		}
 	}
-	return head, at
+	return head, why, at
 }
 
 // BuildingInHand is IssueInHand for a worker that builds the issue: 0 when
