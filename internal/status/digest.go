@@ -118,7 +118,7 @@ func (c Collector) Digest(ctx context.Context, cfg *config.Config, merged Merged
 	}
 	d.Imbalance = imbalance(cfg, d.MachineIdle, d.Peaks)
 	c.collectUsage(ctx, cfg, &d)
-	for _, repo := range digestRepos(cfg) {
+	for _, repo := range fleetRepos(cfg) {
 		pulls, err := merged.MergedSince(ctx, repo, since)
 		if err != nil {
 			d.Problems = append(d.Problems, err.Error())

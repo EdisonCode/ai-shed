@@ -75,7 +75,7 @@ func (c Collector) collectFlow(ctx context.Context, cfg *config.Config, d *Diges
 		return
 	}
 	d.Flow = map[string]RepoFlow{}
-	for _, repo := range digestRepos(cfg) {
+	for _, repo := range fleetRepos(cfg) {
 		f := RepoFlow{}
 		issues, err := c.Flow.IssuesSince(ctx, repo, d.Since)
 		if err != nil {
@@ -89,20 +89,6 @@ func (c Collector) collectFlow(ctx context.Context, cfg *config.Config, d *Diges
 		longestChain(&f, d, repo)
 		d.Flow[repo] = f
 	}
-}
-
-// digestRepos lists every repository a machine takes issues from, in the
-// order of the fleet file.
-func digestRepos(cfg *config.Config) []string {
-	var repos []string
-	for _, m := range cfg.Machines {
-		for _, src := range m.AllSources() {
-			if !slices.Contains(repos, src.Repo) {
-				repos = append(repos, src.Repo)
-			}
-		}
-	}
-	return repos
 }
 
 func countOpenedClosed(f *RepoFlow, issues []looks.FlowIssue, since time.Time) {
