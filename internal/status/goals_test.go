@@ -71,8 +71,8 @@ func TestTheDigestShowsEachGoalClosedOfTotalNetAndWhatHoldsItsNextSlice(t *testi
 	RenderDigest(&out, d)
 	wantLines(t, out.String(),
 		"Goals: 2",
-		"org/app  goal:export   7 of 10 closed  net -1  not converging: 0 opened, 0 closed in 7 days  next #14 is held: waits for #12",
-		"org/app  goal:refunds  0 of 4 closed   net +0  not converging: 0 opened, 0 closed in 7 days  next #21 is workable",
+		"org/app  goal:export   7 of 10 closed  net -1  stalled: nothing opened or closed in 7 days  next #14 is held: waits for #12",
+		"org/app  goal:refunds  0 of 4 closed   net +0  stalled: nothing opened or closed in 7 days  next #21 is workable",
 	)
 }
 
@@ -130,4 +130,17 @@ func TestWithoutGoalLabelsTheDigestHasNoGoalsAndDecisionsAreNotGrouped(t *testin
 		t.Fatalf("goals without goal_labels:\n%s", out.String())
 	}
 	wantLines(t, out.String(), "Decided without you: 1\n  org/app#6  Kept the old column.")
+}
+
+func TestAMergedIssueIsNotAGoalsNextSlice(t *testing.T) {
+	got := nextSlice([]IssueStatus{
+		{Number: 409, State: Merged},
+		{Number: 410, State: Held, Held: "waits for #409 to close"},
+	})
+	if got != "next #410 is held: waits for #409 to close" {
+		t.Fatalf("next = %q", got)
+	}
+	if got := nextSlice([]IssueStatus{{Number: 409, State: Merged}}); got != "every open issue is in hand or merged" {
+		t.Fatalf("only merged: %q", got)
+	}
 }

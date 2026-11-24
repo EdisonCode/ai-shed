@@ -111,12 +111,13 @@ func nextSlice(issues []IssueStatus) string {
 		if i.State == Queued {
 			return fmt.Sprintf("next #%d is workable", i.Number)
 		}
-		if i.State != Working && first == nil {
+		// A merged issue waits only to be closed: it is no slice of work.
+		if i.State != Working && i.State != Merged && first == nil {
 			first = &issues[n]
 		}
 	}
 	if first == nil {
-		return "every open issue is in hand"
+		return "every open issue is in hand or merged"
 	}
 	why := first.State
 	switch {

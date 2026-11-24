@@ -79,11 +79,14 @@ func GoalPace(issues []GoalIssue, now time.Time) Pace {
 }
 
 // Words says the pace in a line: when the goal will be done, or why that
-// cannot be said.
+// cannot be said. A goal nobody touched in the week is stalled; one that
+// moved but opened as many issues as it closed is not converging.
 func (p Pace) Words() string {
 	switch {
 	case p.Open == 0:
 		return "done"
+	case p.OpenedWeek == 0 && p.ClosedWeek == 0:
+		return "stalled: nothing opened or closed in 7 days"
 	case p.ETA.IsZero():
 		return fmt.Sprintf("not converging: %d opened, %d closed in 7 days", p.OpenedWeek, p.ClosedWeek)
 	}

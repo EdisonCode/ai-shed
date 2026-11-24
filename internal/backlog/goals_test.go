@@ -65,6 +65,10 @@ func TestAGoalThatOpensIssuesAsFastAsItClosesThemHasNoETA(t *testing.T) {
 	if !p.ETA.IsZero() || p.Words() != "not converging: 2 opened, 1 closed in 7 days" {
 		t.Fatalf("pace = %+v, %q", p, p.Words())
 	}
+	idle := []GoalIssue{{CreatedAt: now.Add(-30 * 24 * time.Hour)}}
+	if got := GoalPace(idle, now).Words(); got != "stalled: nothing opened or closed in 7 days" {
+		t.Fatalf("a goal nobody touched: %q", got)
+	}
 	if got := GoalPace([]GoalIssue{{Closed: true, CreatedAt: now, ClosedAt: now}}, now).Words(); got != "done" {
 		t.Fatalf("a goal with nothing open: %q", got)
 	}
