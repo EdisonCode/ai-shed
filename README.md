@@ -1628,6 +1628,36 @@ and the two typed commands to what that tool understands.
 An issue counts as *working* when a tmux window on its machine has the issue
 number in its name (`app-123`).
 
+### Pull requests no queue covers
+
+A worker is sent back to a pull request through its issue. A pull request
+whose issue is in no machine's queue, or that closes no issue, has no
+worker: it can sit red for days with auto-merge armed. `shed status` and
+`shed digest` list each one in the fleet's repositories, with its age and
+the state of its checks. They also list each draft with no commit for 48
+hours, with what it waits for:
+
+```
+PRs no queue covers: 2
+  3d   my-org/my-app#41  CI failed  closes no issue     Add the export button
+  16h  my-org/my-app#44  CI passed  #12 is in no queue  Show the total on the order page
+Drafts with no commit for 48h: 1
+  6d  my-org/my-app#39  waits for #36  Split the importer
+```
+
+A pull request is covered when an issue it closes (`Closes #12` in its
+body) is in a machine's queue. Give it an issue with a machine label, add
+the closing line, or close it. shed's own merge train batches are not
+listed. When a machine's queue cannot be read, its repository's pull
+requests are not called uncovered.
+
+What a draft waits for comes from the hand-back of its issue, `#39 (draft,
+waits for #36)`, or else from the line of its body that says `waits for`.
+`no hold given` means neither says: the hold may have quietly ended. A
+draft parked at a pull request limit shows `parked`.
+
+`-json` carries both under `pulls`, as `uncovered` and `stale_drafts`.
+
 On a machine with supervised workers, a window that runs an agent tool and
 is not a worker's own is marked `unsupervised` under `windows`, with one
 line that counts them: a manual session, or one left from another workflow.
@@ -2208,6 +2238,10 @@ pull request's cost adds every worker and pass that worked on it; the top
 five are named. One with no cost comment, such as one merged by hand, is
 counted in `of 7` only. `shed usage` on a machine prints the same totals
 for one machine.
+
+Before `Waiting on you`, the digest lists the pull requests no queue covers
+and the drafts with no commit for 48 hours, as `shed status` does (see
+[Pull requests no queue covers](#pull-requests-no-queue-covers)).
 
 It changes nothing and exits 1 when something needs you. To get it every
 morning, run it from a scheduler on the watcher and send the output wherever

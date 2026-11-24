@@ -28,7 +28,7 @@ func cmdStatus(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	collector := status.Collector{Runner: probe.ShellRunner{}, Lister: backlog.GH{}, Batches: backlog.GH{},
+	collector := status.Collector{Runner: probe.ShellRunner{}, Lister: backlog.GH{}, Batches: backlog.GH{}, Pulls: backlog.GH{},
 		Looks: &looks.Reader{GitHub: looks.GH{}, Run: looks.Shell, Now: time.Now}}
 
 	for {
@@ -46,6 +46,7 @@ func cmdStatus(args []string) int {
 				fmt.Printf("shed  %s  (every %s, ctrl-c to stop)\n\n", time.Now().Format("Mon 15:04:05"), *watch)
 			}
 			status.RenderReleased(os.Stdout, report.Released, time.Now())
+			status.RenderPulls(os.Stdout, report.Pulls, time.Now())
 			status.Render(os.Stdout, reports, repos)
 			status.RenderBalance(os.Stdout, report.Balance)
 		}
