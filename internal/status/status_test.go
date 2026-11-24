@@ -1585,12 +1585,14 @@ func TestAnIssueInTwoMachinesQueuesIsToldOnceAndHeldOnTheLaterMachine(t *testing
 	}
 }
 
-func TestStatusCountsTheMessagesAWorkerSentInTheLastHour(t *testing.T) {
-	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b"}, {Name: "docs", Dir: "/tmp", Brief: "b"}}}
+func TestStatusCountsOnlyTheMessagesAWorkerSentItsPeersInTheLastHour(t *testing.T) {
+	peers := []config.Peer{{Machine: "box", Worker: "docs", Session: "box-docs"}, {Machine: "mini", Worker: "web", Session: "mini-web", Remote: true}}
+	m := config.Machine{Name: "box", Workers: []config.Worker{{Name: "app", Dir: "/tmp", Brief: "b", PeerList: peers}, {Name: "docs", Dir: "/tmp", Brief: "b"}}}
 	res := healthy()
 	res.Messages = map[string][]runlog.Message{"app": {
 		{Time: now.Add(-2 * time.Hour), To: "box-docs"},
 		{Time: now.Add(-10 * time.Minute), To: "box-docs"},
+		{Time: now.Add(-5 * time.Minute), To: "researcher"},
 		{Time: now.Add(-time.Minute), To: "mini-web"},
 	}}
 	for _, name := range []string{"app", "docs"} {
@@ -1604,7 +1606,7 @@ func TestStatusCountsTheMessagesAWorkerSentInTheLastHour(t *testing.T) {
 	}
 	var out bytes.Buffer
 	Render(&out, []MachineReport{r}, nil)
-	if !strings.Contains(out.String(), "[2 message(s) sent in the last hour] fine") || strings.Contains(out.String(), "docs  no issue  on_track  5m ago  [") {
+	if !strings.Contains(out.String(), "[2 peer message(s) sent in the last hour] fine") || strings.Contains(out.String(), "docs  no issue  on_track  5m ago  [") {
 		t.Fatalf("output:\n%s", out.String())
 	}
 }

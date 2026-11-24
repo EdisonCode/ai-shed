@@ -1796,8 +1796,8 @@ func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []ru
 	reason := backlog.Rework(i, s.Signals)
 	if reason == "" {
 		// A report that the fix was pushed is a claim: the head is the check.
-		head, sent := runlog.LastRework(checkins, i.Number)
-		reason = backlog.Unpushed(i, s.Signals, head, sent)
+		head, why, sent := runlog.LastRework(checkins, i.Number)
+		reason = backlog.Unpushed(i, s.Signals, head, why, sent)
 	}
 	if reason != "" {
 		if runlog.ReworkSpent(checkins, i.Number, s.Now()) {

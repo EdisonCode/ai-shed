@@ -461,13 +461,20 @@ var failed = map[string]bool{"FAILURE": true, "TIMED_OUT": true, "STARTUP_FAILUR
 
 // prProblem says what stops a pull request from merging: a conflict first,
 // since a rebase reruns the checks anyway.
+// stillDraft follows the pull request in the rework of one that is still a
+// draft.
+const stillDraft = "is still a draft"
+
+// failedCheckProblem starts the problem of a pull request a check failed on.
+const failedCheckProblem = "has a failed check"
+
 func prProblem(mergeable string, checks []check) string {
 	if mergeable == "CONFLICTING" {
 		return "conflicts with the base branch"
 	}
 	for _, c := range checks {
 		if failed[c.Conclusion] || failed[c.State] {
-			return fmt.Sprintf("has a failed check (%s)", cmp.Or(c.Name, c.Context))
+			return fmt.Sprintf("%s (%s)", failedCheckProblem, cmp.Or(c.Name, c.Context))
 		}
 	}
 	return ""
@@ -601,7 +608,7 @@ func Rework(issue Issue, signals []config.Signal) string {
 	if open.Draft {
 		for _, s := range signals {
 			if isOpen, _, _, line := signalState(issue, s); s.FollowsPR && isOpen && !heldDraft(line) {
-				reasons = append(reasons, fmt.Sprintf("pull request #%d is still a draft: finish it (rebase on the base branch, run the gate, mark it ready with auto-merge), or hand back with what it waits for", pr))
+				reasons = append(reasons, fmt.Sprintf("pull request #%d "+stillDraft+": finish it (rebase on the base branch, run the gate, mark it ready with auto-merge), or hand back with what it waits for", pr))
 				break
 			}
 		}
