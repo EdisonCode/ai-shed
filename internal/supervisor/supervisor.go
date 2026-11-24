@@ -178,6 +178,10 @@ type Supervisor struct {
 	// tokens only.
 	Prices      pricing.Table
 	QueueLabels []string
+	// Covers says whether an issue of a repository with these labels is in
+	// a queue of the fleet, and whether labels can tell. A hold whose
+	// blocker no queue covers says so. Nil leaves that out.
+	Covers func(repo string, labels []string) (covered, known bool)
 	// LookSources are the queues of other machines whose eye checks this
 	// machine's workers do: those machines have no worker that does them.
 	LookSources []config.IssueSource

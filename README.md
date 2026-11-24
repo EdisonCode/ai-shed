@@ -244,6 +244,16 @@ The supervisor holds both kinds back, and hands out what can go ahead.
   `waits for #12 to close (named by my-bot on Nov 16)`, `(named in the issue
   body)` or `(GitHub's blocked-by)`, so a stale line can be found without a
   search.
+- **Holds only you can end.** A hold reads as handled, so shed follows it to
+  the other end of the wait. When nothing a worker does will end it, the
+  hold says so, and `shed status` lists it with a `!` line for you:
+  - `waits for #12, which waits on you (decision)`: the blocker is queued
+    on the same machine and waits on you;
+  - `waits for #12, which no queue covers`: the blocker is an issue no queue
+    of the fleet lists, so no worker will close it. This is said only where
+    every queue of the repository is a label; a queue that is a search
+    could hold any issue;
+  - `#11 and #12 wait for each other`: two issues each hold the other.
 - **With `stack: true`**, an issue with one open dependency whose pull
   request is ready and waits for review goes ahead: the worker builds it on
   a new branch from that pull request's branch and opens its pull request

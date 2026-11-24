@@ -412,7 +412,7 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 	}
 
 	report := AssessWith(m, cfg.Signals, time.Now(), res, issues, workerLooks)
-	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels, cfg.Repos, cfg.Signals)
+	MarkHeld(&report, issues, cfg.Supervisor.OverlapLabels, cfg.Repos, cfg.Signals, cfg.Covers)
 	MarkSharedQueues(&report, m.Name, issues, cfg.QueuesOf)
 	MarkAgentHolds(&report)
 	if res != nil {
@@ -932,7 +932,7 @@ func deployWords(d runlog.Deploy) string {
 // why: an issue they depend on that is still open, a repository at its limit
 // of open pull requests, or an issue a worker has in hand that touches the
 // same code. It reads what the supervisor reads.
-func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels string, repos []config.Repo, signals []config.Signal) {
+func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels string, repos []config.Repo, signals []config.Signal, covers func(repo string, labels []string) (bool, bool)) {
 	limits, parks := map[string]int{}, map[string]bool{}
 	for _, r := range repos {
 		limits[r.Name], parks[r.Name] = r.MaxOpenPRs, r.ParksAtPRLimit()
@@ -948,8 +948,12 @@ func MarkHeld(report *MachineReport, issues []backlog.Issue, overlapLabels strin
 		if st.State != Queued || !ok {
 			continue
 		}
-		if hold := backlog.DepHold(issue); hold != "" {
+		if hold, owner := backlog.FollowHold(issue, byKey, signals, covers); hold != "" {
 			st.State, st.Held = Held, hold
+			if owner {
+				// Nothing a worker does ends it, so the hold is the owner's.
+				report.Attention = append(report.Attention, fmt.Sprintf("%s#%d is held and only you can end it: %s: %s", issue.Repo, issue.Number, hold, issue.Title))
+			}
 			continue
 		}
 		// A bumped issue and one whose question the owner answered go
