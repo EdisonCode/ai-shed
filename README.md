@@ -282,6 +282,38 @@ The supervisor holds both kinds back, and hands out what can go ahead.
   another machine does not hold an issue: it is named instead (see
   overlap across machines below).
 
+### Issues workers open
+
+A worker that splits its issue ends it now, with a clean hand-back, and
+leaves the cost to the chain it makes: each link a full pull request, its
+checks and a merge, and the open count grows faster than it closes. So
+every brief sets the bar for a new issue:
+
+- small work next to the issue goes in the same pull request, or after
+  `Still to do:` on the same issue. The rest of an issue's own scope is
+  never a new issue;
+- a new issue is for a large discovery or follow-up that is truly separate
+  from the issue's goal. Its body starts with `Found while building #12`,
+  which is how shed tells the issues workers open from yours, since they
+  sign in as you;
+- an issue too big for one pull request is not split: the worker hands back
+  with `Not ready: too big:` and the slices it sees, which opens the
+  `ready` wait for you to shape it.
+
+`issue_quota` makes new issues scarce:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    issue_quota: 3   # issues workers may open a day, all workers together
+```
+
+The brief names the quota. Each day's marked issues count in the order
+they were opened, by the agent's clock. One past the quota is held, `over
+the quota of 3 issue(s) workers open a day`, even when it carries a queue
+label, until you write `Ready now` on it. An issue you bump goes ahead. The
+digest's flow lines count the marked issues opened in the window.
+
 ### A queue that cannot run dry
 
 A queue is what somebody labelled. When each of those issues waits on you,

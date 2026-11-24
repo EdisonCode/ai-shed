@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -355,5 +356,79 @@ func TestAnIssueWithNoWorkerStepWaitsOnTheOwnerAndTheReserveIsOffered(t *testing
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
 		}
+	}
+}
+
+type fakeFiled struct {
+	filed []backlog.Filed
+	asked int
+}
+
+func (f *fakeFiled) FiledSince(context.Context, string, time.Time) ([]backlog.Filed, error) {
+	f.asked++
+	return f.filed, nil
+}
+
+func workerFiled(number int) backlog.Issue {
+	i := labeled(number)
+	i.Body = "Found while building #5\n\nThe export times out."
+	return i
+}
+
+// Splitting ends a worker's issue now and leaves the cost to the chain, so
+// the issues workers open each day are scarce: past the quota they wait
+// for the owner to admit them.
+func TestAnIssueAWorkerOpenedPastTheDaysQuotaWaitsForTheOwner(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	f.Repos = []config.Repo{{Name: "org/app", IssueQuota: 1}}
+	f.Filed = &fakeFiled{filed: []backlog.Filed{{Number: 11, CreatedAt: f.now.Add(-2 * time.Hour)}, {Number: 12, CreatedAt: f.now.Add(-time.Hour)}}}
+	admitted := workerFiled(13)
+	admitted.Comments = []backlog.Comment{{Body: "Ready now: this one is worth it."}}
+	f.Filed.(*fakeFiled).filed = append(f.Filed.(*fakeFiled).filed, backlog.Filed{Number: 13, CreatedAt: f.now.Add(-30 * time.Minute)})
+	f.lister.issues = []backlog.Issue{workerFiled(11), workerFiled(12), admitted}
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	if !strings.Contains(prompt, "org/app#12 Issue [held: over the quota of 1 issue(s) workers open a day") {
+		t.Fatalf("#12 is not held:\n%s", prompt)
+	}
+	for _, free := range []string{"org/app#11 Issue\n", "org/app#13 Issue\n"} {
+		if !strings.Contains(prompt, free) {
+			t.Fatalf("prompt lacks %q, which is within the quota or admitted:\n%s", free, prompt)
+		}
+	}
+}
+
+func TestTheIssuesWorkersOpenedAreReadOnceInTenMinutes(t *testing.T) {
+	f := started(t, config.Supervisor{}, done, done)
+	f.Repos = []config.Repo{{Name: "org/app", IssueQuota: 1}}
+	filed := &fakeFiled{}
+	f.Filed = filed
+	f.lister.issues = []backlog.Issue{labeled(11)}
+	f.tick(2 * time.Minute)
+	f.tick(3 * time.Minute)
+	if filed.asked != 1 {
+		t.Fatalf("asked = %d, want 1", filed.asked)
+	}
+}
+
+func TestTheBriefSetsTheBarForOpeningAnIssue(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	f.tick(2 * time.Minute)
+	brief, err := os.ReadFile(filepath.Join(f.Machine.Workers[0].Dir, BriefFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Found while building #<your issue>", "Not ready: too big:", "never a new issue"} {
+		if !strings.Contains(string(brief), want) {
+			t.Errorf("brief lacks %q", want)
+		}
+	}
+}
+
+func TestTheFilingRuleNamesEachRepositorysQuota(t *testing.T) {
+	s := &Supervisor{Repos: []config.Repo{{Name: "org/app", IssueQuota: 2}, {Name: "org/api"}}}
+	rule := s.filingRule("Still to do:")
+	if !strings.Contains(rule, "Workers may open 2 a day in org/app, all workers together") || strings.Contains(rule, "org/api") {
+		t.Fatalf("rule = %q", rule)
 	}
 }
