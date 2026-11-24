@@ -257,6 +257,23 @@ func TestLookThatCouldNotBeDoneIsBlockedUntilTheOwnerClearsIt(t *testing.T) {
 	}
 }
 
+func TestALookBlockedForMissingDataIsFailedNotTheOwners(t *testing.T) {
+	gh := &fakeGitHub{deployed: now.Add(-48 * time.Hour),
+		merged:    map[int]string{41: "c41"},
+		onStaging: map[string]bool{"c41": true},
+		closed:    []backlog.Issue{handedBack(1, 41, "Eyes blocked: no data: no order with a partial refund")}}
+	report, err := reader(gh).Read(context.Background(), repo, sources, nil, config.DefaultSignals())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := states(report); got[1] != Failed {
+		t.Fatalf("looks = %v, want #1 failed: it goes back to a worker for a seed", got)
+	}
+	if report.Looks[0].Note != "no data: no order with a partial refund" {
+		t.Fatalf("note = %q", report.Looks[0].Note)
+	}
+}
+
 func TestParsePullTimesReadsEachStepOfEachPullRequest(t *testing.T) {
 	data := `{"data":{"repository":{
 		"p64":{"createdAt":"2026-10-13T04:42:54Z","mergedAt":"2026-10-13T04:44:18Z",

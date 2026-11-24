@@ -1914,8 +1914,9 @@ func TestBriefTellsAnEyeCheckToMakeTheStagingStateItNeeds(t *testing.T) {
 	for _, want := range []string{
 		"- Look on staging, in a browser. Change no product code.",
 		"make it first, by acts on staging or with the repository's tool for staging states.",
-		"When that tool has no way to make it, add one in a small pull request, run it, then look.",
-		"\"Change no product code\" does not cover a staging-state scenario.",
+		"\"Change no product code\" does not cover running a staging-state scenario.",
+		"When neither can make it, do not build the seed yourself: post a comment on the issue that starts with `Eyes blocked: no data:` and names the state staging lacks.",
+		"The look goes back to its builder as rework, to add the seed.",
 	} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("brief lacks %q:\n%s", want, brief)
@@ -1931,7 +1932,7 @@ func TestBriefBlocksAnEyeCheckOnlyForWhatTheWorkerCannotFix(t *testing.T) {
 	brief, _ := os.ReadFile(filepath.Join(f.dir, BriefFile))
 	for _, want := range []string{
 		"(staging is down, the description is too vague to judge, the check needs an act the orders forbid): you are blocked.",
-		"Missing data and a sign-in are not reasons to stop",
+		"Data you can make and a sign-in are not reasons to stop",
 	} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("brief lacks %q:\n%s", want, brief)
