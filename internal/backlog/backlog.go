@@ -84,6 +84,12 @@ func (i Issue) LabelNames() []string {
 type Comment struct {
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"createdAt"`
+	Author    Author    `json:"author"`
+}
+
+// Author is who wrote a comment.
+type Author struct {
+	Login string `json:"login"`
 }
 
 // Lister returns the open issues of one source, comments oldest first.
@@ -280,7 +286,7 @@ const listedComments = 100
 // allComments reads every comment of the issue, oldest first.
 func allComments(ctx context.Context, repo string, number int) ([]Comment, error) {
 	cmd := exec.CommandContext(ctx, "gh", "api", "--paginate", fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", repo, number),
-		"--jq", ".[] | {body, createdAt: .created_at}")
+		"--jq", ".[] | {body, createdAt: .created_at, author: {login: .user.login}}")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

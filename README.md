@@ -237,6 +237,13 @@ The supervisor holds both kinds back, and hands out what can go ahead.
   and `shed status` says so: `depends on #12, which is not an issue or pull
   request`.
   A worker that finds a dependency writes the line itself and hands back.
+  The latest line about a number wins: `No longer depends on #12` in a
+  later comment ends the hold an earlier line made. The phrase inside a code
+  span, a fenced block or a `>` quote holds nothing, so a comment that
+  explains the rule does not make a hold. The hold names where it came from:
+  `waits for #12 to close (named by my-bot on Nov 16)`, `(named in the issue
+  body)` or `(GitHub's blocked-by)`, so a stale line can be found without a
+  search.
 - **With `stack: true`**, an issue with one open dependency whose pull
   request is ready and waits for review goes ahead: the worker builds it on
   a new branch from that pull request's branch and opens its pull request

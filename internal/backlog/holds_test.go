@@ -92,7 +92,7 @@ func TestADependencyOnAPullRequestOrAMissingNumberHoldsOnlyTheIssueThatNamesIt(t
 		{Repo: "org/app", Number: 22, Body: "Nothing to wait for."},
 	}
 	applyDeps(issues, native, state)
-	want := map[int]string{20: "", 21: "depends on #6300, which is not an issue or pull request", 22: ""}
+	want := map[int]string{20: "", 21: "depends on #6300, which is not an issue or pull request (named in the issue body)", 22: ""}
 	for _, i := range issues {
 		if got := DepHold(i); got != want[i.Number] {
 			t.Errorf("#%d hold = %q, want %q", i.Number, got, want[i.Number])
@@ -107,7 +107,7 @@ func TestADependencyOnAnOpenPullRequestHoldsTheIssue(t *testing.T) {
 	}
 	issues := []Issue{{Repo: "org/app", Number: 20, Body: "Depends on #60"}}
 	applyDeps(issues, native, state)
-	if got := DepHold(issues[0]); got != "waits for #60 to close" {
+	if got := DepHold(issues[0]); got != "waits for #60 to close (named in the issue body)" {
 		t.Fatalf("hold = %q", got)
 	}
 }
@@ -156,5 +156,46 @@ func TestAParkedDraftIsReadFromItsHandBack(t *testing.T) {
 	}
 	if got := ReadyPRs(i); got != 2 {
 		t.Fatalf("ready = %d, want 2", got)
+	}
+}
+
+func TestALaterReleaseEndsTheDependencyAnEarlierLineMade(t *testing.T) {
+	i := Issue{Repo: "org/app", Number: 20, Body: "Depends on #12 and #14.",
+		Comments: []Comment{{Body: "## Hand-back\nNo longer depends on #12: the column exists."}}}
+	if got, want := DependencyRefs(i), []Dep{{Repo: "org/app", Number: 14}}; !slices.Equal(got, want) {
+		t.Fatalf("refs = %+v, want %+v", got, want)
+	}
+	i.Comments = append(i.Comments, Comment{Body: "It depends on #12 again: the column was dropped."})
+	if got, want := DependencyRefs(i), []Dep{{Repo: "org/app", Number: 12}, {Repo: "org/app", Number: 14}}; !slices.Equal(got, want) {
+		t.Fatalf("refs = %+v, want %+v: the latest statement about #12 wins", got, want)
+	}
+}
+
+func TestADependencyPhraseInCodeOrAQuoteHoldsNothing(t *testing.T) {
+	i := Issue{Repo: "org/app", Number: 20, Body: "A worker writes `Depends on #12` and hands back.",
+		Comments: []Comment{
+			{Body: "Like this:\n```\nDepends on #13\n```\nthen stop."},
+			{Body: "> Depends on #14\n\nThat line is stale. Ready now."},
+		}}
+	if got := DependencyRefs(i); len(got) != 0 {
+		t.Fatalf("refs = %+v, want none", got)
+	}
+}
+
+func TestTheHoldSaysWhichCommentNamedTheDependency(t *testing.T) {
+	at := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	i := Issue{Repo: "org/app", Number: 20, Body: "Show the totals.",
+		Comments: []Comment{{Body: "Depends on #12", CreatedAt: at, Author: Author{Login: "bot-worker"}}},
+		Deps:     []Dep{{Repo: "org/app", Number: 12, Open: true}}}
+	if got, want := DepHold(i), "waits for #12 to close (named by bot-worker on Nov 16)"; got != want {
+		t.Fatalf("hold = %q, want %q", got, want)
+	}
+	i.Body, i.Comments = "Depends on #12", nil
+	if got, want := DepHold(i), "waits for #12 to close (named in the issue body)"; got != want {
+		t.Fatalf("hold = %q, want %q", got, want)
+	}
+	i.Body = "Show the totals."
+	if got, want := DepHold(i), "waits for #12 to close (GitHub's blocked-by)"; got != want {
+		t.Fatalf("hold = %q, want %q", got, want)
 	}
 }
