@@ -494,6 +494,9 @@ type Ask struct {
 	// Effect is what answering the ask does: returns, in grace, read or
 	// merge. Empty when it was not worked out.
 	Effect string `json:"effect,omitempty"`
+	// Left is what a hand-back that left no worker step says the owner has
+	// to do, after OwnerActPhrase; empty when it says nothing.
+	Left string `json:"left,omitempty"`
 }
 
 // What names the ask and the pull request it waits on, as in "review #41".
@@ -505,6 +508,8 @@ func (a Ask) What() string {
 		return fmt.Sprintf("%s #%d", a.Name, a.PR)
 	case a.NoPR:
 		return a.Name + " (no pull request named)"
+	case a.Left != "":
+		return a.Name + ": " + a.Left
 	}
 	return a.Name
 }
@@ -537,6 +542,11 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 			ask.PR, ask.NoPR = pr, pr == 0
 		}
 		asks = append(asks, ask)
+	}
+	if len(asks) == 0 && !rework {
+		if since, left, ok := rested(issue, signals); ok {
+			asks = append(asks, Ask{Name: NoStepAsk, Since: since, Left: left})
+		}
 	}
 	return asks
 }

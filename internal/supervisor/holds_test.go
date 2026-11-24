@@ -340,3 +340,20 @@ func TestTheReserveIsOfferedWhenThePaceHoldsTheQueue(t *testing.T) {
 		}
 	}
 }
+
+// A hand-back that left no worker step must not be handed out again, and
+// must not hide the reserve: nothing beside it can be acted on.
+func TestAnIssueWithNoWorkerStepWaitsOnTheOwnerAndTheReserveIsOffered(t *testing.T) {
+	f := started(t, config.Supervisor{}, done)
+	rested := labeled(12)
+	rested.Comments = []backlog.Comment{{Body: "## Hand-back\n**PR:** none\n**Decisions needed:** none\n**Owner act:** run the backfill"}}
+	rested.OpenPRs = map[int]backlog.PR{}
+	withBackfill(f, rested)
+	f.tick(2 * time.Minute)
+	prompt := f.reviewer.prompts[0]
+	for _, want := range []string{"#12 Issue [waits on the owner: no worker step]", "#50 Issue [backlog]"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+}
