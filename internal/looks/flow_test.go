@@ -20,3 +20,16 @@ func TestTheIssuesOfAWindowAreReadWithWhenTheyOpenedAndClosedAndTheirPullRequest
 		t.Fatalf("issues = %+v", got)
 	}
 }
+
+func TestTheIssuesOfTwoSearchesAreJoinedOncePerIssue(t *testing.T) {
+	opened := []FlowIssue{{Number: 12}, {Number: 9}}
+	closed := []FlowIssue{{Number: 9}, {Number: 3}}
+	got := joinFlow(opened, closed)
+	var numbers []int
+	for _, i := range got {
+		numbers = append(numbers, i.Number)
+	}
+	if !slices.Equal(numbers, []int{12, 9, 3}) {
+		t.Fatalf("numbers = %v, want each issue once", numbers)
+	}
+}

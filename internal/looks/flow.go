@@ -22,19 +22,38 @@ type FlowIssue struct {
 // flowLimit is how many issues of a window are read for one repository.
 const flowLimit = 1000
 
-// IssuesSince lists the repository's issues updated since a time: every
-// issue opened or closed since then is among them. It reads no comments.
+// IssuesSince lists the repository's issues opened or closed since a time.
+// It asks two searches, one for each, rather than one for the issues
+// updated since then: on a busy repository a comment updates an issue, and
+// the issues updated would pass the search's limit long before the ones
+// opened or closed do. It reads no comments.
 func (GH) IssuesSince(ctx context.Context, repo string, since time.Time) ([]FlowIssue, error) {
-	out, err := gh(ctx, "issue", "list", "--repo", repo, "--state", "all", "--limit", fmt.Sprint(flowLimit),
-		"--search", "updated:>="+since.UTC().Format("2006-01-02"), "--json", "number,body,createdAt,closedAt,closedByPullRequestsReferences")
-	if err != nil {
-		return nil, err
+	day := since.UTC().Format("2006-01-02")
+	var found [2][]FlowIssue
+	for n, filter := range []string{"created:>=" + day, "closed:>=" + day} {
+		out, err := gh(ctx, "issue", "list", "--repo", repo, "--state", "all", "--limit", fmt.Sprint(flowLimit),
+			"--search", filter, "--json", "number,body,createdAt,closedAt,closedByPullRequestsReferences")
+		if err != nil {
+			return nil, err
+		}
+		if found[n], err = parseFlowIssues(out); err != nil {
+			return nil, fmt.Errorf("%s: %w", repo, err)
+		}
 	}
-	issues, err := parseFlowIssues(out)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", repo, err)
+	return joinFlow(found[0], found[1]), nil
+}
+
+// joinFlow lists the issues of both searches, each once.
+func joinFlow(opened, closed []FlowIssue) []FlowIssue {
+	seen := map[int]bool{}
+	var all []FlowIssue
+	for _, i := range append(opened, closed...) {
+		if !seen[i.Number] {
+			seen[i.Number] = true
+			all = append(all, i)
+		}
 	}
-	return issues, nil
+	return all
 }
 
 func parseFlowIssues(data []byte) ([]FlowIssue, error) {
