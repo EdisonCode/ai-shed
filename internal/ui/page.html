@@ -44,6 +44,8 @@
   .goal .eta.no { color: var(--warn); font-size: 13px; font-weight: 500; }
   .goal .eta.no.dim { color: var(--dim); }
   .goal .next { color: var(--dim); font-size: 12px; margin-top: 4px; }
+  .goal .crew { color: var(--violet); font-size: 12px; margin-top: 4px; }
+  .chip.crew { color: var(--violet); border-color: #4a3a6e; }
 
   .grid3 { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr); }
   @media (max-width: 1200px) { .grid3 { grid-template-columns: 1fr; } }
@@ -217,6 +219,24 @@ function renderDeck(snap, now) {
   renderFlow(snap);
 }
 
+// crewsOf reads, from the report's issues, each goal's crew: the sessions
+// that signed its plans, and its crew reviews by state.
+function crewsOf(snap) {
+  const crews = new Map();
+  const seen = new Set();
+  for (const m of snap.report.machines || []) for (const i of m.issues || []) {
+    const key = i.repo + "#" + i.number;
+    if (!i.goal || seen.has(key)) continue;
+    seen.add(key);
+    const c = crews.get(i.goal) || { sessions: new Set(), due: 0, changes: 0 };
+    if (i.session) c.sessions.add(i.session);
+    if (i.crew === "due") c.due++;
+    if (i.crew === "changes") c.changes++;
+    crews.set(i.goal, c);
+  }
+  return crews;
+}
+
 function renderGoals(snap) {
   const box = document.getElementById("goals");
   const note = document.getElementById("goals-note");
@@ -244,6 +264,7 @@ function renderGoals(snap) {
     byLabel.set(g.label, t);
   }
   const now = Date.now();
+  const crews = crewsOf(snap);
   const cards = [...byLabel.values()].map(t => {
     t.perDay = (t.closedWeek - t.opened) / 7;
     t.eta = t.open > 0 && t.perDay > 0 ? new Date(now + t.open / t.perDay * 86400000) : null;
@@ -265,8 +286,15 @@ function renderGoals(snap) {
       el("div", { class: "bar" }, el("div", { style: "width:" + pct + "%" })),
       el("div", { class: "nums" }, el("span", {}, t.closed + " of " + t.total + " closed (" + pct + "%)"), el("span", { class: "meta" }, t.open + " open")),
       eta,
+      crewLine(crews.get(t.label)),
       ...t.next.map(n => el("div", { class: "next" }, n)));
   }));
+}
+
+function crewLine(c) {
+  if (!c || !c.sessions.size) return null;
+  const reviews = [c.due ? c.due + " crew review(s) due" : "", c.changes ? c.changes + " asked for changes" : ""].filter(Boolean).join(", ");
+  return el("div", { class: "crew" }, "crew: " + [...c.sessions].sort().join(", ") + (reviews ? " · " + reviews : ""));
 }
 
 function machine(m, now) {
@@ -311,6 +339,11 @@ function renderPeers(snap) {
       pairs.set(key, e);
     }
   }
+  // Two sessions that signed plans on the same goal are a crew on it.
+  const goalsOf = new Map();
+  for (const m of snap.report.machines || []) for (const i of m.issues || [])
+    if (i.session && i.goal) goalsOf.set(i.session, (goalsOf.get(i.session) || new Set()).add(i.goal));
+  const shared = (a, b) => [...(goalsOf.get(a) || [])].filter(g => (goalsOf.get(b) || new Set()).has(g));
   const box = document.getElementById("peers");
   if (!nodes.size) { box.replaceChildren(el("div", { class: "empty" }, "No worker has peers. Give workers peers: in the fleet file to let them message each other.")); return; }
   const list = [...nodes.values()].sort((x, y) => (x.machine + x.name).localeCompare(y.machine + y.name));
@@ -318,12 +351,15 @@ function renderPeers(snap) {
   list.forEach((n, i) => { const a = -Math.PI / 2 + 2 * Math.PI * i / list.length; n.x = cx + R * Math.cos(a); n.y = cy + R * Math.sin(a); n.a = a; });
   const g = svg("svg", { class: "peers", viewBox: "0 0 " + W + " " + H });
   let talk = 0;
+  let quietCrews = 0;
   for (const e of pairs.values()) {
     const a = nodes.get(e.a), b = nodes.get(e.b);
+    const goals = shared(e.a, e.b);
     talk += e.day;
-    g.append(svg("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: e.hour ? "#7aa2f7" : e.day ? "#4a5a7e" : "#333a48",
-      "stroke-width": e.day ? Math.min(8, 1.5 + Math.log2(1 + e.day)) : 1, "stroke-dasharray": e.day ? "" : "4 4" },
-      svg("title", {}, e.a + " ↔ " + e.b + ": " + e.day + " in the last day, " + e.hour + " in the last hour")));
+    if (goals.length && !e.day) quietCrews++;
+    g.append(svg("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: e.hour ? "#7aa2f7" : goals.length ? "#b48ef7" : e.day ? "#4a5a7e" : "#333a48",
+      "stroke-width": e.day ? Math.min(8, 1.5 + Math.log2(1 + e.day)) : goals.length ? 1.5 : 1, "stroke-dasharray": e.day ? "" : "4 4" },
+      svg("title", {}, e.a + " ↔ " + e.b + ": " + e.day + " in the last day, " + e.hour + " in the last hour" + (goals.length ? "; crew on " + goals.join(", ") : ""))));
   }
   const colors = ["#4cc38a", "#e5b454", "#b48ef7", "#7aa2f7", "#ef6b6b"];
   const machines = [...new Set(list.map(n => n.machine))];
@@ -334,7 +370,8 @@ function renderPeers(snap) {
     g.append(svg("text", { x: n.x + (right ? 11 : -11), y: n.y + 4, "text-anchor": right ? "start" : "end" }, n.name));
     g.append(svg("text", { class: "m", x: n.x + (right ? 11 : -11), y: n.y + 16, "text-anchor": right ? "start" : "end" }, n.machine));
   }
-  box.replaceChildren(g, el("div", { class: "meta" }, talk ? talk + " message(s) between peers in the last day" : "Peers have sent each other nothing in the last day."));
+  box.replaceChildren(g, el("div", { class: "meta" }, talk ? talk + " message(s) between peers in the last day" : "Peers have sent each other nothing in the last day."),
+    quietCrews ? el("div", { class: "meta", style: "color:var(--violet)" }, quietCrews + " crew pair(s) build the same goal and have not talked (violet)") : null);
 }
 
 // What needs the owner, grouped by kind so a long list reads as a few
@@ -460,6 +497,7 @@ function card(i, now) {
     el("div", { class: "t" }, i.title),
     i.goal ? el("span", { class: "chip goal" }, i.goal) : null,
     i.bumped ? el("span", { class: "chip" }, "bumped" + (i.bumped_to ? " to " + i.bumped_to : "")) : null,
+    i.crew ? el("span", { class: "chip crew" }, i.crew === "due" ? "crew review due" : i.crew === "changes" ? "crew asked for changes" : "crew passed") : null,
     note ? el("div", { class: "note", title: note }, note) : null);
 }
 

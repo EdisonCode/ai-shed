@@ -41,11 +41,13 @@ can take a minute or more. The page has two views:
 
 - **Deck** has five panels:
   - **Goals**: each goal's progress, its pace over the last week, and when
-    it will be done (see [Goals](#goals)).
+    it will be done (see [Goals](#goals)), with its crew and its crew
+    reviews due or sent back.
   - **Fleet**: every worker with its state and the issue in hand.
   - **Peers**: a graph of who messaged whom in the last day. A line is
     lit when a message went in the last hour, and dashed for a pair that
-    never talks.
+    never talks. A violet line is a crew pair: two sessions that signed
+    plans on the same goal (see [Crews](#crews)).
   - **Needs you**: grouped by kind into counts that open on a click.
   - **Flow**: per repository, the last 24 hours: net open issues, merges,
     rework per merge, issues workers opened, looks that passed first time,
