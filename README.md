@@ -173,6 +173,10 @@ at a time, in this order:
      and costs no worker turn.
    - *The pull request went stale.* It conflicts with its base branch, or a
      check failed. The worker is told what is wrong and to fix only that.
+     A check that had already failed when the worker handed back is not
+     sent back for: the worker saw it, and sending it back changes nothing.
+     The supervisor starts that pull request's CI again, once per head. A
+     run that passes clears it; one that fails again is rework.
    - *The pull request is an unfinished draft.* The hand-back names a draft
      and says nothing about what it waits for. The worker is told to finish
      it, or to hand back with the reason.

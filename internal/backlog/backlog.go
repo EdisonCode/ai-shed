@@ -606,7 +606,7 @@ func HandedBackRed(issue Issue, signals []config.Signal) string {
 	if index < 0 || !isOpen || open.Problem == "" || !answered(issue, index, open) {
 		return ""
 	}
-	return fmt.Sprintf("pull request #%d %s before its last hand-back: it waits for the check to run again", pr, open.Problem)
+	return fmt.Sprintf("pull request #%d %s before its last hand-back: it waits for the check to run again, which its supervisor starts", pr, open.Problem)
 }
 
 // Ruled reports whether the owner answered a question of the issue's last

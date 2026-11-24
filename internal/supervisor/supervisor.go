@@ -1642,7 +1642,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	items = s.withLooks(ctx, w, items, own, checkins)
 	items = s.withVerifies(ctx, w, items, own, checkins)
 	s.queueMerges(ctx, own, checkins)
-	s.restartSkippedCI(ctx, own, checkins)
+	s.restartStuckCI(ctx, own, checkins)
 	s.unpark(ctx, own, checkins)
 	// The holds and the pace come first: the reserve is offered when nothing
 	// beside it can be acted on, held and paced work included. Then they
