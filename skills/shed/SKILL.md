@@ -287,6 +287,11 @@ Run this as a checklist and report each line.
      owner, then close the issue, or write on the issue what a worker should
      do next: any comment that is not a hand-back, an edit of the body or a
      label change puts it back in the queue.
+   - `... is held and only you can end it`: a dependency hold whose blocker
+     waits on the owner, is in no queue of the fleet, or waits for the held
+     issue itself. Answer the blocker, give it a queue label, or end the
+     hold with `No longer depends on #N` on the held issue, as the owner
+     decides.
    - `rework` in the issues list needs nothing from the owner: the pull
      request cannot merge and a worker is being sent back to it. A `!` line
      that says `after 2 tries by a worker` is the owner's: the workers could

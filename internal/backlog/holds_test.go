@@ -199,3 +199,48 @@ func TestTheHoldSaysWhichCommentNamedTheDependency(t *testing.T) {
 		t.Fatalf("hold = %q, want %q", got, want)
 	}
 }
+
+func coveredBy(label string) func(string, []string) (bool, bool) {
+	return func(_ string, labels []string) (bool, bool) { return slices.Contains(labels, label), true }
+}
+
+func TestAHoldIsFollowedToItsBlocker(t *testing.T) {
+	signals := config.DefaultSignals()
+	held := Issue{Repo: "org/app", Number: 20, Body: "Depends on #12", Deps: []Dep{{Repo: "org/app", Number: 12, Open: true}}}
+	for _, tc := range []struct {
+		name      string
+		listed    map[string]Issue
+		labels    []string
+		want      string
+		waitsOnMe bool
+	}{
+		{"the blocker is queued and workable", map[string]Issue{"org/app#12": {Repo: "org/app", Number: 12}}, []string{"machine:box"},
+			"waits for #12 to close (named in the issue body)", false},
+		{"the blocker waits on the owner", map[string]Issue{"org/app#12": {Repo: "org/app", Number: 12, Comments: []Comment{{Body: "## Hand-back\n**Decisions needed:** keep the column?"}}}}, []string{"machine:box"},
+			"waits for #12, which waits on you (decision)", true},
+		{"no queue covers the blocker", nil, []string{"needs-owner"},
+			"waits for #12, which no queue covers", true},
+		{"the blocker's labels are unknown", nil, nil,
+			"waits for #12 to close (named in the issue body)", false},
+		{"the two wait for each other", map[string]Issue{"org/app#12": {Repo: "org/app", Number: 12, Body: "Depends on #20", Deps: []Dep{{Repo: "org/app", Number: 20, Open: true}}}}, []string{"machine:box"},
+			"#20 and #12 wait for each other", true},
+	} {
+		i := held
+		if tc.labels != nil {
+			i.DepLabels = map[string][]string{"org/app#12": tc.labels}
+		}
+		hold, owner := FollowHold(i, tc.listed, signals, coveredBy("machine:box"))
+		if hold != tc.want || owner != tc.waitsOnMe {
+			t.Errorf("%s: hold = %q, owner = %v; want %q, %v", tc.name, hold, owner, tc.want, tc.waitsOnMe)
+		}
+	}
+}
+
+func TestNoQueueCoversIsNotClaimedWhereAQueueIsASearch(t *testing.T) {
+	i := Issue{Repo: "org/app", Number: 20, Body: "Depends on #12", Deps: []Dep{{Repo: "org/app", Number: 12, Open: true}},
+		DepLabels: map[string][]string{"org/app#12": {"needs-owner"}}}
+	unknown := func(string, []string) (bool, bool) { return false, false }
+	if hold, owner := FollowHold(i, nil, config.DefaultSignals(), unknown); owner || hold != "waits for #12 to close (named in the issue body)" {
+		t.Fatalf("hold = %q, owner = %v: a search may cover it", hold, owner)
+	}
+}

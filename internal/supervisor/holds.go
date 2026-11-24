@@ -26,9 +26,10 @@ import (
 // eye checks. Nor is a verification, which brings an open pull request
 // closer to its merge, nor an issue the owner bumped.
 func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewhere []backlog.Issue, checkins []runlog.Checkin) {
-	byNumber := map[int]backlog.Issue{}
+	byNumber, listed := map[int]backlog.Issue{}, map[string]backlog.Issue{}
 	for _, i := range open {
 		byNumber[i.Number] = i
+		listed[fmt.Sprintf("%s#%d", i.Repo, i.Number)] = i
 	}
 	inHand := runlog.IssueInHand(checkins, w.Name)
 	others := map[int]string{}
@@ -58,7 +59,7 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 		if !ok || item.Look != "" || item.Rework != "" || item.Stack != "" || item.Number == inHand {
 			continue
 		}
-		if hold := backlog.DepHold(issue); hold != "" {
+		if hold, _ := backlog.FollowHold(issue, listed, s.Signals, s.Covers); hold != "" {
 			if len(backlog.MissingDeps(issue)) == 0 && s.stackOnDep(item, backlog.OpenDeps(issue), byNumber) {
 				continue
 			}

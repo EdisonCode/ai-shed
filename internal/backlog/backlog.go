@@ -43,6 +43,10 @@ type Issue struct {
 	// its text names and the ones GitHub's blocked-by relation names. Nil
 	// when the lister did not look them up.
 	Deps []Dep `json:"-"`
+	// DepLabels holds the labels of each issue in Deps, by repo#number, so
+	// that a hold can say whether any queue of the fleet covers its blocker.
+	// A pull request, and a dependency the lister did not look up, has none.
+	DepLabels map[string][]string `json:"-"`
 }
 
 // PR is the state of an open pull request.

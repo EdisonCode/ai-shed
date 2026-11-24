@@ -330,11 +330,11 @@ func resolveDeps(ctx context.Context, repo string, issues []Issue) error {
 		fmt.Fprintf(&q, "r%d: repository(owner: %q, name: %q) {\n", n, owner, name)
 		if n == 0 {
 			for _, i := range issues {
-				fmt.Fprintf(&q, "i%d: issue(number: %d) { blockedBy(first: 20) { nodes { number state repository { nameWithOwner } } } }\n", i.Number, i.Number)
+				fmt.Fprintf(&q, "i%d: issue(number: %d) { blockedBy(first: 20) { nodes { number state repository { nameWithOwner } labels(first: 50) { nodes { name } } } } }\n", i.Number, i.Number)
 			}
 		}
 		for _, number := range refs[r] {
-			fmt.Fprintf(&q, "d%d: issueOrPullRequest(number: %d) { ... on Issue { state } ... on PullRequest { state } }\n", number, number)
+			fmt.Fprintf(&q, "d%d: issueOrPullRequest(number: %d) { ... on Issue { state labels(first: 50) { nodes { name } } } ... on PullRequest { state } }\n", number, number)
 		}
 		q.WriteString("}\n")
 	}
@@ -353,7 +353,83 @@ func resolveDeps(ctx context.Context, repo string, issues []Issue) error {
 		return fmt.Errorf("%s dependencies: %w", repo, err)
 	}
 	applyDeps(issues, native, state)
+	applyDepLabels(issues, parseDepLabels(out, repos))
 	return nil
+}
+
+// applyDepLabels gives each issue the labels of the issues it depends on.
+func applyDepLabels(issues []Issue, labels map[string][]string) {
+	for n := range issues {
+		for _, d := range issues[n].Deps {
+			if l, ok := labels[d.key()]; ok {
+				if issues[n].DepLabels == nil {
+					issues[n].DepLabels = map[string][]string{}
+				}
+				issues[n].DepLabels[d.key()] = l
+			}
+		}
+	}
+}
+
+// parseDepLabels reads the labels of each issue in the answer to
+// resolveDeps' query, by repo#number: the blocked-by issues and the issues
+// the text names. A pull request has none listed. An answer parseDeps
+// rejects gives none.
+func parseDepLabels(data []byte, repos []string) map[string][]string {
+	type labeled struct {
+		Labels *struct {
+			Nodes []Label `json:"nodes"`
+		} `json:"labels"`
+	}
+	var answer struct {
+		Data map[string]map[string]*struct {
+			labeled
+			BlockedBy struct {
+				Nodes []struct {
+					labeled
+					Number     int `json:"number"`
+					Repository struct {
+						NameWithOwner string `json:"nameWithOwner"`
+					} `json:"repository"`
+				} `json:"nodes"`
+			} `json:"blockedBy"`
+		} `json:"data"`
+	}
+	out := map[string][]string{}
+	if json.Unmarshal(data, &answer) != nil {
+		return out
+	}
+	names := func(l labeled) []string {
+		list := []string{}
+		for _, n := range l.Labels.Nodes {
+			list = append(list, n.Name)
+		}
+		return list
+	}
+	for alias, fields := range answer.Data {
+		idx, err := strconv.Atoi(strings.TrimPrefix(alias, "r"))
+		if err != nil || idx < 0 || idx >= len(repos) {
+			continue
+		}
+		for field, issue := range fields {
+			if issue == nil || len(field) < 2 {
+				continue
+			}
+			switch field[0] {
+			case 'i':
+				for _, b := range issue.BlockedBy.Nodes {
+					if b.Labels != nil {
+						out[fmt.Sprintf("%s#%d", b.Repository.NameWithOwner, b.Number)] = names(b.labeled)
+					}
+				}
+			case 'd':
+				if issue.Labels != nil {
+					out[repos[idx]+"#"+field[1:]] = names(issue.labeled)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // applyDeps sets each issue's dependencies from what parseDeps read. A
@@ -458,4 +534,38 @@ func InFlight(issue Issue, signals []config.Signal) bool {
 		}
 	}
 	return plan >= 0 && plan > back
+}
+
+// FollowHold follows the issue's dependency hold to the other end of the
+// wait, and says whether only the owner can end it: the blocker waits on
+// the owner, no queue of the fleet covers it, or the two issues wait for
+// each other. listed holds the issues the fleet's queues list, by
+// repo#number. covered says whether an issue of the repository with these
+// labels is in a queue of the fleet, and whether it can tell: a queue that
+// is a search cannot be matched by labels. With no hold it returns "".
+func FollowHold(i Issue, listed map[string]Issue, signals []config.Signal, covered func(repo string, labels []string) (covered, known bool)) (hold string, owner bool) {
+	hold = DepHold(i)
+	if hold == "" || len(MissingDeps(i)) > 0 {
+		return hold, false
+	}
+	for _, d := range OpenDeps(i) {
+		words := DepWords([]Dep{d}, i.Repo)
+		if blocker, ok := listed[d.key()]; ok {
+			if slices.ContainsFunc(OpenDeps(blocker), func(b Dep) bool { return b.Repo == i.Repo && b.Number == i.Number }) {
+				return fmt.Sprintf("#%d and %s wait for each other", i.Number, words), true
+			}
+			if waiting := Waiting(blocker, signals); len(waiting) > 0 {
+				return fmt.Sprintf("waits for %s, which waits on you (%s)", words, strings.Join(waiting, ", ")), true
+			}
+			continue
+		}
+		labels, isIssue := i.DepLabels[d.key()]
+		if !isIssue || covered == nil {
+			continue
+		}
+		if in, known := covered(d.Repo, labels); known && !in {
+			return fmt.Sprintf("waits for %s, which no queue covers", words), true
+		}
+	}
+	return hold, false
 }
