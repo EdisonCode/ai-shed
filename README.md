@@ -65,19 +65,28 @@ can take a minute or more. The page has two views:
   the `shed` command that bumps it, puts it back, recycles its worker or
   pauses its machine, ready to copy.
 
-**Quick answers.** Needs you opens with the answers you can give in one
-click, each with what the worker wrote under its ask. Board cards offer the
-same on right-click:
+**Quick answers.** Needs you opens with the answers a worker teed up, each
+with what the worker wrote under its ask:
 - **Accept the recommendation** on a decision posts `Owner ruling: accepted`.
 - **Ready now** on an issue that was not ready.
 - **Looked: it passes** on an eye check posts `Eyes checked: passed on staging.`
-- **Drop the dependency on #N** on a held issue posts `No longer depends on #N`.
-  It is offered only for a dependency the issue's text names; GitHub's
-  blocked-by is ended on GitHub.
 
-Each answer first shows the exact comment it posts, as you, through your
-`gh`, and posts nothing until you confirm. The page sends back only which
-answer you chose. The server works the answer out again from its latest read,
+**Card actions.** Right-click a card on the board:
+- **Bump to the front** and **Put back in its place** do what `shed bump`
+  and `shed bump -undo` do, on the machine whose queue has the issue.
+- **Bump its blocker #N** on a held issue bumps the issue it waits for, when
+  that issue waits its turn in a queue. For a real build order this is the
+  move: the order goes on, in order.
+- **Drop the dependency on #N** posts `No longer depends on #N`. It is
+  offered only for a dependency the issue's text names (GitHub's blocked-by
+  is ended on GitHub), and it warns first. A dropped dependency sends the
+  issue to a worker at once, and a worker that builds on a part that is not
+  there yet hands back rework or files a follow-up.
+- The answers above, for that card.
+
+Each action first shows what it does: the exact comment it posts, as you,
+through your `gh`, or the bump it makes over your `ssh`. It does nothing
+until you confirm. The page sends back only which action you chose. The server works the answer out again from its latest read,
 and refuses one that no longer applies. Answers are offered only when the page
 listens on loopback. A request must carry a token made for this run and come
 from the page itself: its Host must name this machine, and its Origin must
