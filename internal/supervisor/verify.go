@@ -158,6 +158,11 @@ and starts you with an empty context: judge the work on its own evidence.
   where to look on staging, what to do there (with the state the check
   needs), and what a pass looks like, matching the issue's acceptance. Each
   of these it lacks is a finding, and the verification fails.
+- When that check needs a state staging does not have (a customer, an order,
+  a setting), the pull request must make it: a seed it adds, or the
+  repository's tool for staging states, with how to run it. A state that
+  nothing in the pull request or that tool can make is a finding: name the
+  state, and the verification fails.
 `, eyes.Ask)
 	}
 	b.WriteString(`- When it does what the issue asks, post a comment on the issue that starts

@@ -585,6 +585,9 @@ supervisor:
   check needs) and what a pass looks like, matching the issue's acceptance.
   Each gap is a finding, and the pull request goes back as rework while its
   builder still has the context, not after the merge as a blocked look.
+  When the check needs a state staging lacks, the pull request must make
+  it: a seed it adds, or your tool for staging states with how to run it. A
+  state nothing can make is a finding too.
 - **Its verdict** is a comment on the issue. `Verified (high):` with its
   evidence passes the work, and only then does the review wait on you.
   `Verification failed (high):` with its findings sends the pull request
@@ -748,9 +751,19 @@ machines:
   the acts that must never happen there. It changes no product code.
 - **A state staging does not have.** A check that needs a customer, an
   order or a setting staging lacks makes it first, by acts on staging or
-  with your repository's tool for staging states. When that tool has no way
-  to make it, the worker adds one in a small pull request, runs it, then
-  looks. A staging-state scenario is not product code.
+  with your repository's tool for staging states. A staging-state scenario
+  is not product code. When neither can make it, the worker does not build
+  the seed itself. It comments:
+
+  ```
+  Eyes blocked: no data: no order with a partial refund
+  ```
+
+  `no data` right after `Eyes blocked:` is the rule. Such a look is not
+  yours: it shows as failed, and the issue goes back to a worker as rework,
+  to add a seed that makes the state and hand back with the eye check
+  again. It counts as a look that did not pass in the digest's first-pass
+  rate. A look blocked for any other reason is yours, as below.
 - **One identity per worker.** Workers on one machine that sign in as the
   same test user move each other's state: one ends the other's session,
   closes its drawer, empties its cart. Each then blames the other's
@@ -791,8 +804,8 @@ machines:
   you: that failed look waits, and your `Owner ruling` sends it to a worker.
 - **A check that could not be done.** Staging is down, the description is
   too vague to judge, or the check needs an act the orders forbid. Missing
-  data and a sign-in are not reasons to stop: the worker makes the data and
-  signs in as the orders say or with a user it makes. The worker comments
+  data and a sign-in are not reasons to stop: the worker makes the data
+  (data nothing can make goes back as rework, as above) and signs in as the orders say or with a user it makes. The worker comments
   `Eyes blocked:` with what stopped it and takes its next item: a look only
   you can clear does not hold a worker idle. The look is yours now. `shed status` counts it as not done and lists
   it with the worker's reason, and your `notify` command hears of it. When

@@ -231,6 +231,11 @@ func (r *Reader) Read(ctx context.Context, repo config.Repo, sources []config.Is
 		}
 		if state == backlog.EyesBlocked {
 			look.State, look.Note = Blocked, note
+			if backlog.NoDataLook(issue, signals) != "" {
+				// Staging lacks the state and nothing could make it: the
+				// look did not pass, and a worker adds the seed.
+				look.State = Failed
+			}
 		}
 		if state == backlog.EyesAsked {
 			look.State = Awaiting

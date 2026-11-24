@@ -573,6 +573,9 @@ func Rework(issue Issue, signals []config.Signal) string {
 	if failedLook(issue, signals) {
 		reasons = append(reasons, "the eye check failed: fix what it found (see the Eyes failed hand-back), then hand back again")
 	}
+	if missing := NoDataLook(issue, signals); missing != "" {
+		reasons = append(reasons, fmt.Sprintf("the eye check was blocked because staging lacks the state it needs (%s): add a seed that makes it, in the repository's tool for staging states, then hand back again with the eye check and how to run the seed", missing))
+	}
 	if handBack < 0 || !isOpen {
 		return strings.Join(reasons, "; ")
 	}
@@ -753,7 +756,7 @@ func Finished(issue Issue, signals []config.Signal) int {
 		return 0
 	}
 	index, pr := lastHandBack(issue, signals)
-	if index < 0 || pr == 0 || !issue.MergedPRs[pr] || len(Remaining(issue, signals)) > 0 || failedLook(issue, signals) {
+	if index < 0 || pr == 0 || !issue.MergedPRs[pr] || len(Remaining(issue, signals)) > 0 || failedLook(issue, signals) || NoDataLook(issue, signals) != "" {
 		return 0
 	}
 	if _, open := issue.OpenPRs[pr]; open {
