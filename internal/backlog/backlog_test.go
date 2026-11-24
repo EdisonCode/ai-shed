@@ -623,7 +623,7 @@ func TestAFailedCheckThatFinishedBeforeTheHandBackIsNotRework(t *testing.T) {
 	if got := Rework(i, config.DefaultSignals()); got != "" {
 		t.Fatalf("rework = %q: the worker handed back with the failure in front of it", got)
 	}
-	if got := HandedBackRed(i, config.DefaultSignals()); got != "pull request #41 has a failed check (test) before its last hand-back: it waits for the check to run again" {
+	if got := HandedBackRed(i, config.DefaultSignals()); got != "pull request #41 has a failed check (test) before its last hand-back: it waits for the check to run again, which its supervisor starts" {
 		t.Fatalf("handed back red = %q", got)
 	}
 	i.OpenPRs[41] = PR{Problem: "has a failed check (test)", ProblemAt: handed.Add(10 * time.Minute)}
