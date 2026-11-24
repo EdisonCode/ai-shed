@@ -204,6 +204,43 @@ type WorkerStatus struct {
 	// in the last hour, as its tool's hook recorded them. A message to one of
 	// its own sub-agents goes through the same tool and is not counted.
 	Messages int `json:"messages,omitempty"`
+	// Peers is, for each of its peers, what it sent that peer's session in
+	// the last day: the lines of a graph of who works with whom.
+	Peers []PeerLink `json:"peers,omitempty"`
+}
+
+// PeerLink is what one worker sent one peer's session.
+type PeerLink struct {
+	Session string `json:"session"`
+	Machine string `json:"machine"`
+	Worker  string `json:"worker"`
+	// Day and Hour count the messages sent in the last day and hour.
+	Day  int       `json:"day"`
+	Hour int       `json:"hour"`
+	Last time.Time `json:"last,omitzero"`
+}
+
+// peerLinks reads what the worker sent each of its peers. A peer it sent
+// nothing still has a link, at zero: the pair exists and is quiet.
+func peerLinks(w config.Worker, sent []runlog.Message, now time.Time) []PeerLink {
+	var links []PeerLink
+	for _, p := range w.PeerList {
+		l := PeerLink{Session: p.Session, Machine: p.Machine, Worker: p.Worker}
+		for _, m := range sent {
+			if m.To != p.Session || m.Time.Before(now.Add(-24*time.Hour)) {
+				continue
+			}
+			l.Day++
+			if !m.Time.Before(now.Add(-time.Hour)) {
+				l.Hour++
+			}
+			if m.Time.After(l.Last) {
+				l.Last = m.Time
+			}
+		}
+		links = append(links, l)
+	}
+	return links
 }
 
 type Collector struct {
@@ -743,10 +780,9 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 				st.StateSince = mark.Time
 			}
 		}
-		for to, n := range runlog.CountSince(res.Messages[w.Name], res.Now.Add(-time.Hour)) {
-			if w.HasPeerSession(to) {
-				st.Messages += n
-			}
+		st.Peers = peerLinks(w, res.Messages[w.Name], res.Now)
+		for _, l := range st.Peers {
+			st.Messages += l.Hour
 		}
 		if c, ok := latest[w.Name]; ok {
 			st.Last = &c

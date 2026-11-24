@@ -19,13 +19,6 @@ type Peer struct {
 	Remote bool
 }
 
-// HasPeerSession reports whether a message sent to "to" went to one of the
-// worker's peers, not to a sub-agent of its own: both go through the same
-// tool.
-func (w Worker) HasPeerSession(to string) bool {
-	return slices.ContainsFunc(w.PeerList, func(p Peer) bool { return p.Session == to })
-}
-
 // SessionName is the name shed gives the session of a worker with peers.
 func SessionName(machine, worker string) string {
 	return machine + "-" + worker
