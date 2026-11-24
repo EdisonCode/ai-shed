@@ -52,6 +52,7 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 				if other, ok := byNumber[number]; ok {
 					if why := backlog.Overlap(issue, other, s.Settings.OverlapLabels); why != "" {
 						item.overlaps = fmt.Sprintf("overlaps #%d, which %s has in hand: %s", number, others[number], why)
+						s.reserve(item, others[number], fmt.Sprintf("reserved for %s: it follows #%d, which %s built", others[number], number, others[number]))
 						break
 					}
 				}
@@ -86,6 +87,7 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 			}
 			if why := backlog.Overlap(issue, other, s.Settings.OverlapLabels); why != "" {
 				item.Blocked = fmt.Sprintf("overlaps #%d, which %s has in hand: %s", number, others[number], why)
+				s.reserve(item, others[number], fmt.Sprintf("reserved for %s: it follows #%d, which %s built", others[number], number, others[number]))
 				break
 			}
 		}
@@ -101,6 +103,7 @@ func (s *Supervisor) applyHolds(w config.Worker, items []QueueItem, open, elsewh
 			}
 		}
 	}
+	s.applyAffinity(w, items, inHand, checkins)
 }
 
 // prLimit is the repository's limit of open pull requests, 0 for none, and
@@ -268,4 +271,69 @@ func (s *Supervisor) quotaHold(issue backlog.Issue) string {
 		quota = repo.IssueQuota
 	}
 	return fmt.Sprintf("over the quota of %d issue(s) workers open a day: it waits for triage; write `Ready now` on it to admit it", quota)
+}
+
+// reservation is work kept for the worker that has its code open.
+type reservation struct {
+	worker string
+	why    string
+	since  time.Time
+}
+
+// reserve keeps the item for a worker, from now on unless it already was.
+func (s *Supervisor) reserve(item *QueueItem, worker, why string) {
+	if s.Settings.AffinityTTLOrDefault() <= 0 {
+		return
+	}
+	key := fmt.Sprintf("%s#%d", item.Repo, item.Number)
+	if r, ok := s.reserved[key]; ok && r.worker == worker {
+		return
+	}
+	if s.reserved == nil {
+		s.reserved = map[string]reservation{}
+	}
+	s.reserved[key] = reservation{worker: worker, why: why, since: s.Now()}
+}
+
+// applyAffinity routes work to the worker that has its code open: rework
+// waits for the worker that built it, and an issue that followed work in a
+// worker's hands stays reserved for that worker. A reservation changes who
+// takes the work, not its place in the queue. It lapses after affinity_ttl,
+// or when that worker is stuck or limited, or the machine is paused: work
+// must not hang on a worker that cannot take it.
+func (s *Supervisor) applyAffinity(w config.Worker, items []QueueItem, inHand int, checkins []runlog.Checkin) {
+	ttl := s.Settings.AffinityTTLOrDefault()
+	if ttl <= 0 {
+		return
+	}
+	latest := runlog.LatestCheckins(checkins)
+	available := func(worker string) bool {
+		if s.Machine.TakesWork(worker) != nil || s.paused() {
+			return false
+		}
+		v := latest[worker].Verdict
+		return v != runlog.VerdictStuck && v != runlog.VerdictLimited
+	}
+	for n := range items {
+		item := &items[n]
+		if item.Number == inHand || item.Look != "" || item.Verify != "" || item.Bumped || item.Blocked != "" || len(item.Waiting) > 0 {
+			continue
+		}
+		builder := ""
+		if item.Rework != "" {
+			builder = runlog.Builder(checkins, item.Number)
+			if builder != "" && builder != w.Name && s.Machine.TakesWork(builder) == nil {
+				s.reserve(item, builder, fmt.Sprintf("rework for %s, which built it and has its context", builder))
+			}
+		}
+		key := fmt.Sprintf("%s#%d", item.Repo, item.Number)
+		r, ok := s.reserved[key]
+		live := ok && s.Now().Sub(r.since) < ttl && available(r.worker)
+		switch {
+		case live && r.worker != w.Name:
+			item.Reserved = r.why
+		case live, builder == w.Name:
+			item.affine = true
+		}
+	}
 }

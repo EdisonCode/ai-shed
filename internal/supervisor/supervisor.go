@@ -249,6 +249,9 @@ type Supervisor struct {
 	// ciRestarted holds the pull request heads whose CI was started again,
 	// as repo#pr@sha: each is started once.
 	ciRestarted map[string]bool
+	// reserved holds work kept for the worker that has its code open, by
+	// repo#number.
+	reserved map[string]reservation
 	// closeChecked holds when GitHub was last asked whether a finished
 	// issue may close, and closed the issues shed closed.
 	closeChecked map[string]time.Time
@@ -1044,7 +1047,8 @@ func (s *Supervisor) deliver(ctx context.Context, w config.Worker, st *workerSta
 	// already empty.
 	// A verification starts from nothing: it judges the work on its own
 	// evidence, not on a conversation that built something else.
-	fresh := newIssue && ((w.FreshPerIssue && st.worked) || item.Verify != "")
+	// Its own follow-on keeps the context that knows its code.
+	fresh := newIssue && ((w.FreshPerIssue && st.worked && !item.affine) || item.Verify != "")
 	coldClear := c.Cold && s.Settings.ClearWhenCold()
 	big := s.contextOver(w, st, idle)
 	cleared := switchModel || fresh || coldClear || big > 0

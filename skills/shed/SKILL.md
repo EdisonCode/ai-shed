@@ -310,6 +310,9 @@ Run this as a checklist and report each line.
      repository's `issue_quota`. Ask the owner whether it is worth a worker's
      time: `Ready now` on it admits it; otherwise close it or fold it into
      the issue it was found on.
+   - `held: rework for <worker>` or `held: reserved for <worker>` needs
+     nothing: the work waits for the worker that has its code open, until
+     `affinity_ttl` or until that worker is stuck or limited.
    - `rework` in the issues list needs nothing from the owner: the pull
      request cannot merge and a worker is being sent back to it. A `!` line
      that says `after 2 tries by a worker` is the owner's: the workers could
