@@ -32,7 +32,22 @@ func (l *loginTerm) clock() (func() time.Time, func(time.Duration)) {
 	return func() time.Time { return l.now }, func(d time.Duration) { l.now = l.now.Add(d) }
 }
 
-const signInURL = "https://claude.ai/oauth/authorize?code=true&client_id=abc&state=xyz"
+const signInURL = "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-0000-4000-8000-00000000abcd&response_type=code&redirect_uri=https%3A%2F%2Fexample.com%2Fcallback&code_challenge=c4allenge&code_challenge_method=S256&state=xyz"
+
+func TestASignInURLTheToolBrokeOverLinesIsReadWhole(t *testing.T) {
+	broken := "Browser didn't open? Use the url below to sign in:\n\n" + signInURL[:80] + "\n" + signInURL[80:170] + "\n" + signInURL[170:] + "\n\nPaste code here if prompted >"
+	if got := LoginURL(broken); got != signInURL {
+		t.Fatalf("url = %q, want %q", got, signInURL)
+	}
+}
+
+func TestACutSignInURLIsNotGivenOut(t *testing.T) {
+	term := newLoginTerm("> ", "Use the url below to sign in:\n\n"+signInURL[:80]+"\n\nPaste code here if prompted >")
+	now, sleep := term.clock()
+	if url, err := StartLogin(term, "claude", t.TempDir(), now, sleep); err == nil || !strings.Contains(err.Error(), "client_id is missing or cut") {
+		t.Fatalf("url = %q, err = %v", url, err)
+	}
+}
 
 func TestStartLoginTypesLoginPicksTheSubscriptionAndReturnsTheURL(t *testing.T) {
 	term := newLoginTerm(

@@ -27,6 +27,10 @@ type LoginTerminal interface {
 
 var (
 	urlRE         = regexp.MustCompile(`https://\S+`)
+	urlPieceRE    = regexp.MustCompile(`^[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$`)
+	clientIDRE    = regexp.MustCompile(`[?&]client_id=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(&|$)`)
+	challengeRE   = regexp.MustCompile(`[?&]code_challenge=[^&\s]+`)
+	stateRE       = regexp.MustCompile(`[?&]state=[^&\s]+`)
 	loginMethodRE = regexp.MustCompile(`(?i)login method`)
 	loginOKRE     = regexp.MustCompile(`(?i)login successful|logged in as|successfully logged in`)
 	loginFailRE   = regexp.MustCompile(`(?i)invalid|error|failed|expired|denied`)
@@ -75,6 +79,10 @@ func StartLogin(term LoginTerminal, command, dir string, now func() time.Time, s
 		term.Close(LoginWindow)
 		return "", fmt.Errorf("the tool printed no sign-in URL. Its screen:\n%s", indent(screen))
 	}
+	if err := CheckSignInURL(url); err != nil {
+		term.Close(LoginWindow)
+		return "", fmt.Errorf("%w. Its screen:\n%s", err, indent(screen))
+	}
 	return url, nil
 }
 
@@ -116,13 +124,44 @@ func typeAndRead(term LoginTerminal, text string, now func() time.Time, sleep fu
 	return term.CaptureJoined(LoginWindow, loginRows)
 }
 
-// LoginURL returns the last https URL on the screen; "" for none.
+// LoginURL returns the last https URL on the screen; "" for none. Claude
+// Code breaks a long URL over lines at the pane's width itself, so a joined
+// capture still shows it in pieces: the lines after it that hold nothing but
+// URL characters are the rest of it, up to a blank line.
 func LoginURL(screen string) string {
-	found := urlRE.FindAllString(screen, -1)
-	if len(found) == 0 {
+	lines := strings.Split(screen, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.Contains(line, "https://") {
+			start = i
+		}
+	}
+	if start < 0 {
 		return ""
 	}
-	return found[len(found)-1]
+	url := urlRE.FindString(lines[start][strings.LastIndex(lines[start], "https://"):])
+	for _, line := range lines[start+1:] {
+		piece := strings.TrimSpace(line)
+		if !urlPieceRE.MatchString(piece) || strings.HasPrefix(piece, "https://") {
+			break
+		}
+		url += piece
+	}
+	return url
+}
+
+// CheckSignInURL reports a sign-in URL that was cut: one without its whole
+// client id, its code challenge or its state cannot be used.
+func CheckSignInURL(url string) error {
+	for _, part := range []struct {
+		name string
+		re   *regexp.Regexp
+	}{{"client_id", clientIDRE}, {"code_challenge", challengeRE}, {"state", stateRE}} {
+		if !part.re.MatchString(url) {
+			return fmt.Errorf("the sign-in URL was not read whole (its %s is missing or cut): %s", part.name, url)
+		}
+	}
+	return nil
 }
 
 // ValidLoginCode checks that a code is the kind a sign-in page gives, before
