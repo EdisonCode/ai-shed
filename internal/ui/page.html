@@ -427,7 +427,8 @@ function machine(m, now) {
     return el("div", { class: "worker s-" + (w.state || "") + " v-" + (c.verdict || ""), title: c.reason || "", onclick: () => openWorker(m.name, w.name) },
       el("div", { class: "top" }, el("strong", {}, w.name), el("span", { class: "v-" + (c.verdict || "") + " meta" }, (c.verdict || w.state || "—") + (c.time ? " · " + ago(c.time, now) : ""))),
       el("div", { class: "what" }, what),
-      i && i.goal ? el("span", { class: "chip goal" }, i.goal) : null);
+      i && i.goal ? el("span", { class: "chip goal" }, i.goal) : null,
+      w.unreachable ? el("span", { class: "chip fail", title: w.unreachable }, "peers can't reach it") : null);
   })));
   return box;
 }

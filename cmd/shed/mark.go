@@ -65,11 +65,13 @@ func cmdMark(args []string) int {
 	}
 	if args[0] == "message" {
 		// PostToolUse on SendMessage: what the session sent, for the
-		// supervisor's count. The message itself is not kept.
+		// supervisor's count. PostToolUseFailure: a send that did not
+		// reach its session, so status can say the session is unreachable.
+		// The message itself is not kept.
 		if hook.SentTo == "" {
 			return exitOK
 		}
-		if err := runlog.RecordMessage(state, worker, runlog.Message{Time: time.Now(), To: hook.SentTo, Chars: hook.SentChars}); err != nil {
+		if err := runlog.RecordMessage(state, worker, runlog.Message{Time: time.Now(), To: hook.SentTo, Chars: hook.SentChars, Failed: hook.SendFailed}); err != nil {
 			return markFailed(err)
 		}
 		return exitOK

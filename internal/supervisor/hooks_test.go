@@ -84,11 +84,17 @@ func TestAWorkerWithPeersAndNoMessageHookIsWarned(t *testing.T) {
 	dir := t.TempDir()
 	w := config.Worker{Name: "app", Dir: dir, PeerList: []config.Peer{{Session: "box-api"}}}
 	got := HookWarnings(t.TempDir(), w)
-	if len(got) != 1 || !strings.Contains(got[0], "shed mark message") {
+	if len(got) != 2 || !strings.Contains(got[0], "no PostToolUse hook") || !strings.Contains(got[1], "no PostToolUseFailure hook") {
 		t.Fatalf("warnings = %q", got)
 	}
 	writeSettings(t, dir, "settings.json", `{"hooks": {"PostToolUse": [{"matcher": "SendMessage", "hooks": [{"type": "command", "command": "shed mark message"}]}]}}`)
+	if got := HookWarnings(t.TempDir(), w); len(got) != 1 || !strings.Contains(got[0], "PostToolUseFailure") {
+		t.Fatalf("warnings with the message hook only = %q", got)
+	}
+	writeSettings(t, dir, "settings.json", `{"hooks": {
+		"PostToolUse": [{"matcher": "SendMessage", "hooks": [{"type": "command", "command": "shed mark message"}]}],
+		"PostToolUseFailure": [{"matcher": "SendMessage", "hooks": [{"type": "command", "command": "shed mark message"}]}]}}`)
 	if got := HookWarnings(t.TempDir(), w); len(got) != 0 {
-		t.Fatalf("warnings with the hook = %q", got)
+		t.Fatalf("warnings with both hooks = %q", got)
 	}
 }
