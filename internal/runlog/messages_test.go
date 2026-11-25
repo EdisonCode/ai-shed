@@ -93,3 +93,26 @@ func TestAHookAboutAnotherToolSendsNothing(t *testing.T) {
 		t.Fatalf("hook = %+v", h)
 	}
 }
+
+func TestAFailedSendNamesItsError(t *testing.T) {
+	failure := ParseHook(strings.NewReader(`{"hook_event_name":"PostToolUseFailure","tool_name":"SendMessage","tool_input":{"to":"pc-api","message":"Route moved"},"error":"no agent named pc-api is reachable"}`))
+	if failure.SentTo != "pc-api" || failure.SendFailed != "no agent named pc-api is reachable" {
+		t.Fatalf("failure hook = %+v", failure)
+	}
+	result := ParseHook(strings.NewReader(`{"hook_event_name":"PostToolUse","tool_name":"SendMessage","tool_input":{"to":"pc-api","message":"Route moved"},"tool_response":"Error: no agent named pc-api is reachable"}`))
+	if result.SendFailed != "Error: no agent named pc-api is reachable" {
+		t.Fatalf("result hook = %+v", result)
+	}
+	sent := ParseHook(strings.NewReader(`{"hook_event_name":"PostToolUse","tool_name":"SendMessage","tool_input":{"to":"pc-api","message":"Route moved"},"tool_response":{"delivered":true}}`))
+	if sent.SendFailed != "" {
+		t.Fatalf("sent hook = %+v", sent)
+	}
+}
+
+func TestAFailedSendIsNotCounted(t *testing.T) {
+	now := time.Now()
+	got := CountSince([]Message{{Time: now, To: "pc-api", Failed: "unreachable"}, {Time: now, To: "pc-api"}}, now.Add(-time.Hour))
+	if got["pc-api"] != 1 {
+		t.Fatalf("counts = %v", got)
+	}
+}

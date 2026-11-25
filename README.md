@@ -1417,8 +1417,21 @@ the session it went to and its length, not the text):
 "PostToolUse": [
   { "matcher": "SendMessage",
     "hooks": [{ "type": "command", "command": "$HOME/.local/bin/shed mark message" }] }
+],
+"PostToolUseFailure": [
+  { "matcher": "SendMessage",
+    "hooks": [{ "type": "command", "command": "$HOME/.local/bin/shed mark message" }] }
 ]
 ```
+
+The second hook records a message that could not reach its peer, with the
+error, as when the peer's Remote Control is down (a change of account drops
+it). A failed send is not counted as a message. `shed status` and
+`shed observe` then list, on the peer's machine, `worker X cannot be reached
+by its peers`, with whose message failed and when, and what to do: type
+`/remote-control` in its session when it is at rest, or give it a fresh
+session with `shed recycle`. The flag ends when a later message reaches the
+peer, or when the supervisor starts or recycles its session.
 
 `shed status` shows a worker's count: `[12 peer message(s) sent in the
 last hour]`. It counts only messages to the sessions of its peers; a message
@@ -1427,7 +1440,7 @@ hour (20 by default, under `supervisor`; a negative number turns the check
 off) is told to stop and to put what is left on the issue. If it sends that
 session three more, it is `stuck`, and `shed status` lists it with the
 session. End the exchange, for example with `shed recycle`. `shed preflight`
-warns about a worker with peers and no such hook.
+warns about a worker with peers and either hook missing.
 
 ### Crews
 

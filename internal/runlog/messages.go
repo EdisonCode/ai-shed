@@ -25,6 +25,10 @@ type Message struct {
 	Time  time.Time `json:"time"`
 	To    string    `json:"to"`
 	Chars int       `json:"chars"`
+	// Failed is the error the send returned, when it did not reach the
+	// session: the session's Remote Control is down, or it is not running.
+	// A failed send is no message.
+	Failed string `json:"failed,omitempty"`
 }
 
 // RecordMessage appends a message to the worker's log.
@@ -116,10 +120,11 @@ func Messages(dir, worker string) ([]Message, error) {
 
 // CountSince counts the messages sent since a time, by the session they
 // went to.
+// A failed send is not counted.
 func CountSince(ms []Message, since time.Time) map[string]int {
 	counts := map[string]int{}
 	for _, m := range ms {
-		if !m.Time.Before(since) {
+		if !m.Time.Before(since) && m.Failed == "" {
 			counts[m.To]++
 		}
 	}

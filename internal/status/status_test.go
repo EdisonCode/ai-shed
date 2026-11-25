@@ -1653,3 +1653,40 @@ func TestAnIssueSaysWhoSignedItsPlanAndWhereItsCrewReviewStands(t *testing.T) {
 		t.Errorf("issue outside the crew = %+v, want no crew review", i)
 	}
 }
+
+func TestAFailedSendIsNoMessageAndAMessageAfterItEndsTheFailure(t *testing.T) {
+	peer := config.Peer{Machine: "mini", Worker: "web", Session: "mini-web", Remote: true}
+	sent := []runlog.Message{
+		{Time: now.Add(-30 * time.Minute), To: "mini-web", Failed: "no agent named mini-web is reachable"},
+	}
+	l := peerLinks(config.Worker{PeerList: []config.Peer{peer}}, sent, now)[0]
+	if l.Day != 0 || l.Failed == "" || !l.FailedAt.Equal(now.Add(-30*time.Minute)) {
+		t.Fatalf("link = %+v, want no message and the failure", l)
+	}
+	sent = append(sent, runlog.Message{Time: now.Add(-5 * time.Minute), To: "mini-web"})
+	if l := peerLinks(config.Worker{PeerList: []config.Peer{peer}}, sent, now)[0]; l.Day != 1 || l.Failed != "" {
+		t.Fatalf("link = %+v, want the message and no failure", l)
+	}
+}
+
+func TestAWorkerItsPeersCannotReachNeedsYouOnItsOwnMachine(t *testing.T) {
+	failedAt := now.Add(-time.Hour)
+	reports := []MachineReport{
+		{Name: "mini", Workers: []WorkerStatus{{Name: "strata", Peers: []PeerLink{{Session: "pc-backend", Machine: "pc", Worker: "backend", FailedAt: failedAt, Failed: "no agent named pc-backend is reachable"}}}}},
+		{Name: "pc", Probe: &probe.Result{}, Workers: []WorkerStatus{{Name: "backend"}}},
+	}
+	flagUnreachable(reports)
+	pc := reports[1]
+	if len(pc.Attention) != 1 || !strings.Contains(pc.Attention[0], "worker backend cannot be reached by its peers: mini/strata's message at") ||
+		!strings.Contains(pc.Attention[0], "/remote-control") || pc.Workers[0].Unreachable == "" || len(reports[0].Attention) != 0 {
+		t.Fatalf("attention = %q, workers = %+v", pc.Attention, pc.Workers)
+	}
+
+	// A fresh session since the failure ends it.
+	reports[1].Attention, reports[1].Workers[0].Unreachable = nil, ""
+	reports[1].Probe.Checkins = []runlog.Checkin{{Time: failedAt.Add(time.Minute), Worker: "backend", Verdict: runlog.VerdictRecycled}}
+	flagUnreachable(reports)
+	if len(reports[1].Attention) != 0 {
+		t.Fatalf("attention after a fresh session = %q", reports[1].Attention)
+	}
+}

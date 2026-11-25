@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -76,18 +77,32 @@ type Hook struct {
 	ToolName  string
 	SentTo    string
 	SentChars int
+	// SendFailed is the error a SendMessage returned: from a
+	// PostToolUseFailure hook, or a PostToolUse hook whose result says the
+	// session could not be reached. "" when the message went.
+	SendFailed string
 }
+
+// unreachableRE matches a send's result that says the session it was for
+// could not be reached.
+var unreachableRE = regexp.MustCompile(`(?i)no agent named|not reachable|unreachable|no such (agent|session)`)
+
+// maxSendError keeps a failed send's error to a line a status can show.
+const maxSendError = 200
 
 // ParseHook reads the JSON an agent tool passes a hook. A body that is not
 // JSON is an empty hook: the mark still stands, and no usage is recorded.
 func ParseHook(input io.Reader) Hook {
 	var raw struct {
-		Message        string `json:"message"`
-		SessionID      string `json:"session_id"`
-		TranscriptPath string `json:"transcript_path"`
-		AgentPath      string `json:"agent_transcript_path"`
-		AgentType      string `json:"agent_type"`
-		ToolName       string `json:"tool_name"`
+		Message        string          `json:"message"`
+		SessionID      string          `json:"session_id"`
+		TranscriptPath string          `json:"transcript_path"`
+		AgentPath      string          `json:"agent_transcript_path"`
+		AgentType      string          `json:"agent_type"`
+		ToolName       string          `json:"tool_name"`
+		HookEvent      string          `json:"hook_event_name"`
+		Error          string          `json:"error"`
+		ToolResponse   json.RawMessage `json:"tool_response"`
 		// The input is decoded on its own: a tool whose input has another
 		// shape must not cost the hook its mark.
 		ToolInput json.RawMessage `json:"tool_input"`
@@ -108,6 +123,26 @@ func ParseHook(input io.Reader) Hook {
 			h.SentChars = len(text)
 		} else {
 			h.SentChars = len(send.Message)
+		}
+		switch {
+		case raw.HookEvent == "PostToolUseFailure":
+			h.SendFailed = raw.Error
+			if h.SendFailed == "" {
+				h.SendFailed = "the send failed"
+			}
+		case len(raw.ToolResponse) > 0:
+			response := string(raw.ToolResponse)
+			var text string
+			if json.Unmarshal(raw.ToolResponse, &text) == nil {
+				response = text
+			}
+			if unreachableRE.MatchString(response) {
+				h.SendFailed = response
+			}
+		}
+		h.SendFailed = strings.Join(strings.Fields(h.SendFailed), " ")
+		if len(h.SendFailed) > maxSendError {
+			h.SendFailed = h.SendFailed[:maxSendError]
 		}
 	}
 	return h

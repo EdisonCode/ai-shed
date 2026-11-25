@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -218,6 +219,10 @@ type WorkerStatus struct {
 	// Peers is, for each of its peers, what it sent that peer's session in
 	// the last day: the lines of a graph of who works with whom.
 	Peers []PeerLink `json:"peers,omitempty"`
+	// Unreachable is the error a peer's latest send to this worker's session
+	// returned, while no later message reached it and its session was not
+	// started again; "" when its peers can reach it.
+	Unreachable string `json:"unreachable,omitempty"`
 }
 
 // PeerLink is what one worker sent one peer's session.
@@ -229,6 +234,11 @@ type PeerLink struct {
 	Day  int       `json:"day"`
 	Hour int       `json:"hour"`
 	Last time.Time `json:"last,omitzero"`
+	// FailedAt and Failed are the latest send to the peer in the last day
+	// that did not reach it, and its error, when no message reached it
+	// after. Zero when the peer was reachable.
+	FailedAt time.Time `json:"failed_at,omitzero"`
+	Failed   string    `json:"failed,omitempty"`
 }
 
 // crewSession reports whether a session is one of the fleet's crew, as the
@@ -255,6 +265,12 @@ func peerLinks(w config.Worker, sent []runlog.Message, now time.Time) []PeerLink
 			if m.To != p.Session || m.Time.Before(now.Add(-24*time.Hour)) {
 				continue
 			}
+			if m.Failed != "" {
+				if m.Time.After(l.FailedAt) {
+					l.FailedAt, l.Failed = m.Time, m.Failed
+				}
+				continue
+			}
 			l.Day++
 			if !m.Time.Before(now.Add(-time.Hour)) {
 				l.Hour++
@@ -263,9 +279,71 @@ func peerLinks(w config.Worker, sent []runlog.Message, now time.Time) []PeerLink
 				l.Last = m.Time
 			}
 		}
+		if !l.Last.Before(l.FailedAt) {
+			// A message reached the peer after the failed send.
+			l.FailedAt, l.Failed = time.Time{}, ""
+		}
 		links = append(links, l)
 	}
 	return links
+}
+
+// flagUnreachable says, on the machine of each worker its peers could not
+// reach, which send failed and what to do. A failure ends with a message
+// that reached the worker after it, or with a fresh session of the worker:
+// the supervisor started or recycled it since.
+func flagUnreachable(reports []MachineReport) {
+	byName := map[string]int{}
+	for n, r := range reports {
+		byName[r.Name] = n
+	}
+	type failure struct {
+		from, why string
+		at        time.Time
+	}
+	failed := map[[2]string]failure{}
+	for _, r := range reports {
+		for _, w := range r.Workers {
+			for _, l := range w.Peers {
+				key := [2]string{l.Machine, l.Worker}
+				if l.FailedAt.IsZero() || !failed[key].at.Before(l.FailedAt) {
+					continue
+				}
+				failed[key] = failure{from: r.Name + "/" + w.Name, why: l.Failed, at: l.FailedAt}
+			}
+		}
+	}
+	keys := slices.SortedFunc(maps.Keys(failed), func(a, b [2]string) int { return strings.Compare(a[0]+"/"+a[1], b[0]+"/"+b[1]) })
+	for _, key := range keys {
+		f := failed[key]
+		n, ok := byName[key[0]]
+		if !ok {
+			continue
+		}
+		target := &reports[n]
+		if target.Probe != nil && freshSince(target.Probe.Checkins, key[1], f.at) {
+			continue
+		}
+		for i := range target.Workers {
+			if target.Workers[i].Name == key[1] {
+				target.Workers[i].Unreachable = f.why
+			}
+		}
+		target.Attention = append(target.Attention, fmt.Sprintf(
+			"worker %s cannot be reached by its peers: %s's message at %s failed: %s. Its Remote Control is likely down (an account switch drops it): type /remote-control in its session when it is at rest, or give it a fresh session with shed recycle %s %s",
+			key[1], f.from, f.at.Local().Format("15:04"), f.why, key[0], key[1]))
+	}
+}
+
+// freshSince reports whether the supervisor started or recycled the
+// worker's session after the time given.
+func freshSince(checkins []runlog.Checkin, worker string, t time.Time) bool {
+	for _, c := range checkins {
+		if c.Worker == worker && c.Time.After(t) && (c.Verdict == runlog.VerdictStarted || c.Verdict == runlog.VerdictRecycled) {
+			return true
+		}
+	}
+	return false
 }
 
 type Collector struct {
@@ -468,6 +546,7 @@ func (c Collector) collectMachines(ctx context.Context, cfg *config.Config, work
 		wg.Go(func() { reports[i] = c.collectOne(ctx, cfg, m, workerLooks) })
 	}
 	wg.Wait()
+	flagUnreachable(reports)
 	return reports
 }
 
