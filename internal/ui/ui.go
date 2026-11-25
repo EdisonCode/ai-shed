@@ -109,9 +109,6 @@ func (s *Server) refresh(ctx context.Context) {
 	start := time.Now()
 	r := s.Collect(ctx)
 	snap := Snapshot{At: time.Now(), Took: time.Since(start).Round(100 * time.Millisecond).String(), Every: s.Every.String(), Report: r, readStart: start}
-	if s.actionsOn() {
-		snap.Actions = actionsFor(r, s.signals())
-	}
 	for _, m := range r.Machines {
 		snap.NeedsYou += len(m.Attention)
 	}
@@ -125,6 +122,7 @@ func (s *Server) refresh(ctx context.Context) {
 	if s.snap != nil {
 		snap.Deck = s.snap.Deck
 	}
+	snap.Actions = s.actions(snap.Report, snap.Deck)
 	s.snap = &snap
 	due := s.Digest != nil && !s.reading && (snap.Deck == nil || time.Since(s.deckAt) >= s.DeckEvery)
 	if due {
@@ -137,6 +135,15 @@ func (s *Server) refresh(ctx context.Context) {
 	}
 }
 
+// actions are what the owner can do from the page with the report's issues
+// and the goals; none when the page may not act.
+func (s *Server) actions(r status.Report, deck *status.Digest) []Action {
+	if !s.actionsOn() {
+		return nil
+	}
+	return append(actionsFor(r, s.signals()), goalActions(r, deck)...)
+}
+
 // readDeck reads the deck from a report and sends it to every open page
 // with the latest report.
 func (s *Server) readDeck(ctx context.Context, r status.Report) {
@@ -147,6 +154,9 @@ func (s *Server) readDeck(ctx context.Context, r status.Report) {
 	s.deckAt = time.Now()
 	if s.snap != nil {
 		s.snap.Deck = &d
+		// The deck names goals the report may not: offer what can be done
+		// with each.
+		s.snap.Actions = s.actions(s.snap.Report, s.snap.Deck)
 	}
 	s.mu.Unlock()
 	s.publish()

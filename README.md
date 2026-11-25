@@ -65,6 +65,15 @@ can take a minute or more. The page has two views:
   the `shed` command that bumps it, puts it back, recycles its worker or
   pauses its machine, ready to copy.
 
+**Goals.** A hill chart puts each goal where it stands: uphill while its
+issues are still being worked out (queued, held, waiting on you), over the
+top once workers build them, downhill as pull requests are checked, merged
+and looked at. A goal's place is the mean of its issues', a closed issue at
+the bottom of the far side; a dot's size is its open issues. Right-click a
+goal's card or its dot to **Focus: finish this goal first**, **Table this
+goal**, or take either back, as `shed goal` does. A goal in focus is
+listed first, and a tabled one last.
+
 **Quick answers.** Needs you opens with the answers a worker teed up, each
 with what the worker wrote under its ask:
 - **Accept the recommendation** on a decision posts `Owner ruling: accepted`.
@@ -522,6 +531,29 @@ It is a view, not a new role:
 
 Without `goal_labels`, nothing changes. `shed digest -json` carries the
 goals under `goals`, and `shed status -json` each issue's `goal`.
+
+#### Focus on a goal, or table one
+
+Many goals moving at once leave many loose ends. Finish one or two, then
+start the next:
+
+```sh
+shed goal focus "goal:export"    # its issues go ahead of every other goal's
+shed goal table "goal:refunds"   # its issues nobody started are held
+shed goal clear "goal:export"    # back to the usual order
+```
+
+- **Focus** puts the goal's issues ahead of priority labels and every other
+  goal in each queue, after bumps, rework, eye checks and verifications:
+  finishing started work still comes first. A worker whose queue has none
+  of the goal's issues goes on with its own work. Focus works for one or
+  two goals; past that it spreads the fleet as thin as no focus does, and
+  `shed observe` warns before it focuses on a third.
+- **Table** holds the goal's issues that nobody has started, with the reason
+  in `shed queue`. The issue a worker has in hand, rework, a stack, an eye
+  check, a verification and a bump go on, so started work ends.
+- The mode is set on every machine that hands out a queue, and each agent
+  applies it at its next check-in. Nobody is interrupted.
 
 ### Putting an issue first
 

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
+	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 )
 
 // GoalCounter counts the issues of a repository with a goal label: how many
@@ -47,6 +49,38 @@ func (s *Supervisor) shareGoals(ctx context.Context, items []QueueItem, open []b
 	for n := range items {
 		if goal := goalOf[issueRef(items[n].Repo, items[n].Number)]; goal != "" {
 			items[n].goalDone = s.goalDone(ctx, items[n].Repo, goal)
+		}
+	}
+}
+
+// applyGoalModes applies the owner's focus and tabled goals to a worker's
+// queue. An issue of a goal in focus goes ahead of every other goal's, so the
+// fleet finishes the goal before it spreads over more. An issue of a tabled
+// goal that nobody has started is held; the issue in hand, rework, a stack,
+// a look, a verification and a bump go on, so work started on it ends.
+func (s *Supervisor) applyGoalModes(w config.Worker, items []QueueItem, open []backlog.Issue, modes map[string]string, checkins []runlog.Checkin) {
+	prefix := s.Settings.GoalLabels
+	if prefix == "" || len(modes) == 0 {
+		return
+	}
+	goalOf := map[string]string{}
+	for _, i := range open {
+		if goal := backlog.GoalLabel(i.LabelNames(), prefix); goal != "" {
+			goalOf[issueRef(i.Repo, i.Number)] = goal
+		}
+	}
+	inHand := runlog.IssueInHand(checkins, w.Name)
+	for n := range items {
+		item := &items[n]
+		goal := goalOf[issueRef(item.Repo, item.Number)]
+		switch modes[goal] {
+		case runlog.GoalFocus:
+			item.focus = true
+		case runlog.GoalTabled:
+			if item.Number == inHand || item.Bumped || item.Blocked != "" || item.resumes() || item.Look != "" || item.Verify != "" {
+				continue
+			}
+			item.Blocked = fmt.Sprintf("the owner tabled goal %q; work already started on it goes on (shed goal clear to take it up again)", goal)
 		}
 	}
 }

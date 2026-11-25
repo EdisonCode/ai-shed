@@ -350,6 +350,44 @@ func TestBumpLeavesARequestForTheAgentAndUnbumpTakesItBack(t *testing.T) {
 	}
 }
 
+func TestSetGoalModeLeavesTheModeForTheAgentAndClearsIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ctx, r := context.Background(), probe.ShellRunner{}
+	if _, err := SetGoalMode(ctx, r, here, "goal: route planner", runlog.GoalFocus); err != nil {
+		t.Fatal(err)
+	}
+	modes, err := runlog.GoalModes(filepath.Join(home, runlog.StateDir))
+	if err != nil || len(modes) != 1 || modes["goal: route planner"] != runlog.GoalFocus {
+		t.Fatalf("modes = %v, %v; want the route planner in focus", modes, err)
+	}
+	if cleared, err := SetGoalMode(ctx, r, here, "goal: route planner", ""); err != nil || !cleared {
+		t.Fatalf("clear = %v, %v", cleared, err)
+	}
+	if cleared, err := SetGoalMode(ctx, r, here, "goal: route planner", ""); err != nil || cleared {
+		t.Fatalf("second clear = %v, %v; nothing was left to clear", cleared, err)
+	}
+	if _, err := SetGoalMode(ctx, r, here, "goal: route planner", "sideways"); err == nil {
+		t.Fatal("a mode that is neither focus nor tabled was written")
+	}
+}
+
+func TestSetFleetGoalModeSetsItOnEachMachineThatHandsOutAQueue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	builder := here
+	builder.Workers = []config.Worker{{Name: "app"}}
+	idle := config.Machine{Name: "idle", Host: config.LocalHost}
+	cfg := &config.Config{Machines: []config.Machine{idle, builder}}
+	done, err := SetFleetGoalMode(context.Background(), probe.ShellRunner{}, cfg, "goal: route planner", runlog.GoalTabled)
+	if err != nil || len(done) != 1 || done[0] != "box" {
+		t.Fatalf("set on %v, %v; want box only, which has a worker", done, err)
+	}
+	if modes, _ := runlog.GoalModes(filepath.Join(home, runlog.StateDir)); modes["goal: route planner"] != runlog.GoalTabled {
+		t.Fatalf("modes = %v", modes)
+	}
+}
+
 func TestSecondDeployOfAMachineIsRefused(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx, r := context.Background(), probe.ShellRunner{}

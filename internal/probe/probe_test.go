@@ -221,6 +221,16 @@ func TestParseReadsTheIssuesTheOwnerPutFirst(t *testing.T) {
 	}
 }
 
+func TestParseReadsTheGoalsTheOwnerFocusedOnOrTabled(t *testing.T) {
+	res, err := Parse("@@now 1790000000\n@@goal goal:%20route%20planner focus\n@@goal goal:%20invoices tabled\n@@goal goal:%20odd sideways\n@@goal goal:%20half.new focus\n@@end\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Goals) != 2 || res.Goals["goal: route planner"] != runlog.GoalFocus || res.Goals["goal: invoices"] != runlog.GoalTabled {
+		t.Fatalf("goals = %v", res.Goals)
+	}
+}
+
 func TestParseReadsAPauseThatStillHolds(t *testing.T) {
 	res, err := Parse("@@now 1790000000\n@@pause 1790001800\n@@end\n", nil)
 	if err != nil || res.PausedUntil.Unix() != 1790001800 {

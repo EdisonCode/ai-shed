@@ -1639,7 +1639,7 @@ func (s *Supervisor) recover(worker string) *workerState {
 // queue lists the worker's open issues in the order to work them: the ones
 // the owner put first, then rework and the issues whose question the owner
 // answered, since finishing started work beats starting more, then the eye
-// checks that are due on staging, then by the
+// checks that are due on staging, then the goals the owner focused on, then by the
 // owner's priority, then oldest first. An issue that another worker has in
 // hand is not in it, and neither is one the owner moved to another worker.
 func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, error) {
@@ -1716,7 +1716,13 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	elsewhere := s.inFlightElsewhere(ctx, w)
 	s.refreshFiled(ctx)
 	s.refreshBreaker(ctx)
+	modes, err := runlog.GoalModes(s.StateDir)
+	if err != nil {
+		// A goal's mode orders and holds work; the queue goes on without it.
+		s.Logf("worker %s: %v", w.Name, err)
+	}
 	s.applyHolds(w, items, open, elsewhere, checkins)
+	s.applyGoalModes(w, items, open, modes, checkins)
 	crewGoals := s.crewGoals(w, open, checkins)
 	roster := rosterText(w, open, elsewhere, checkins) + crewText(w, crewGoals, s.crewIssues(ctx, crewGoals))
 	if _, err := writeRoster(w, roster); err != nil {
@@ -1733,6 +1739,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	// A backfill issue is in no labelled source, so applyHolds needs it
 	// beside them to hold it as it holds queued work.
 	s.applyHolds(w, items, append(slices.Clone(open), offered...), elsewhere, checkins)
+	s.applyGoalModes(w, items, append(slices.Clone(open), offered...), modes, checkins)
 	s.applyPace(w, items, checkins)
 	s.shareGoals(ctx, items, open)
 	sort.SliceStable(items, func(a, b int) bool {
@@ -1753,6 +1760,10 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 			// A pull request that waits for a verifier holds up the owner's
 			// review.
 			return x.Verify != ""
+		case x.focus != y.focus:
+			// The goals the owner focused on are finished before more
+			// are started.
+			return x.focus
 		case x.rank != y.rank:
 			return x.rank < y.rank
 		case x.goalDone != y.goalDone:

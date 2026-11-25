@@ -5,6 +5,7 @@ package probe
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,6 +54,9 @@ type Result struct {
 	// Bumps are the issues the owner put first in line, by number, each with
 	// the worker it goes to; "" for the workers whose queue it is in.
 	Bumps map[int]string `json:"-"`
+	// Goals are the goals the owner focused on or tabled, each with its
+	// mode, by label.
+	Goals map[string]string `json:"goals,omitempty"`
 	// Account is the email Claude Code on the machine is logged in as, from
 	// its own state file; "" when it names none. Machines with one account
 	// share one usage limit.
@@ -124,6 +128,7 @@ s="$HOME/` + runlog.StateDir + `"
 for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(basename "$(dirname "$f")") $(basename "$f" .md)"; done
 [ -f "$s/` + runlog.PauseFile + `" ] && echo "@@pause $(cat "$s/` + runlog.PauseFile + `")"
 for f in "$s/` + runlog.BumpsDir + `"/*; do [ -f "$f" ] && echo "@@bump $(basename "$f") $(cat "$f")"; done
+for f in "$s/` + runlog.GoalsDir + `"/*; do [ -f "$f" ] && echo "@@goal $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MessagesDir + `"/*; do [ -f "$f" ] && tail -n 100 "$f" | sed "s/^/@@msg $(basename "$f") /"; done
 for f in "$s/` + runlog.QueuesDir + `"/*; do [ -f "$f" ] && echo "@@queue $(basename "$f") $(cat "$f")"; done
@@ -265,6 +270,17 @@ func Parse(out string, checks []config.Check) (Result, error) {
 					res.Bumps = map[int]string{}
 				}
 				res.Bumps[issue] = strings.TrimSpace(worker)
+			}
+		case "@@goal":
+			// A goal file that was still being written has another name,
+			// and a path-escaped label has no space.
+			name, mode, _ := strings.Cut(strings.TrimSpace(rest), " ")
+			label, err := url.PathUnescape(name)
+			if mode = runlog.ParseGoalMode(mode); err == nil && mode != "" && !strings.HasSuffix(name, ".new") {
+				if res.Goals == nil {
+					res.Goals = map[string]string{}
+				}
+				res.Goals[label] = mode
 			}
 		case "@@mark":
 			// A mark the hook was still writing is skipped, not fatal.
