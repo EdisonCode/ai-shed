@@ -27,7 +27,6 @@ type LoginTerminal interface {
 
 var (
 	urlRE         = regexp.MustCompile(`https://\S+`)
-	urlPieceRE    = regexp.MustCompile(`^[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$`)
 	clientIDRE    = regexp.MustCompile(`[?&]client_id=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(&|$)`)
 	challengeRE   = regexp.MustCompile(`[?&]code_challenge=[^&\s]+`)
 	stateRE       = regexp.MustCompile(`[?&]state=[^&\s]+`)
@@ -124,30 +123,13 @@ func typeAndRead(term LoginTerminal, text string, now func() time.Time, sleep fu
 	return term.CaptureJoined(LoginWindow, loginRows)
 }
 
-// LoginURL returns the last https URL on the screen; "" for none. Claude
-// Code breaks a long URL over lines at the pane's width itself, so a joined
-// capture still shows it in pieces: the lines after it that hold nothing but
-// URL characters are the rest of it, up to a blank line.
+// LoginURL returns the last https URL on the screen; "" for none.
 func LoginURL(screen string) string {
-	lines := strings.Split(screen, "\n")
-	start := -1
-	for i, line := range lines {
-		if strings.Contains(line, "https://") {
-			start = i
-		}
-	}
-	if start < 0 {
+	found := urlRE.FindAllString(screen, -1)
+	if len(found) == 0 {
 		return ""
 	}
-	url := urlRE.FindString(lines[start][strings.LastIndex(lines[start], "https://"):])
-	for _, line := range lines[start+1:] {
-		piece := strings.TrimSpace(line)
-		if !urlPieceRE.MatchString(piece) || strings.HasPrefix(piece, "https://") {
-			break
-		}
-		url += piece
-	}
-	return url
+	return found[len(found)-1]
 }
 
 // CheckSignInURL reports a sign-in URL that was cut: one without its whole
