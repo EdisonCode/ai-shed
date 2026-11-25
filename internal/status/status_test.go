@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"reflect"
@@ -1688,5 +1689,37 @@ func TestAWorkerItsPeersCannotReachNeedsYouOnItsOwnMachine(t *testing.T) {
 	flagUnreachable(reports)
 	if len(reports[1].Attention) != 0 {
 		t.Fatalf("attention after a fresh session = %q", reports[1].Attention)
+	}
+
+	// So does Remote Control the supervisor saw come back since.
+	reports[1].Probe.Checkins = nil
+	reports[1].Probe.Remote = map[string]runlog.Remote{"backend": {Since: failedAt.Add(-time.Hour), Back: failedAt.Add(time.Minute)}}
+	flagUnreachable(reports)
+	if len(reports[1].Attention) != 0 {
+		t.Fatalf("attention after Remote Control came back = %q", reports[1].Attention)
+	}
+}
+
+func TestALostRemoteControlNeedsYouOnlyWhenTypingItDidNotHelp(t *testing.T) {
+	m := config.Machine{Name: "pc", Workers: []config.Worker{{Name: "backend"}}}
+	since := now.Add(-time.Hour)
+	for name, tc := range map[string]struct {
+		remote      runlog.Remote
+		unreachable bool
+		attention   string
+	}{
+		"being reconnected": {runlog.Remote{Since: since, Typed: 1}, true, ""},
+		"gave up":           {runlog.Remote{Since: since, Typed: 3, GaveUp: true}, true, "worker backend lost Remote Control at " + since.Local().Format("15:04") + " and typing /remote-control 3 times did not bring it back: peers on other machines cannot message it. Give it a fresh session with shed recycle pc backend"},
+		"back":              {runlog.Remote{Since: since, Back: since.Add(time.Minute)}, false, ""},
+	} {
+		var report MachineReport
+		var attention []string
+		assessWorkers(m, probe.Result{Now: now, Remote: map[string]runlog.Remote{"backend": tc.remote}}, &report, func(f string, a ...any) { attention = append(attention, fmt.Sprintf(f, a...)) })
+		if got := report.Workers[0].Unreachable != ""; got != tc.unreachable {
+			t.Errorf("%s: unreachable = %q", name, report.Workers[0].Unreachable)
+		}
+		if strings.Join(attention, "\n") != tc.attention {
+			t.Errorf("%s: attention = %q, want %q", name, attention, tc.attention)
+		}
 	}
 }

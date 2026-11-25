@@ -231,6 +231,16 @@ func TestParseReadsTheGoalsTheOwnerFocusedOnOrTabled(t *testing.T) {
 	}
 }
 
+func TestParseReadsAWorkersLostRemoteControl(t *testing.T) {
+	res, err := Parse("@@now 1790000000\n@@remote app {\"since\":\"2026-11-25T09:00:00Z\",\"typed\":2}\n@@remote web {\"typed\n@@end\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := res.Remote["app"]; len(res.Remote) != 1 || !ok || r.Typed != 2 || !r.Down() {
+		t.Fatalf("remote = %+v", res.Remote)
+	}
+}
+
 func TestParseReadsAPauseThatStillHolds(t *testing.T) {
 	res, err := Parse("@@now 1790000000\n@@pause 1790001800\n@@end\n", nil)
 	if err != nil || res.PausedUntil.Unix() != 1790001800 {

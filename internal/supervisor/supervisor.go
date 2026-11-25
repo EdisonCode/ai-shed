@@ -316,6 +316,9 @@ type LookReader interface {
 // costs a working worker nothing: no extra review and no repeated message.
 type workerState struct {
 	briefChecked bool
+	// remoteChecked is when the screen was last read for a lost Remote
+	// Control.
+	remoteChecked time.Time
 	// messagesTold is when the worker was told to stop messaging a session,
 	// by session, and messagesStuck the sessions it went on messaging after.
 	messagesTold  map[string]time.Time
@@ -688,6 +691,11 @@ func (s *Supervisor) check(ctx context.Context, w config.Worker, st *workerState
 
 	// Two sessions that answer each other can go on without end.
 	if acted, err := s.messageLoop(w, st, now); acted || err != nil {
+		return err
+	}
+
+	// Peers on other machines reach the worker only through Remote Control.
+	if typed, err := s.watchRemote(w, st, obs, now, toolState); typed || err != nil {
 		return err
 	}
 

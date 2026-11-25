@@ -116,3 +116,11 @@ func TestAFailedSendIsNotCounted(t *testing.T) {
 		t.Fatalf("counts = %v", got)
 	}
 }
+
+func TestAMessageToTheSessionsOwnSubagentIsNotCounted(t *testing.T) {
+	now := time.Now()
+	got := CountSince([]Message{{Time: now, To: "a1b35a3a05d21e82a"}, {Time: now, To: "mini-portal"}}, now.Add(-time.Hour))
+	if len(got) != 1 || got["mini-portal"] != 1 {
+		t.Fatalf("counts = %v, want only the peer's message", got)
+	}
+}
