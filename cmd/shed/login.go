@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -32,13 +31,6 @@ type loginReport struct {
 	ByHand      []string `json:"by_hand,omitempty"`
 	Error       string   `json:"error,omitempty"`
 }
-
-// remoteControlLost matches a worker screen that says its Remote Control
-// connection ended, as a change of account does.
-var (
-	remoteControlRE = regexp.MustCompile(`(?i)remote control`)
-	disconnectedRE  = regexp.MustCompile(`(?i)organization changed|disconnected`)
-)
 
 // cmdLogin moves a machine's tool to another account in two steps, both
 // from the owner's machine. `shed login <machine>` prints the sign-in URL.
@@ -203,7 +195,7 @@ func loginStep(cfg *config.Config, path, machine, code string, report *loginRepo
 		}
 		report.Resumed = append(report.Resumed, w.Name)
 		screen, err := term.Capture(w.Name, 40)
-		if err != nil || !remoteControlRE.MatchString(screen) || !disconnectedRE.MatchString(screen) {
+		if err != nil || !supervisor.RemoteControlLost(screen) {
 			continue
 		}
 		// A command typed into a turn in progress would be read as a

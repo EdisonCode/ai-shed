@@ -1433,9 +1433,22 @@ by its peers`, with whose message failed and when, and what to do: type
 session with `shed recycle`. The flag ends when a later message reaches the
 peer, or when the supervisor starts or recycles its session.
 
+The supervisor also watches for a lost connection before any send fails.
+Every two minutes it reads the bottom of the screen of each worker whose
+command has `--remote-control`. When it finds `Remote Control disconnected`
+(or `Couldn't reconnect to your Remote Control session`) below the last
+`/remote-control` typed there, it types `/remote-control` into the worker
+once the worker is at rest. A command typed into a turn in progress would be
+read as a message, so a busy worker waits. The worker's tile in
+`shed observe` says `peers can't reach it` meanwhile. If three tries five
+minutes apart do not bring it back, the owner is told, and `shed status`
+lists it with `shed recycle` as the fix.
+
 `shed status` shows a worker's count: `[12 peer message(s) sent in the
-last hour]`. It counts only messages to the sessions of its peers; a message
-to one of its own sub-agents goes through the same tool and is left out. A worker that sends one session `message_limit` messages within an
+last hour]`. It counts only messages to the sessions of its peers. A message
+to one of its own sub-agents goes through the same tool; the hook does not
+record it, and neither the count nor `message_limit` reads one an older shed
+recorded. A worker that sends one session `message_limit` messages within an
 hour (20 by default, under `supervisor`; a negative number turns the check
 off) is told to stop and to put what is left on the issue. If it sends that
 session three more, it is `stuck`, and `shed status` lists it with the

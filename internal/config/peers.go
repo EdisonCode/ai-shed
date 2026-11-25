@@ -66,7 +66,7 @@ func (c *Config) resolvePeers() error {
 					continue
 				}
 				other := c.Machines[pm].Workers[pw]
-				if pm != mi && !(remoteControl(w.CommandOrDefault()) && remoteControl(other.CommandOrDefault())) {
+				if pm != mi && !(RemoteControl(w.CommandOrDefault()) && RemoteControl(other.CommandOrDefault())) {
 					fail("%s: peer %q is on another machine, so both workers' commands need --remote-control: messages between machines go through it", where, name)
 					continue
 				}
@@ -95,7 +95,7 @@ func (c *Config) resolvePeers() error {
 	for x, a := range crew {
 		for _, b := range crew[x+1:] {
 			wa, wb := c.Machines[a.m].Workers[a.w], c.Machines[b.m].Workers[b.w]
-			if a.m != b.m && !(remoteControl(wa.CommandOrDefault()) && remoteControl(wb.CommandOrDefault())) {
+			if a.m != b.m && !(RemoteControl(wa.CommandOrDefault()) && RemoteControl(wb.CommandOrDefault())) {
 				fail("machine %q: worker %q and machine %q: worker %q are crew on different machines, so both commands need --remote-control: messages between machines go through it", c.Machines[a.m].Name, wa.Name, c.Machines[b.m].Name, wb.Name)
 				continue
 			}
@@ -124,9 +124,9 @@ func (c *Config) resolvePeers() error {
 	return nil
 }
 
-// remoteControl reports whether a Claude Code command starts its session
+// RemoteControl reports whether a Claude Code command starts its session
 // with Remote Control.
-func remoteControl(command string) bool {
+func RemoteControl(command string) bool {
 	return slices.ContainsFunc(strings.Fields(command), func(f string) bool {
 		return f == "--remote-control" || strings.HasPrefix(f, "--remote-control=")
 	})

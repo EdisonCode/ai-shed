@@ -40,6 +40,9 @@ type Result struct {
 	Recycle []string `json:"-"`
 	// Marks is what each worker's tool last reported about itself, by worker.
 	Marks map[string]runlog.Mark `json:"-"`
+	// Remote is, by worker, what the supervisor saw of a lost Remote
+	// Control, for a worker that ever lost it.
+	Remote map[string]runlog.Remote `json:"-"`
 	// Messages are the latest messages each worker's session sent to other
 	// sessions, by worker, oldest first.
 	Messages map[string][]runlog.Message `json:"-"`
@@ -130,6 +133,7 @@ for f in "$s/` + runlog.TasksDir + `"/*/*.md; do [ -f "$f" ] && echo "@@task $(b
 for f in "$s/` + runlog.BumpsDir + `"/*; do [ -f "$f" ] && echo "@@bump $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.GoalsDir + `"/*; do [ -f "$f" ] && echo "@@goal $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MarksDir + `"/*; do [ -f "$f" ] && echo "@@mark $(basename "$f") $(cat "$f")"; done
+for f in "$s/` + runlog.RemoteDir + `"/*; do [ -f "$f" ] && echo "@@remote $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.MessagesDir + `"/*; do [ -f "$f" ] && tail -n 100 "$f" | sed "s/^/@@msg $(basename "$f") /"; done
 for f in "$s/` + runlog.QueuesDir + `"/*; do [ -f "$f" ] && echo "@@queue $(basename "$f") $(cat "$f")"; done
 for f in "$s/` + runlog.ContextDir + `"/*; do [ -f "$f" ] && echo "@@context $(basename "$f") $(cat "$f")"; done
@@ -290,6 +294,15 @@ func Parse(out string, checks []config.Check) (Result, error) {
 					res.Marks = map[string]runlog.Mark{}
 				}
 				res.Marks[worker] = m
+			}
+		case "@@remote":
+			// A state the supervisor was still writing is skipped, not fatal.
+			worker, line, _ := strings.Cut(rest, " ")
+			if r, err := runlog.ParseRemote(line); err == nil {
+				if res.Remote == nil {
+					res.Remote = map[string]runlog.Remote{}
+				}
+				res.Remote[worker] = r
 			}
 		case "@@msg":
 			// A line the hook was still writing is skipped, not fatal.

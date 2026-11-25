@@ -67,8 +67,9 @@ func cmdMark(args []string) int {
 		// PostToolUse on SendMessage: what the session sent, for the
 		// supervisor's count. PostToolUseFailure: a send that did not
 		// reach its session, so status can say the session is unreachable.
-		// The message itself is not kept.
-		if hook.SentTo == "" {
+		// The message itself is not kept, and neither is one to the
+		// session's own sub-agent: that is no peer message.
+		if hook.SentTo == "" || runlog.ToSubagent(hook.SentTo) {
 			return exitOK
 		}
 		if err := runlog.RecordMessage(state, worker, runlog.Message{Time: time.Now(), To: hook.SentTo, Chars: hook.SentChars, Failed: hook.SendFailed}); err != nil {

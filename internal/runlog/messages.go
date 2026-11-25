@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
 
@@ -29,6 +30,17 @@ type Message struct {
 	// session: the session's Remote Control is down, or it is not running.
 	// A failed send is no message.
 	Failed string `json:"failed,omitempty"`
+}
+
+// agentIDRE matches the id Claude Code gives a sub-agent, such as
+// a1b35a3a05d21e82a. A session shed names is always machine-worker, so it
+// never matches.
+var agentIDRE = regexp.MustCompile(`^a[0-9a-f]{16}$`)
+
+// ToSubagent reports whether a message went to one of the session's own
+// sub-agents (SendMessage continues a sub-agent too), not to a peer.
+func ToSubagent(to string) bool {
+	return agentIDRE.MatchString(to)
 }
 
 // RecordMessage appends a message to the worker's log.
@@ -119,12 +131,12 @@ func Messages(dir, worker string) ([]Message, error) {
 }
 
 // CountSince counts the messages sent since a time, by the session they
-// went to.
-// A failed send is not counted.
+// went to. A failed send is not counted, and neither is one to the session's
+// own sub-agent, which an older shed recorded.
 func CountSince(ms []Message, since time.Time) map[string]int {
 	counts := map[string]int{}
 	for _, m := range ms {
-		if !m.Time.Before(since) && m.Failed == "" {
+		if !m.Time.Before(since) && m.Failed == "" && !ToSubagent(m.To) {
 			counts[m.To]++
 		}
 	}

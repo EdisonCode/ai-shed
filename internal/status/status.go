@@ -221,7 +221,8 @@ type WorkerStatus struct {
 	Peers []PeerLink `json:"peers,omitempty"`
 	// Unreachable is the error a peer's latest send to this worker's session
 	// returned, while no later message reached it and its session was not
-	// started again; "" when its peers can reach it.
+	// started again, or that its screen says its Remote Control is down; ""
+	// when its peers can reach it.
 	Unreachable string `json:"unreachable,omitempty"`
 }
 
@@ -290,8 +291,9 @@ func peerLinks(w config.Worker, sent []runlog.Message, now time.Time) []PeerLink
 
 // flagUnreachable says, on the machine of each worker its peers could not
 // reach, which send failed and what to do. A failure ends with a message
-// that reached the worker after it, or with a fresh session of the worker:
-// the supervisor started or recycled it since.
+// that reached the worker after it, with a fresh session of the worker (the
+// supervisor started or recycled it since), or once the supervisor saw its
+// Remote Control come back.
 func flagUnreachable(reports []MachineReport) {
 	byName := map[string]int{}
 	for n, r := range reports {
@@ -321,7 +323,7 @@ func flagUnreachable(reports []MachineReport) {
 			continue
 		}
 		target := &reports[n]
-		if target.Probe != nil && freshSince(target.Probe.Checkins, key[1], f.at) {
+		if target.Probe != nil && (freshSince(target.Probe.Checkins, key[1], f.at) || reconnectedSince(target.Probe.Remote, key[1], f.at)) {
 			continue
 		}
 		for i := range target.Workers {
@@ -333,6 +335,13 @@ func flagUnreachable(reports []MachineReport) {
 			"worker %s cannot be reached by its peers: %s's message at %s failed: %s. Its Remote Control is likely down (an account switch drops it): type /remote-control in its session when it is at rest, or give it a fresh session with shed recycle %s %s",
 			key[1], f.from, f.at.Local().Format("15:04"), f.why, key[0], key[1]))
 	}
+}
+
+// reconnectedSince reports whether the supervisor saw the worker's Remote
+// Control come back after the time given.
+func reconnectedSince(remote map[string]runlog.Remote, worker string, t time.Time) bool {
+	r, ok := remote[worker]
+	return ok && r.Back.After(t)
 }
 
 // freshSince reports whether the supervisor started or recycled the
@@ -897,6 +906,15 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 		st.Peers = peerLinks(w, res.Messages[w.Name], res.Now)
 		for _, l := range st.Peers {
 			st.Messages += l.Hour
+		}
+		// The supervisor types /remote-control into a worker that lost it
+		// once it rests; the owner is needed only when that did not help.
+		if r, ok := res.Remote[w.Name]; ok && r.Down() && !freshSince(res.Checkins, w.Name, r.Since) {
+			st.Unreachable = fmt.Sprintf("its Remote Control is down since %s", r.Since.Local().Format("15:04"))
+			if r.GaveUp {
+				attend("worker %s lost Remote Control at %s and typing /remote-control %d times did not bring it back: peers on other machines cannot message it. Give it a fresh session with shed recycle %s %s",
+					w.Name, r.Since.Local().Format("15:04"), r.Typed, m.Name, w.Name)
+			}
 		}
 		if c, ok := latest[w.Name]; ok {
 			st.Last = &c
