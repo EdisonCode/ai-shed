@@ -138,6 +138,8 @@ type QueueItem struct {
 	overlaps string
 	// goalDone is the closed share of the issue's goal; 0 for none.
 	goalDone float64
+	// focus is set when the issue's goal is one the owner focused on.
+	focus bool
 }
 
 // Workable reports whether a worker can act on the item: it needs a worker

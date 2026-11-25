@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
 	"github.com/edisoncode/ai-shed/internal/deploy"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 	"github.com/edisoncode/ai-shed/internal/status"
 )
 
@@ -50,6 +53,10 @@ type Action struct {
 	// For is the issue whose card offers the action, when that is not the
 	// issue it acts on: a held issue offers the bump of its blocker.
 	For string `json:"for,omitempty"`
+	// Goal and Mode are, for a goal action, the goal's label and the mode
+	// it is set to on every machine; "" clears it.
+	Goal string `json:"goal,omitempty"`
+	Mode string `json:"mode,omitempty"`
 }
 
 // Action kinds.
@@ -60,7 +67,73 @@ const (
 	ActUndepend = "undepend" // end a dependency the issue's text named
 	ActBump     = "bump"     // put a queued issue first in its queue
 	ActUnbump   = "unbump"   // put a bumped issue back in its place
+	ActGoal     = "goal"     // focus on a goal, table it, or clear either
 )
+
+// focusKept is how many goals focus works for: past it, focus spreads the
+// fleet as thin as no focus does.
+const focusKept = 2
+
+// goalActions works out what the owner can do with each goal: focus on it,
+// table it, or clear either, on every machine. The goals are those of the
+// deck and of the report's issues; each goal's mode is the one the machines
+// report.
+func goalActions(r status.Report, deck *status.Digest) []Action {
+	modes := map[string]string{}
+	labels := map[string]bool{}
+	for _, m := range r.Machines {
+		if m.Probe != nil {
+			for label, mode := range m.Probe.Goals {
+				modes[label] = mode
+				labels[label] = true
+			}
+		}
+		for _, i := range m.Issues {
+			if i.Goal != "" {
+				labels[i.Goal] = true
+			}
+		}
+	}
+	if deck != nil {
+		for _, g := range deck.Goals {
+			labels[g.Label] = true
+		}
+	}
+	var focused []string
+	for label, mode := range modes {
+		if mode == runlog.GoalFocus {
+			focused = append(focused, label)
+		}
+	}
+	slices.Sort(focused)
+	sorted := slices.Sorted(maps.Keys(labels))
+	var out []Action
+	add := func(label, mode, name, does, warn string) {
+		out = append(out, Action{ID: "goal:" + label + ":" + mode, Kind: ActGoal, Label: name, Goal: label, Mode: mode, Does: does, Warn: warn})
+	}
+	for _, label := range sorted {
+		mode := modes[label]
+		if mode != runlog.GoalFocus {
+			warn := ""
+			if len(focused) >= focusKept {
+				warn = fmt.Sprintf("%d goals are in focus already (%s). Focus finishes goals when it is one or two; take one out of focus first, or this one spreads the fleet as thin as before.", len(focused), strings.Join(focused, ", "))
+			}
+			add(label, runlog.GoalFocus, "Focus: finish this goal first",
+				fmt.Sprintf("Puts the issues of %s ahead of every other goal's in each queue, on every machine, until you take it out of focus. Nobody is interrupted: each worker takes it up when it finishes what it has in hand.", label), warn)
+		}
+		if mode != runlog.GoalTabled {
+			add(label, runlog.GoalTabled, "Table this goal",
+				fmt.Sprintf("Holds the issues of %s that nobody has started, on every machine. Work already started on it (in hand, rework, verification, eye checks) goes on to its end.", label), "")
+		}
+		switch mode {
+		case runlog.GoalFocus:
+			add(label, "", "Take it out of focus", fmt.Sprintf("Puts the issues of %s back in their usual order, on every machine.", label), "")
+		case runlog.GoalTabled:
+			add(label, "", "Take it off the table", fmt.Sprintf("Lets workers start the issues of %s again, on every machine.", label), "")
+		}
+	}
+	return out
+}
 
 // dropWarning is said before a dependency is dropped from the page.
 const dropWarning = "Drop a dependency only when it is not real. Once dropped, the issue goes to a worker at once, and a worker that builds on a part that is not there yet hands back rework or files a follow-up. For a real build order, bump the blocker instead."
@@ -217,7 +290,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), askTimeout)
 	defer cancel()
 	if err := s.do(ctx, *found); err != nil {
-		http.Error(w, fmt.Sprintf("%s on %s#%d: %v", found.Label, found.Repo, found.Number, err), http.StatusBadGateway)
+		http.Error(w, fmt.Sprintf("%s on %s: %v", found.Label, found.target(), err), http.StatusBadGateway)
 		return
 	}
 	s.mu.Lock()
@@ -228,13 +301,24 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	s.publish()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"done": found.Label, "on": fmt.Sprintf("%s#%d", found.Repo, found.Number)})
+	json.NewEncoder(w).Encode(map[string]string{"done": found.Label, "on": found.target()})
+}
+
+// target names what an action acts on: its issue, or its goal.
+func (a Action) target() string {
+	if a.Kind == ActGoal {
+		return a.Goal
+	}
+	return fmt.Sprintf("%s#%d", a.Repo, a.Number)
 }
 
 // do carries out an action: a comment through the owner's gh, or a bump on
 // the machine through the owner's ssh, as shed bump makes it.
 func (s *Server) do(ctx context.Context, a Action) error {
 	switch a.Kind {
+	case ActGoal:
+		_, err := deploy.SetFleetGoalMode(ctx, s.Runner, s.Config, a.Goal, a.Mode)
+		return err
 	case ActBump, ActUnbump:
 		m, ok := s.Config.Machine(a.Machine)
 		if !ok {

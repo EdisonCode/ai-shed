@@ -47,6 +47,17 @@
   .goal .next { color: var(--dim); font-size: 12px; margin-top: 4px; }
   .goal .crew { color: var(--violet); font-size: 12px; margin-top: 4px; }
   .chip.crew { color: var(--violet); border-color: #4a3a6e; }
+  .goal { cursor: context-menu; }
+  .goal.focus { border-color: #3d5a9e; box-shadow: inset 3px 0 0 var(--accent); }
+  .goal.tabled { opacity: .55; }
+  .goal .mode { float: right; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+  .goal.focus .mode { color: var(--accent); }
+  .goal.tabled .mode { color: var(--dim); }
+  svg.hill:empty { display: none; }
+  svg.hill { width: 100%; height: 210px; display: block; margin-bottom: 12px; }
+  svg.hill text { fill: var(--text); font-size: 11px; }
+  svg.hill text.axis { fill: var(--dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: .6px; }
+  svg.hill circle { cursor: context-menu; }
 
   .grid3 { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr); }
   @media (max-width: 1200px) { .grid3 { grid-template-columns: 1fr; } }
@@ -149,7 +160,7 @@
   <span id="conn" class="pill">connecting</span>
 </header>
 <main id="deck">
-  <section class="panel"><h2>Goals <span id="goals-note" class="meta"></span></h2><div id="goals" class="goals"><div class="empty">Reading the fleet…</div></div></section>
+  <section class="panel"><h2>Goals <span id="goals-note" class="meta"></span></h2><svg id="hill" class="hill" viewBox="0 0 900 210" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Hill chart of the goals"></svg><div id="goals" class="goals"><div class="empty">Reading the fleet…</div></div></section>
   <div class="grid3">
     <section class="panel"><h2>Fleet</h2><div id="fleet"><div class="empty">Reading the fleet…</div></div></section>
     <section class="panel"><h2>Peers <span class="meta">messages in the last day</span></h2><div id="peers"></div></section>
@@ -187,7 +198,7 @@ function el(tag, attrs, ...kids) {
 }
 function svg(tag, attrs, ...kids) {
   const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
-  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  for (const [k, v] of Object.entries(attrs || {})) typeof v === "function" ? e.addEventListener(k.replace(/^on/, ""), v) : e.setAttribute(k, v);
   for (const k of kids) if (k != null) e.append(k instanceof Node ? k : String(k));
   return e;
 }
@@ -258,11 +269,13 @@ function renderGoals(snap) {
   if (!snap.deck) {
     note.textContent = "";
     box.replaceChildren(el("div", { class: "empty" }, "Reading goals, flow and spend…"));
+    document.getElementById("hill").replaceChildren();
     return;
   }
   note.textContent = "read " + ago(snap.deck.now, new Date()) + " ago";
   const goals = snap.deck.goals || [];
   if (!goals.length) {
+    document.getElementById("hill").replaceChildren();
     box.replaceChildren(el("div", { class: "empty" }, "No goals. Label issues with a goal (supervisor: goal_labels: \"goal:\") to see each goal's progress and when it will be done."));
     return;
   }
@@ -280,12 +293,14 @@ function renderGoals(snap) {
   }
   const now = Date.now();
   const crews = crewsOf(snap);
+  const modes = goalModes(snap);
+  const modeRank = l => modes.get(l) === "focus" ? 0 : modes.get(l) === "tabled" ? 2 : 1;
   const cards = [...byLabel.values()].map(t => {
     t.perDay = (t.closedWeek - t.opened) / 7;
     t.eta = t.open > 0 && t.perDay > 0 ? new Date(now + t.open / t.perDay * 86400000) : null;
     t.rank = t.error ? 4 : !t.open ? 3 : t.eta ? 0 : t.opened || t.closedWeek ? 1 : 2;
     return t;
-  }).sort((a, b) => a.rank - b.rank || (a.eta && b.eta ? a.eta - b.eta : 0) || b.open - a.open);
+  }).sort((a, b) => modeRank(a.label) - modeRank(b.label) || a.rank - b.rank || (a.eta && b.eta ? a.eta - b.eta : 0) || b.open - a.open);
   box.replaceChildren(...cards.map(t => {
     const pct = t.total ? Math.round(100 * t.closed / t.total) : 0;
     let eta;
@@ -295,8 +310,10 @@ function renderGoals(snap) {
       el("span", { class: "meta" }, "  " + t.perDay.toFixed(1) + " net a day"));
     else if (!t.opened && !t.closedWeek) eta = el("div", { class: "eta no dim" }, "stalled: nothing opened or closed in 7 days");
     else eta = el("div", { class: "eta no" }, "not converging: " + t.opened + " opened, " + t.closedWeek + " closed in 7 days");
-    return el("div", { class: "goal" },
-      el("div", { class: "name" }, t.label.replace(/^[^:]*:\s*/, "")),
+    const mode = modes.get(t.label) || "";
+    return el("div", { class: "goal" + (mode ? " " + mode : ""), title: "Right-click to focus on this goal or table it", oncontextmenu: e => { e.preventDefault(); goalMenu(e, t.label); } },
+      mode ? el("span", { class: "mode" }, mode === "focus" ? "in focus" : "tabled") : null,
+      el("div", { class: "name" }, goalName(t.label)),
       el("div", { class: "repo" }, t.repos.map(short).join(" + ")),
       el("div", { class: "bar" }, el("div", { style: "width:" + pct + "%" })),
       el("div", { class: "nums" }, el("span", {}, t.closed + " of " + t.total + " closed (" + pct + "%)"), el("span", { class: "meta" }, t.open + " open")),
@@ -304,6 +321,84 @@ function renderGoals(snap) {
       crewLine(crews.get(t.label)),
       ...t.next.map(n => el("div", { class: "next" }, n)));
   }));
+  renderHill(snap, cards, modes);
+}
+
+function goalName(label) { return label.replace(/^[^:]*:\s*/, ""); }
+
+// goalModes reads, from the machines, each goal the owner focused on or
+// tabled.
+function goalModes(snap) {
+  const modes = new Map();
+  for (const m of snap.report.machines || []) for (const [label, mode] of Object.entries((m.probe && m.probe.goals) || {})) modes.set(label, mode);
+  return modes;
+}
+
+// Where an open issue stands on the hill: uphill while it is still being
+// worked out (queued, held, waiting on you), over the top once a worker
+// builds it, downhill as its pull request is checked, merged and looked at.
+const hillAt = { queued: 10, held: 15, waiting: 28, working: 45, draft: 55, rework: 58, verifying: 72, "eye check": 85, merged: 92 };
+
+// renderHill draws each goal on one hill: its place is the mean of its
+// issues' places, a closed issue at the bottom of the far side and an open
+// one no queue has started at the foot of the near side. A dot's size is
+// the goal's open issues.
+function renderHill(snap, goals, modes) {
+  const box = document.getElementById("hill");
+  const seen = new Map();
+  for (const m of snap.report.machines || []) for (const i of m.issues || []) {
+    if (!i.goal) continue;
+    const key = i.repo + "#" + i.number;
+    if (!seen.has(key) || hillAt[i.state] > hillAt[seen.get(key).state]) seen.set(key, i);
+  }
+  const W = 900, base = 170, top = 40, left = 30, right = W - 30;
+  const X = x => left + (right - left) * x / 100;
+  const Y = x => base - (base - top) * (1 - Math.cos(2 * Math.PI * x / 100)) / 2;
+  let path = "";
+  for (let x = 0; x <= 100; x += 1) path += (x ? "L" : "M") + X(x).toFixed(1) + " " + Y(x).toFixed(1);
+  const kids = [
+    svg("path", { d: path, fill: "none", stroke: "#3a4150", "stroke-width": 2 }),
+    svg("line", { x1: X(50), y1: top - 12, x2: X(50), y2: base + 8, stroke: "#2a303c", "stroke-dasharray": "3 4" }),
+    svg("text", { x: X(25), y: base + 28, "text-anchor": "middle", class: "axis" }, "working it out"),
+    svg("text", { x: X(75), y: base + 28, "text-anchor": "middle", class: "axis" }, "making it happen"),
+  ];
+  const dots = goals.filter(t => !t.error && t.total > 0).map(t => {
+    const open = [...seen.values()].filter(i => i.goal === t.label);
+    const unseen = Math.max(0, t.open - open.length);
+    const sum = t.closed * 100 + unseen * 5 + open.reduce((n, i) => n + (hillAt[i.state] ?? 10), 0);
+    const count = t.closed + unseen + open.length;
+    return { t, x: count ? sum / count : 0, mode: modes.get(t.label) || "" };
+  }).sort((a, b) => a.x - b.x);
+  // Labels take the first row where they fit beside the one before.
+  const rows = [-16, -30, 26, -44, 40];
+  const ends = rows.map(() => -Infinity);
+  for (const d of dots) {
+    const cx = X(d.x), cy = Y(d.x), name = goalName(d.t.label);
+    const r = 5 + Math.min(9, Math.sqrt(d.t.open));
+    const color = d.mode === "focus" ? "#7aa2f7" : d.mode === "tabled" ? "#596070" : !d.t.open ? "#4cc38a" : d.t.eta ? "#4cc38a" : "#e0af68";
+    const w = name.length * 6.4 + 10;
+    let row = rows.findIndex((_, n) => ends[n] < cx - w / 2);
+    if (row < 0) row = ends.indexOf(Math.min(...ends));
+    ends[row] = cx + w / 2;
+    const tip = name + ": " + d.t.closed + " of " + d.t.total + " closed, " + d.t.open + " open" + (d.mode ? " · " + (d.mode === "focus" ? "in focus" : "tabled") : "") + ". Right-click to focus or table it.";
+    kids.push(svg("g", { oncontextmenu: e => { e.preventDefault(); goalMenu(e, d.t.label); } },
+      svg("line", { x1: cx, y1: cy, x2: cx, y2: cy + rows[row] + (rows[row] < 0 ? 4 : -10), stroke: "#2f3542" }),
+      svg("circle", { cx, cy, r, fill: color, stroke: d.mode === "focus" ? "#c0d0ff" : "#14171d", "stroke-width": d.mode === "focus" ? 2 : 1.5, opacity: d.mode === "tabled" ? .6 : 1 }),
+      svg("text", { x: cx, y: cy + rows[row], "text-anchor": "middle", "font-weight": d.mode === "focus" ? 600 : 400 }, name),
+      svg("title", {}, tip)));
+  }
+  box.replaceChildren(...(dots.length ? kids : []));
+}
+
+// goalMenu offers what the owner can do with a goal: focus on it, table it,
+// or clear either, on every machine.
+function goalMenu(e, label) {
+  const all = (last && last.actions) || [];
+  const mine = all.filter(a => a.kind === "goal" && a.goal === label);
+  const items = mine.map(a => [a.label, null, () => confirmAction(a), a.warn ? "check it first" : ""]);
+  // Without actions (the page is not on loopback), the commands to copy.
+  if (!all.length) items.push(["Focus: finish this goal first", "shed goal focus " + label], ["Table this goal", "shed goal table " + label], ["Clear its focus or table", "shed goal clear " + label]);
+  showMenu(e, items);
 }
 
 function crewLine(c) {
@@ -444,7 +539,7 @@ function confirmAction(a) {
   const post = el("button", { class: "post" + (a.warn ? " risky" : "") }, doLabel);
   const c = el("div", { class: "confirm", onclick: e => { if (e.target === c) close(); } },
     el("div", { class: "box" },
-      el("h3", {}, a.label + " · " + short(a.repo) + "#" + a.number),
+      el("h3", {}, a.label + " · " + (a.kind === "goal" ? goalName(a.goal) : short(a.repo) + "#" + a.number)),
       a.context ? el("div", {}, el("div", { class: "meta" }, a.for ? "Why it waits" : "What it answers"), el("pre", {}, a.context)) : null,
       a.warn ? el("div", { class: "warn" }, a.warn) : null,
       a.comment ? el("div", {}, el("div", { class: "meta" }, "Posts this comment as you"), el("pre", {}, a.comment)) : el("div", { class: "does" }, a.does || ""),
@@ -457,7 +552,7 @@ function confirmAction(a) {
       const text = await r.text();
       if (!r.ok) throw new Error(text.trim());
       close();
-      toast(a.comment ? "Posted on " + short(a.repo) + "#" + a.number + ": " + a.comment : a.label + ": done");
+      toast(a.comment ? "Posted on " + short(a.repo) + "#" + a.number + ": " + a.comment : a.label + ": done" + (a.kind === "goal" ? ". The machines apply it at their next check-in; the page shows it after its next read." : ""));
     } catch (e) {
       post.disabled = false;
       post.textContent = doLabel;
@@ -585,6 +680,13 @@ function menu(e, i) {
   if (!all.length) items.push(["Bump to the front", "shed bump " + machine + " " + i.number], ["Put back in its place", "shed bump -undo " + machine + " " + i.number]);
   if (i.worker) items.push(["Recycle its worker", "shed recycle " + machine + " " + i.worker]);
   items.push(["Pause the machine", "shed pause " + machine]);
+  showMenu(e, items);
+}
+
+// showMenu shows a menu at the pointer: each item does its act, or copies
+// its command.
+function showMenu(e, items) {
+  closeMenu();
   const m = el("div", { class: "menu", id: "menu" });
   for (const it of items) {
     if (!it) { m.append(el("div", { class: "sep" })); continue; }

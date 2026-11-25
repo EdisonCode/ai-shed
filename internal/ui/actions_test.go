@@ -11,6 +11,8 @@ import (
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/probe"
+	"github.com/edisoncode/ai-shed/internal/runlog"
 	"github.com/edisoncode/ai-shed/internal/status"
 )
 
@@ -150,5 +152,62 @@ func TestABumpFromThePageIsMadeOnTheMachineAsShedBumpMakesIt(t *testing.T) {
 	}
 	if len(r.commands) != 1 || !strings.Contains(r.commands[0], "box: ") || !strings.Contains(r.commands[0], "bumps") {
 		t.Fatalf("commands = %q, want the bump written on box", r.commands)
+	}
+}
+
+func TestEachGoalOffersWhatItsModeAllows(t *testing.T) {
+	r := status.Report{Machines: []status.MachineReport{{Name: "box",
+		Probe:  &probe.Result{Goals: map[string]string{"goal: export": runlog.GoalFocus, "goal: refunds": runlog.GoalTabled}},
+		Issues: []status.IssueStatus{{Repo: "org/app", Number: 5, Goal: "goal: route planner"}}}}}
+	deck := &status.Digest{Goals: []status.GoalProgress{{Repo: "org/app", Label: "goal: export"}}}
+	var got []string
+	for _, a := range goalActions(r, deck) {
+		got = append(got, a.Goal+" → "+a.Label)
+	}
+	want := []string{
+		"goal: export → Table this goal",
+		"goal: export → Take it out of focus",
+		"goal: refunds → Focus: finish this goal first",
+		"goal: refunds → Take it off the table",
+		"goal: route planner → Focus: finish this goal first",
+		"goal: route planner → Table this goal",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("goal actions:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestFocusingOnAThirdGoalWarnsFirst(t *testing.T) {
+	r := status.Report{Machines: []status.MachineReport{{Name: "box",
+		Probe: &probe.Result{Goals: map[string]string{"goal: a": runlog.GoalFocus, "goal: b": runlog.GoalFocus}}}}}
+	deck := &status.Digest{Goals: []status.GoalProgress{{Label: "goal: c"}}}
+	for _, a := range goalActions(r, deck) {
+		if a.Goal == "goal: c" && a.Mode == runlog.GoalFocus {
+			if !strings.Contains(a.Warn, "2 goals are in focus already (goal: a, goal: b)") {
+				t.Fatalf("warning = %q", a.Warn)
+			}
+			return
+		}
+	}
+	t.Fatal("goal: c offers no focus")
+}
+
+func TestAGoalActionFromThePageSetsItsModeOnEveryMachine(t *testing.T) {
+	c := &fakeCommenter{}
+	s, r := newServer(t, func(context.Context) status.Report {
+		return status.Report{Machines: []status.MachineReport{{Name: "box", Issues: []status.IssueStatus{{Repo: "org/app", Number: 5, Goal: "goal: export"}}}}}
+	})
+	s.Config = &config.Config{Machines: []config.Machine{
+		{Name: "box", Host: "local", Workers: []config.Worker{{Name: "app"}}},
+		{Name: "mini", Host: "local", Workers: []config.Worker{{Name: "web"}}},
+	}}
+	s.Commenter, s.Token = c, "secret"
+	s.refresh(context.Background())
+	rec := post(s, "127.0.0.1:7777", "http://127.0.0.1:7777", "secret", "goal:goal: export:focus")
+	if rec.Code != http.StatusOK || len(c.posted) != 0 {
+		t.Fatalf("code %d, body %s, posted %q", rec.Code, rec.Body, c.posted)
+	}
+	if len(r.commands) != 2 || !strings.Contains(r.commands[0], "box: ") || !strings.Contains(r.commands[1], "mini: ") || !strings.Contains(r.commands[1], "goals/goal:%20export") {
+		t.Fatalf("commands = %q, want the goal's mode written on box and mini", r.commands)
 	}
 }

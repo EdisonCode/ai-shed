@@ -312,6 +312,46 @@ func Unbump(ctx context.Context, r probe.Runner, m config.Machine, issue int) (b
 	return strings.TrimSpace(string(out)) == "removed", nil
 }
 
+// SetGoalMode focuses on a goal or tables it on the machine, for its agent
+// to apply to every queue; an empty mode clears it. It reports false when
+// clearing a goal that had no mode.
+func SetGoalMode(ctx context.Context, r probe.Runner, m config.Machine, label, mode string) (bool, error) {
+	path := runlog.StateDir + "/" + runlog.GoalsDir + "/" + runlog.GoalFile(label)
+	if mode != "" {
+		if runlog.ParseGoalMode(mode) == "" {
+			return false, fmt.Errorf("goal mode %q is neither %s nor %s", mode, runlog.GoalFocus, runlog.GoalTabled)
+		}
+		return true, writeRemote(ctx, r, m, path, []byte(mode+"\n"), "644")
+	}
+	out, err := r.Run(ctx, m, fmt.Sprintf(`f="$HOME/%s"; [ -f "$f" ] || { echo absent; exit 0; }; rm "$f" && echo removed`, path), nil)
+	if err != nil {
+		return false, fmt.Errorf("clear the mode of goal %q: %w", label, err)
+	}
+	return strings.TrimSpace(string(out)) == "removed", nil
+}
+
+// SetFleetGoalMode sets a goal's mode, or clears it, on every machine of the
+// fleet that hands out a queue: a goal spans the repositories of several
+// machines. It names the machines it was set on; the error names each machine
+// it could not reach, and the goal has its mode on the others.
+func SetFleetGoalMode(ctx context.Context, r probe.Runner, cfg *config.Config, label, mode string) ([]string, error) {
+	var done, failed []string
+	for _, m := range cfg.Machines {
+		if len(m.Builders()) == 0 {
+			continue
+		}
+		if _, err := SetGoalMode(ctx, r, m, label, mode); err != nil {
+			failed = append(failed, fmt.Sprintf("%s: %v", m.Name, err))
+			continue
+		}
+		done = append(done, m.Name)
+	}
+	if len(failed) > 0 {
+		return done, fmt.Errorf("goal %q could not be changed on %s", label, strings.Join(failed, "; "))
+	}
+	return done, nil
+}
+
 func bumpPath(issue int) string {
 	return fmt.Sprintf("%s/%s/%d", runlog.StateDir, runlog.BumpsDir, issue)
 }

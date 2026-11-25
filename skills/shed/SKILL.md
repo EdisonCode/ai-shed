@@ -89,6 +89,16 @@ PR limit, a dependency, what waits on the owner), and why the reserve was
 not listed or what it left out. Trust it over your own reading of the
 issues: the agent knows the machine's pace and what each worker has in hand.
 
+## Focus on a goal, or table one
+
+When many goals move at once and none finishes, focus the fleet:
+
+- `shed goal focus "<goal label>"` puts that goal's issues ahead of every
+  other goal's in each queue, on every machine. Keep it to one or two goals.
+- `shed goal table "<goal label>"` holds the goal's issues that nobody has
+  started; started work on it ends as usual.
+- `shed goal clear "<goal label>"` takes either back.
+
 ## Put an issue first
 
 When an urgent issue waits behind other work, do not relabel it and do not

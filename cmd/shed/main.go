@@ -29,6 +29,9 @@ Usage:
   shed bump [-worker name] <machine> <issue>
                                     put an open issue first in its queue, or in that worker's
   shed bump -undo <machine> <issue> put it back in its usual place
+  shed goal focus|table|clear <goal label>
+                                    finish a goal before others, hold a goal's unstarted issues,
+                                    or neither, on every machine
   shed queue [-json] <machine> [worker]
                                     each worker's queue as its agent sees it: what it hands
                                     over, why it holds the rest, what the reserve offered
@@ -103,6 +106,8 @@ func main() {
 		code = cmdResume(args)
 	case "bump":
 		code = cmdBump(args)
+	case "goal":
+		code = cmdGoal(args)
 	case "queue":
 		code = cmdQueue(args)
 	case "login":
