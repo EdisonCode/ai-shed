@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Session is the tmux session that holds the supervised workers, one window
@@ -153,7 +154,40 @@ func (t Tmux) CaptureJoined(window string, lines int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(out, "\n "), nil
+	width, err := t.run("display-message", "-p", "-t", target(window), "#{pane_width}")
+	if err != nil {
+		return "", err
+	}
+	w, _ := strconv.Atoi(strings.TrimSpace(width))
+	return joinBroken(strings.TrimRight(out, "\n "), w), nil
+}
+
+// brokenSlack is how far short of the pane's width a program may break a
+// line it fills: its own margin.
+const brokenSlack = 4
+
+// joinBroken joins the lines a program broke itself at the pane's width,
+// as Claude Code breaks a long URL: tmux's -J joins only its own wraps. A
+// line is taken as broken when it fills the pane, give or take the margin,
+// and is one word, as a URL is. A line tmux joined is longer than the pane,
+// so it is left alone.
+func joinBroken(screen string, width int) string {
+	if width <= brokenSlack {
+		return screen
+	}
+	var out []string
+	joining := false
+	for _, line := range strings.Split(screen, "\n") {
+		word := strings.TrimSpace(line)
+		if joining && word != "" && !strings.Contains(word, " ") {
+			out[len(out)-1] += word
+		} else {
+			out = append(out, line)
+		}
+		n := utf8.RuneCountInString(strings.TrimRight(line, " "))
+		joining = word != "" && !strings.Contains(word, " ") && n >= width-brokenSlack && n <= width
+	}
+	return strings.Join(out, "\n")
 }
 
 func (t Tmux) Open(window, dir string) error {

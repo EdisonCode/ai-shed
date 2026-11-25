@@ -2344,7 +2344,9 @@ The first step starts the machine's tool in a throwaway `login-account`
 window, in the folder of the machine's first worker (one the tool already
 trusts, so it does not stop to ask), with the PATH the machine's `init`
 sets. It types `/login`, takes the subscription login, and prints the URL as
-one line. If the tool asks whether to trust the folder anyway, the step
+one line, joining the pieces the tool breaks it into at the window's width.
+A URL without its whole `client_id`, `code_challenge` and `state` is not
+printed: the step says the capture failed. If the tool asks whether to trust the folder anyway, the step
 stops and says so instead of answering: start the tool there once and trust
 it. Open it, sign in with the account the machine should use, and give
 the code the page shows to the second step, which types it into that window.

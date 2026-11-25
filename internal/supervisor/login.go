@@ -27,6 +27,9 @@ type LoginTerminal interface {
 
 var (
 	urlRE         = regexp.MustCompile(`https://\S+`)
+	clientIDRE    = regexp.MustCompile(`[?&]client_id=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(&|$)`)
+	challengeRE   = regexp.MustCompile(`[?&]code_challenge=[^&\s]+`)
+	stateRE       = regexp.MustCompile(`[?&]state=[^&\s]+`)
 	loginMethodRE = regexp.MustCompile(`(?i)login method`)
 	loginOKRE     = regexp.MustCompile(`(?i)login successful|logged in as|successfully logged in`)
 	loginFailRE   = regexp.MustCompile(`(?i)invalid|error|failed|expired|denied`)
@@ -74,6 +77,10 @@ func StartLogin(term LoginTerminal, command, dir string, now func() time.Time, s
 	if url == "" {
 		term.Close(LoginWindow)
 		return "", fmt.Errorf("the tool printed no sign-in URL. Its screen:\n%s", indent(screen))
+	}
+	if err := CheckSignInURL(url); err != nil {
+		term.Close(LoginWindow)
+		return "", fmt.Errorf("%w. Its screen:\n%s", err, indent(screen))
 	}
 	return url, nil
 }
@@ -123,6 +130,20 @@ func LoginURL(screen string) string {
 		return ""
 	}
 	return found[len(found)-1]
+}
+
+// CheckSignInURL reports a sign-in URL that was cut: one without its whole
+// client id, its code challenge or its state cannot be used.
+func CheckSignInURL(url string) error {
+	for _, part := range []struct {
+		name string
+		re   *regexp.Regexp
+	}{{"client_id", clientIDRE}, {"code_challenge", challengeRE}, {"state", stateRE}} {
+		if !part.re.MatchString(url) {
+			return fmt.Errorf("the sign-in URL was not read whole (its %s is missing or cut): %s", part.name, url)
+		}
+	}
+	return nil
 }
 
 // ValidLoginCode checks that a code is the kind a sign-in page gives, before
