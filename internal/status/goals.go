@@ -41,6 +41,10 @@ type GoalProgress struct {
 	// Brief is the goal's brief in this repository; 0 for none. A brief is
 	// not one of the goal's issues: it is left out of every count.
 	Brief int `json:"brief,omitempty"`
+	// Check is where the check of the whole goal stands once its slices are
+	// closed: due, passed or failed. Empty while slices are open, or with
+	// no brief. A goal with a brief is done only when its check passed.
+	Check string `json:"check,omitempty"`
 }
 
 // markGoals puts on each issue of the report its goal, and the group its
@@ -98,6 +102,9 @@ func (c Collector) collectGoals(ctx context.Context, cfg *config.Config, d *Dige
 		})
 		p.Pace = backlog.GoalPace(issues, d.Now)
 		p.Total, p.Closed = len(issues), len(issues)-p.Pace.Open
+		if p.Brief != 0 && p.Pace.Open == 0 && p.Total > 0 && c.Lister != nil {
+			p.Check = c.goalCheck(ctx, g[0], p.Brief)
+		}
 		for _, i := range d.flowIssues[g[0]] {
 			if !slices.Contains(i.Labels, g[1]) {
 				continue
@@ -111,6 +118,21 @@ func (c Collector) collectGoals(ctx context.Context, cfg *config.Config, d *Dige
 		}
 		d.Goals = append(d.Goals, p)
 	}
+}
+
+// goalCheck reads the check of a goal from its brief.
+func (c Collector) goalCheck(ctx context.Context, repo string, brief int) string {
+	briefs, err := c.Lister.List(ctx, config.IssueSource{Repo: repo, Query: fmt.Sprintf("%q in:title", backlog.GoalBriefPrefix)})
+	if err != nil {
+		return ""
+	}
+	for _, b := range briefs {
+		if b.Number == brief {
+			state, _ := backlog.GoalCheck(b)
+			return state
+		}
+	}
+	return ""
 }
 
 // nextSlice says what holds a goal's next slice, from its open queued
@@ -152,6 +174,12 @@ func renderGoals(w io.Writer, goals []GoalProgress) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, g := range goals {
 		count, pace := fmt.Sprintf("%d of %d closed", g.Closed, g.Total), g.Pace.Words()
+		switch g.Check {
+		case backlog.GoalCheckDue:
+			pace = "slices done; the goal check is due"
+		case backlog.GoalCheckFailed:
+			pace = "slices done; the goal check FAILED (see the brief)"
+		}
 		if g.Error != "" {
 			count, pace = "cannot be counted", ""
 		}

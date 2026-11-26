@@ -1568,6 +1568,17 @@ that provides it, and may name the slices that use it:
   says `Contract checked`, a handed-back slice goes back to its worker as
   rework, and a merged one is handed out again.
 
+**A check that the parts work together.** When every slice of a goal with a
+brief has closed, one crew worker (the first of the goal's crew in order,
+worked out the same way on every machine) is given a one-off task: check
+each line of the brief's Done when, end to end on staging, across the
+goal's repositories. It changes no code. It posts `Goal checked:` with what
+it saw, or `Goal check failed:` with the line that failed and where the
+fault seems to be. The goal counts as done only after a pass: until then
+the digest says `slices done; the goal check is due` (or `FAILED`), and the
+deck's goal card says so. After a failure, comment `Goal check again` on
+the brief once the fixes have merged, and the check is offered again.
+
 **Slices go to whoever is free.** A goal's slices sit in the queue of the
 machine whose label they carry. With `crew_release_after`, a machine whose
 builders all have work in hand gives a waiting slice to the goal's crew on

@@ -247,6 +247,9 @@ type Supervisor struct {
 	// hand while a goal's slice waited, and lastCrewShed when the machine
 	// last gave such a slice to its crew elsewhere.
 	crewBusySince, lastCrewShed time.Time
+	// lastGoalCheck is when the machine last looked for goals whose slices
+	// have all closed.
+	lastGoalCheck time.Time
 	// lookError is the last failure to read the looks, so that it is logged
 	// once and not at every queue check.
 	lookError string
@@ -616,6 +619,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 	s.shedQueue(ctx, s.Now())
 	s.shedCrewSlices(ctx, s.Now())
 	s.tellConsumers(ctx)
+	s.offerGoalChecks(ctx, s.Now())
 }
 
 // paused reports whether the owner paused the machine. While it is paused
