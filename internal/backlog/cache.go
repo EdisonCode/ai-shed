@@ -16,8 +16,10 @@ const readTTL = 25 * time.Second
 
 // readCache keeps recent reads by key. A failed read is not kept.
 type readCache[T any] struct {
-	mu   sync.Mutex
-	now  func() time.Time
+	mu  sync.Mutex
+	now func() time.Time
+	// ttl is how long a read is kept; zero keeps it readTTL.
+	ttl  time.Duration
 	kept map[string]cached[T]
 }
 
@@ -34,7 +36,11 @@ func (c *readCache[T]) get(key string, read func() (T, error)) (T, error) {
 	if c.now == nil {
 		c.now = time.Now
 	}
-	if v, ok := c.kept[key]; ok && c.now().Sub(v.at) < readTTL {
+	ttl := c.ttl
+	if ttl == 0 {
+		ttl = readTTL
+	}
+	if v, ok := c.kept[key]; ok && c.now().Sub(v.at) < ttl {
 		c.mu.Unlock()
 		return v.val, nil
 	}
@@ -56,7 +62,13 @@ var (
 	openPRCache   readCache[map[int]PR]
 	mergedPRCache readCache[map[int]bool]
 	listCache     readCache[[]Issue]
+	// depsCache keeps the dependencies of a list's issues longer: a
+	// blocker that closes is seen within depsTTL.
+	depsCache = readCache[map[int][]Dep]{ttl: depsTTL}
 )
+
+// depsTTL is how long the dependencies read for a list of issues are kept.
+const depsTTL = 2 * time.Minute
 
 // sharedList returns a copy of a shared issue list, so that a caller that
 // sets a field of an issue does not set it for the others.
