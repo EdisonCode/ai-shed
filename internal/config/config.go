@@ -130,9 +130,13 @@ func (c *Config) Prices() pricing.Table {
 
 // Repo is what shed knows about a repository's deploys.
 type Repo struct {
-	Name       string      `yaml:"repo"`
-	Staging    Environment `yaml:"staging"`
-	Production Environment `yaml:"production"`
+	Name string `yaml:"repo"`
+	// StandingOrders are the owner's rules for the workers whose queue takes
+	// issues from this repository, after the fleet's standing orders. A
+	// worker on another repository does not read them.
+	StandingOrders string      `yaml:"standing_orders"`
+	Staging        Environment `yaml:"staging"`
+	Production     Environment `yaml:"production"`
 	// LookBack is how far back merged work is looked for when production's
 	// commit is older than that, or is not known.
 	LookBack string `yaml:"look_back"`

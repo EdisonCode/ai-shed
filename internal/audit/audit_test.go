@@ -128,3 +128,16 @@ func TestStartupFilesThatRepeatTheOrdersOrEachOtherAreFoundOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestARepositorysOrdersAreProseAndABriefThatRepeatsThemIsFound(t *testing.T) {
+	rule := "In this repository the merge train merges every pull request once a verifier has passed it."
+	c := fleet("", "Fix billing bugs.\n"+rule)
+	c.Repos = []config.Repo{{Name: "org/app", StandingOrders: rule}}
+	r := Run(c, shed, nil)
+	if r.Prose[0].Path != "standing_orders of org/app" {
+		t.Fatalf("prose = %+v", r.Prose)
+	}
+	if kinds(r)[InOrders] != 1 {
+		t.Fatalf("findings = %+v", r.Findings)
+	}
+}

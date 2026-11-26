@@ -31,6 +31,15 @@ const (
 // OrdersPath names the standing orders in a finding.
 const OrdersPath = "standing_orders"
 
+// RepoOrdersPath names a repository's standing orders in a finding.
+func RepoOrdersPath(repo string) string { return "standing_orders of " + repo }
+
+// isOrders reports whether a path names standing orders, the fleet's or a
+// repository's.
+func isOrders(path string) bool {
+	return path == OrdersPath || strings.HasPrefix(path, "standing_orders of ")
+}
+
 // BriefPath names a worker's brief in a finding.
 func BriefPath(m config.Machine, w config.Worker) string {
 	return "brief of " + m.Name + "/" + w.Name
@@ -88,6 +97,9 @@ func Prose(cfg *config.Config) []sources.Source {
 		}
 	}
 	add(OrdersPath, "orders", cfg.Defaults.StandingOrders)
+	for _, r := range cfg.Repos {
+		add(RepoOrdersPath(r.Name), "orders", r.StandingOrders)
+	}
 	for _, m := range cfg.Machines {
 		for _, w := range m.Workers {
 			add(BriefPath(m, w), "brief", w.Brief)
@@ -117,7 +129,7 @@ func Run(cfg *config.Config, shed ShedBrief, commands []string) Report {
 		places := []place{{ShedWrites, shedWhy, shedLines}}
 		for _, earlier := range prose[:i] {
 			p := place{Repeated, "also in the " + earlier.Path + ". A worker reads only its own brief, so this costs no tokens, but an edit of one copy leaves the other saying the old thing: keep them in step, or give the briefs one text with a YAML anchor (&name, then *name) where they can be the same", lines(earlier.Text)}
-			if earlier.Path == OrdersPath {
+			if isOrders(earlier.Path) {
 				p.kind, p.why = InOrders, ordersWhy
 			}
 			places = append(places, p)
@@ -318,7 +330,7 @@ func RunWorkers(cfg *config.Config, shed ShedBrief, commands []string, startups 
 		}
 		places := []place{
 			{ShedWrites, shedWhy, lines(shed(m, m.Workers[w]))},
-			{InOrders, ordersWhy, lines(cfg.Defaults.StandingOrders)},
+			{InOrders, ordersWhy, lines(cfg.Defaults.StandingOrders + "\n" + repoOrdersOf(cfg, m, m.Workers[w]))},
 			{InBrief, "the worker's brief in the fleet file says them, and it reads both: keep them in one place", lines(m.Workers[w].Brief)},
 		}
 		for _, s := range st.Sources {
@@ -346,4 +358,18 @@ func RunWorkers(cfg *config.Config, shed ShedBrief, commands []string, startups 
 	}
 	sortFindings(r.Findings)
 	return r
+}
+
+// repoOrdersOf is the standing orders of the repositories a worker's queue
+// takes issues from.
+func repoOrdersOf(cfg *config.Config, m config.Machine, w config.Worker) string {
+	var parts []string
+	for _, src := range m.SourcesFor(w) {
+		for _, r := range cfg.Repos {
+			if r.Name == src.Repo && r.StandingOrders != "" && !slices.Contains(parts, r.StandingOrders) {
+				parts = append(parts, r.StandingOrders)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
 }
