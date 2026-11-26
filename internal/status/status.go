@@ -477,6 +477,18 @@ func (c Collector) collectRepo(parent context.Context, cfg *config.Config, repo 
 	return report
 }
 
+// RepoAttention is what the release state of the report's repositories
+// needs from the owner, one line each, led by its repository.
+func RepoAttention(r Report) []string {
+	var lines []string
+	for _, repo := range r.Repos {
+		for _, a := range repo.Attention() {
+			lines = append(lines, repo.Repo+": "+a)
+		}
+	}
+	return lines
+}
+
 // Attention lists what a repository's release state needs from the owner.
 func (r RepoReport) Attention() []string {
 	if r.Error != "" {

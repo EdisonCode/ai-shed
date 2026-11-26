@@ -66,6 +66,12 @@ type Digest struct {
 	Flow map[string]RepoFlow `json:"flow,omitempty"`
 	// Goals is each goal label's progress, for goal_labels.
 	Goals []GoalProgress `json:"goals,omitempty"`
+	// Waiting is what the report's issues ask of the owner, in the order to
+	// answer it: the same list as "Waiting on you".
+	Waiting []WaitingAsk `json:"waiting,omitempty"`
+	// RepoAttention is what the repositories' release state needs from the
+	// owner, one line each: the same lines shed observe shows.
+	RepoAttention []string `json:"repo_attention,omitempty"`
 	// flowIssues are, by repository, the issues opened or closed in the
 	// window, as the flow read them.
 	flowIssues map[string][]looks.FlowIssue
@@ -94,7 +100,8 @@ func (c Collector) DigestFrom(ctx context.Context, cfg *config.Config, merged Me
 		// Several parts of the digest read the same closed issues.
 		c.Closed = &onceClosed{lister: c.Closed, read: map[config.IssueSourceKey]closedRead{}}
 	}
-	d := Digest{Since: since, Now: now, Report: report, Merged: []RepoMerged{}}
+	d := Digest{Since: since, Now: now, Report: report, Merged: []RepoMerged{},
+		Waiting: WaitingOn(report), RepoAttention: RepoAttention(report)}
 	for _, m := range d.Report.Machines {
 		if m.Probe == nil {
 			continue
@@ -153,12 +160,60 @@ func (c Collector) DigestFrom(ctx context.Context, cfg *config.Config, merged Me
 	return d
 }
 
-// waitingItem is one thing an issue asks of the owner.
-type waitingItem struct {
-	issue  IssueStatus
-	what   string
-	since  time.Time
-	effect string
+// WaitingAsk is one thing an issue asks of the owner.
+type WaitingAsk struct {
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	URL    string `json:"url,omitempty"`
+	// What names the ask as the digest does, such as "decision" or
+	// "review #52".
+	What string      `json:"what"`
+	Ask  backlog.Ask `json:"ask"`
+	// ReturnsTo is the worker an answer hands the issue back to, and
+	// ReturnsIdle says that worker has no work now.
+	ReturnsTo   string `json:"returns_to,omitempty"`
+	ReturnsIdle bool   `json:"returns_idle,omitempty"`
+}
+
+// WaitingOn lists what the report's issues ask of the owner, in the order
+// to answer it: what returns to a worker (an idle one first), what is to be
+// read, the merges, then decisions the worker still has time on; the oldest
+// first inside each. An issue in the queue of two machines waits once.
+func WaitingOn(r Report) []WaitingAsk {
+	var waiting []WaitingAsk
+	seen := map[string]bool{}
+	for _, m := range r.Machines {
+		for _, i := range m.Issues {
+			for _, a := range i.Asks {
+				key := issueKey(i.Repo, i.Number) + " " + a.Name
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				waiting = append(waiting, WaitingAsk{Repo: i.Repo, Number: i.Number, Title: i.Title, URL: i.URL,
+					What: a.What(), Ask: a, ReturnsTo: i.ReturnsTo, ReturnsIdle: i.ReturnsIdle})
+			}
+		}
+	}
+	slices.SortStableFunc(waiting, func(a, b WaitingAsk) int {
+		if d := effectOrder[a.Ask.Effect] - effectOrder[b.Ask.Effect]; d != 0 {
+			return d
+		}
+		// A return to an idle worker frees it now.
+		if idle := a.idleReturn(); idle != b.idleReturn() {
+			if idle {
+				return -1
+			}
+			return 1
+		}
+		return a.Ask.Since.Compare(b.Ask.Since)
+	})
+	return waiting
+}
+
+func (w WaitingAsk) idleReturn() bool {
+	return w.Ask.Effect == backlog.EffectReturns && w.ReturnsIdle
 }
 
 // RenderDigest writes the digest for a terminal or a message.
@@ -229,30 +284,8 @@ func RenderDigest(w io.Writer, d Digest) {
 		tw.Flush()
 	}
 
-	// What waits on the owner, the oldest first. An issue in the queue of
-	// two machines waits once.
-	var waiting []waitingItem
-	seen := map[string]bool{}
-	for _, m := range d.Report.Machines {
-		for _, i := range m.Issues {
-			for _, a := range i.Asks {
-				key := issueKey(i.Repo, i.Number) + " " + a.Name
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				waiting = append(waiting, waitingItem{issue: i, what: a.What(), since: a.Since, effect: a.Effect})
-			}
-		}
-	}
-	// In the order to answer them: what returns to a worker, what is to be
-	// read, the merges, then decisions the worker still has time on.
-	slices.SortStableFunc(waiting, func(a, b waitingItem) int {
-		if d := effectOrder[a.effect] - effectOrder[b.effect]; d != 0 {
-			return d
-		}
-		return a.since.Compare(b.since)
-	})
+	// What waits on the owner, in the order to answer it.
+	waiting := WaitingOn(d.Report)
 	renderLessons(w, d)
 
 	if !d.Report.Pulls.empty() {
@@ -268,9 +301,9 @@ func RenderDigest(w io.Writer, d Digest) {
 		{backlog.EffectGrace, "in its grace period: the worker goes on with the rest"},
 	}
 	for _, g := range groups {
-		var items []waitingItem
+		var items []WaitingAsk
 		for _, item := range waiting {
-			if item.effect == g.effect || (g.effect == backlog.EffectRead && item.effect == "") {
+			if item.Ask.Effect == g.effect || (g.effect == backlog.EffectRead && item.Ask.Effect == "") {
 				items = append(items, item)
 			}
 		}
@@ -281,10 +314,10 @@ func RenderDigest(w io.Writer, d Digest) {
 		tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		for _, item := range items {
 			age := "-"
-			if !item.since.IsZero() {
-				age = Short(d.Now.Sub(item.since))
+			if !item.Ask.Since.IsZero() {
+				age = Short(d.Now.Sub(item.Ask.Since))
 			}
-			fmt.Fprintf(tw, "    %s\t%s\t%s#%d\t%s\n", age, item.what, item.issue.Repo, item.issue.Number, item.issue.Title)
+			fmt.Fprintf(tw, "    %s\t%s\t%s#%d\t%s\n", age, item.What, item.Repo, item.Number, item.Title)
 		}
 		tw.Flush()
 	}

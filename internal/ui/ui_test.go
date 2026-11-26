@@ -8,12 +8,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/looks"
 	"github.com/edisoncode/ai-shed/internal/status"
 )
 
@@ -54,6 +56,32 @@ func TestTheReportIsServedAsJSON(t *testing.T) {
 	}
 	if len(got.Report.Machines) != 1 || got.Report.Machines[0].Name != "box" || got.NeedsYou != 1 {
 		t.Fatalf("snapshot = %+v", got)
+	}
+}
+
+type noMerged struct{}
+
+func (noMerged) MergedSince(context.Context, string, time.Time) (map[int]looks.Pull, error) {
+	return nil, nil
+}
+
+// The page and shed digest -json say what the release state needs from the
+// owner from the same report in the same words.
+func TestThePageAndTheDigestGiveTheSameRepositoryAttention(t *testing.T) {
+	r := report("box")
+	r.Repos = []status.RepoReport{{Report: looks.Report{Repo: "org/app", Looks: []looks.Look{{Repo: "org/app", Number: 4, PR: 44, State: looks.Blocked, Note: "staging was down"}}}}}
+	s, _ := newServer(t, func(context.Context) status.Report { return r })
+	s.refresh(context.Background())
+	var page Snapshot
+	if err := json.Unmarshal(s.snapshot(), &page); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	d := status.Collector{}.DigestFrom(context.Background(), fleet(), noMerged{}, r, now.Add(-24*time.Hour), now)
+
+	if len(page.RepoAttention) != 1 || !slices.Equal(page.RepoAttention, d.RepoAttention) {
+		t.Fatalf("page = %q, digest = %q", page.RepoAttention, d.RepoAttention)
 	}
 }
 

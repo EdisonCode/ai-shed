@@ -168,6 +168,57 @@ func TestTheDigestJSONCarriesTheFlowPerRepository(t *testing.T) {
 	}
 }
 
+func TestTheDigestJSONListsWhatWaitsOnTheOwnerInTheOrderToAnswerIt(t *testing.T) {
+	ask := func(name, effect string, ago time.Duration) []backlog.Ask {
+		return []backlog.Ask{{Name: name, Effect: effect, Since: now.Add(-ago)}}
+	}
+	report := Report{Machines: []MachineReport{{Name: "box", Issues: []IssueStatus{
+		{Repo: "org/app", Number: 5, Asks: ask("review", backlog.EffectMerge, 50*time.Hour)},
+		{Repo: "org/app", Number: 6, Asks: ask("eyes", backlog.EffectRead, 40*time.Hour)},
+		{Repo: "org/app", Number: 7, Asks: ask("decision", backlog.EffectReturns, 30*time.Hour), ReturnsTo: "app"},
+		{Repo: "org/app", Number: 8, Asks: ask("decision", backlog.EffectReturns, 2*time.Hour), ReturnsTo: "api", ReturnsIdle: true},
+	}}, {Name: "mini", Issues: []IssueStatus{
+		{Repo: "org/app", Number: 6, Asks: ask("eyes", backlog.EffectRead, 40*time.Hour)},
+	}}}}
+
+	d := Collector{}.DigestFrom(context.Background(), oneMachine(), &fakeMerged{}, report, now.Add(-24*time.Hour), now)
+
+	data, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Waiting []struct {
+			Number int `json:"number"`
+		} `json:"waiting"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	var order []int
+	for _, w := range got.Waiting {
+		order = append(order, w.Number)
+	}
+	// The return to an idle worker, the other return, the read, the merge;
+	// the issue in two queues once.
+	if !slices.Equal(order, []int{8, 7, 6, 5}) {
+		t.Fatalf("waiting = %v, want #8, #7, #6, #5: %s", order, data)
+	}
+}
+
+func TestTheDigestJSONCarriesWhatTheReleaseStateNeedsFromTheOwner(t *testing.T) {
+	report := Report{Repos: []RepoReport{{Report: looks.Report{Repo: "org/app", Looks: []looks.Look{
+		{Repo: "org/app", Number: 4, PR: 44, State: looks.Blocked, Note: "staging was down"},
+	}}}}}
+
+	d := Collector{}.DigestFrom(context.Background(), oneMachine(), &fakeMerged{}, report, now.Add(-24*time.Hour), now)
+
+	want := []string{"org/app: the eye check of org/app#4 (pull request #44) is blocked: staging was down"}
+	if !slices.Equal(d.RepoAttention, want) || !slices.Equal(RepoAttention(report), want) {
+		t.Fatalf("repo attention = %q, want %q", d.RepoAttention, want)
+	}
+}
+
 func TestWithNoFlowReaderTheFlowIsLeftOut(t *testing.T) {
 	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}}
 	d := c.Digest(context.Background(), oneMachine(), &fakeMerged{}, now.Add(-24*time.Hour), now)

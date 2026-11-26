@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/edisoncode/ai-shed/internal/release"
@@ -25,6 +27,9 @@ func cmdUpdate(args []string) int {
 	}
 	if latest == version {
 		fmt.Printf("shed %s is the latest release\n", version)
+		if home, err := os.UserHomeDir(); err == nil {
+			warnStaleSkill(home)
+		}
 		return exitOK
 	}
 	cache, err := release.CacheDir()
@@ -46,5 +51,13 @@ func cmdUpdate(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("shed %s -> %s (%s)\nRun `shed deploy` to bring the machines to the same version.\n", version, latest, self)
+	// The new shed ships its own skill: it says whether the installed one
+	// is behind it. Its exit code says only that; the update is done.
+	check := exec.CommandContext(ctx, self, "skill", "-check")
+	check.Stdout, check.Stderr = os.Stdout, os.Stderr
+	var exitErr *exec.ExitError
+	if err := check.Run(); err != nil && !errors.As(err, &exitErr) {
+		fmt.Fprintf(os.Stderr, "shed: check the installed skill with %s: %v\n", self, err)
+	}
 	return exitOK
 }
