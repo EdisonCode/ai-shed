@@ -229,7 +229,7 @@ one verdict:
 
 The terminal is captured with its styles. Text that the worker's tool draws
 faint, such as a placeholder or a suggestion of what to type next in an empty
-input line, reaches the reviewer marked `[greyed out: ...]`, so it is not
+input line, reaches the reviewer marked `[grayed out: ...]`, so it is not
 taken for something that was typed or sent. The reviewer is also told which
 issue the supervisor's own log says the worker has in hand; the screen is not
 the record of what was handed over.
@@ -432,7 +432,7 @@ digest's flow lines count the marked issues opened in the window.
 
 ### A queue that cannot run dry
 
-A queue is what somebody labelled. When each of those issues waits on you,
+A queue is what somebody labeled. When each of those issues waits on you,
 the workers have nothing, however long the backlog is. A `backfill` source is
 a reserve for that case:
 
@@ -455,13 +455,13 @@ machines:
   reserve's own `priority` work is handed out. Its issues come after everything else, in its own
   `priority` order and then oldest first. `shed status` does not list them;
   `shed queue` does, with what the reserve left out and why.
-- An issue that is handed over gets the label of the first labelled source
+- An issue that is handed over gets the label of the first labeled source
   of the same repository in that list, here `machine:linux-box`. That is the
   one thing shed changes on GitHub. From then on the issue is in the
-  machine's queue like one you labelled, and it shows in `shed status`. An
+  machine's queue like one you labeled, and it shows in `shed status`. An
   issue that carries the queue label of any machine in the fleet file is
   never taken, so two machines can share one `query`. A backfill source
-  needs such a labelled source beside it.
+  needs such a labeled source beside it.
 - Nobody prepared a backlog issue for a worker. The worker is told to check
   first that it says the goal or the root cause and has acceptance it can
   test. If not, it changes nothing and posts a hand-back with `Not ready:`
@@ -617,7 +617,7 @@ linux-box worker app: 0 of 3 item(s) workable, read 2m ago
   my-org/my-app#41          Add export         paced: the account is ahead of its weekly pace (...); only priority work is handed out
   my-org/my-app#44  rework  Fix login          rework that waits: it overlaps #40, which docs has in hand: both are area:auth
   my-org/my-app#47          Retry the import   waits on the owner: decision
-  reserve: listed: 0 issue(s) offered; left out: 12 labelled machine:mac-mini, a queue of the fleet (#50, #52, #53, ...)
+  reserve: listed: 0 issue(s) offered; left out: 12 labeled machine:mac-mini, a queue of the fleet (#50, #52, #53, ...)
 ```
 
 - `shed queue <machine> <worker>` prints one worker's queue, and `-json`
@@ -1133,14 +1133,14 @@ task in place of an issue for the worker that has it:
     20261004-150102-090  queued   any worker
 ```
 
-A task that still waits can be cancelled, for example to push it again for a
+A task that still waits can be canceled, for example to push it again for a
 worker that has since come free:
 
 ```sh
 shed task -cancel 20261004-150102-090 linux-box
 ```
 
-A task a worker was already handed is not cancelled: the worker has its
+A task a worker was already handed is not canceled: the worker has its
 brief and may be halfway through.
 
 A task has no issue behind it, so nothing in the queue rules applies to it:

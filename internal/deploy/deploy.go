@@ -366,11 +366,11 @@ func PushTask(ctx context.Context, r probe.Runner, m config.Machine, worker, id 
 	return writeRemote(ctx, r, m, runlog.StateDir+"/"+runlog.TasksDir+"/"+where+"/"+id+".md", brief, "644")
 }
 
-// What became of a task that was to be cancelled.
+// What became of a task that was to be canceled.
 const (
-	TaskCancelled = "cancelled" // it waited, and is gone
-	TaskTaken     = "taken"     // a worker was handed it; it is too late
-	TaskAbsent    = "absent"    // the machine has no such task
+	TaskCanceled = "canceled" // it waited, and is gone
+	TaskTaken    = "taken"    // a worker was handed it; it is too late
+	TaskAbsent   = "absent"   // the machine has no such task
 )
 
 // CancelTask removes a one-off task that still waits for a worker, and says
@@ -381,7 +381,7 @@ func CancelTask(ctx context.Context, r probe.Runner, m config.Machine, id string
 [ -f "$d/%s/%s.md" ] && { echo %s; exit 0; }
 for f in "$d"/*/%s.md; do [ -f "$f" ] && rm "$f" && { echo %s; exit 0; }; done
 echo %s
-`, runlog.StateDir, runlog.TasksDir, runlog.TaskTaken, id, TaskTaken, id, TaskCancelled, TaskAbsent)
+`, runlog.StateDir, runlog.TasksDir, runlog.TaskTaken, id, TaskTaken, id, TaskCanceled, TaskAbsent)
 	out, err := r.Run(ctx, m, "sh -s", strings.NewReader(script))
 	if err != nil {
 		return "", fmt.Errorf("cancel task %s: %w", id, err)

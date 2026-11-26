@@ -152,7 +152,7 @@ func header(headers []byte, name string) string {
 	return ""
 }
 
-// restIssues reads a labelled source's open issues with conditional reads:
+// restIssues reads a labeled source's open issues with conditional reads:
 // the list, and the comments of each issue that changed since they were
 // last read. errPaged when the list or an issue's comments is longer than
 // a page: the caller reads it the usual way.

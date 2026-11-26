@@ -51,7 +51,7 @@ func (s *Supervisor) restartStuckCI(ctx context.Context, open []backlog.Issue, c
 			s.Logf("start the CI of %s#%d again: %v", i.Repo, pr, err)
 			continue
 		}
-		why := "every check on its head %s was skipped or cancelled"
+		why := "every check on its head %s was skipped or canceled"
 		if red {
 			why = "it was handed back with a failed check on its head %s"
 		}

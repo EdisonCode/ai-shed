@@ -188,8 +188,8 @@ wants one worker in particular to do.
    A task pushed with `-worker` waits for that worker however long it is
    busy. If it is still `queued` and another worker has come free,
    `shed task -cancel <id> <machine>` removes it; then push it again. Never
-   push a second copy without cancelling: both would run. A task `in hand`
-   cannot be cancelled.
+   push a second copy without canceling: both would run. A task `in hand`
+   cannot be canceled.
 4. `shed task -report <id> <machine>` prints the worker's report. Read the
    artifact it points to before you tell the owner it is done.
 
@@ -261,7 +261,7 @@ When the workers' tool has the `shed mark` hooks, each supervised line has
 the tool's own state after the issue: `working 3m` (a turn is in progress),
 `idle 41m` (the turn ended and it waits for a message) or `waiting 6m` (it
 asked a person something). That column is a fact from the tool. The verdict
-and the reason after it are the supervisor's judgement at its last check-in,
+and the reason after it are the supervisor's judgment at its last check-in,
 which may be older. When the two disagree, trust the state for what the
 worker is doing now and the verdict for why.
 

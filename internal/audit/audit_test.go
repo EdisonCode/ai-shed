@@ -61,7 +61,7 @@ func TestTheSameTextInSeveralBriefsIsFoundOnce(t *testing.T) {
 }
 
 func TestNamesTheFleetFileDoesNotHaveAreStale(t *testing.T) {
-	r := Run(fleet("Take issues labelled machine:gone. Ask box-ghost first. Run `shed frobnicate` daily, and `shed status` after; shed holds what waits."), shed, []string{"status"})
+	r := Run(fleet("Take issues labeled machine:gone. Ask box-ghost first. Run `shed frobnicate` daily, and `shed status` after; shed holds what waits."), shed, []string{"status"})
 	var whys []string
 	for _, f := range r.Findings {
 		if f.Kind == Stale {

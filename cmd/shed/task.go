@@ -62,11 +62,11 @@ func cmdTask(args []string) int {
 		switch {
 		case err != nil:
 			return fail(err)
-		case outcome == deploy.TaskCancelled:
-			fmt.Printf("%s: task %s is cancelled. No worker was handed it.\n", m.Name, *cancel)
+		case outcome == deploy.TaskCanceled:
+			fmt.Printf("%s: task %s is canceled. No worker was handed it.\n", m.Name, *cancel)
 			return exitOK
 		case outcome == deploy.TaskTaken:
-			fmt.Fprintf(os.Stderr, "shed: task %s was already handed to a worker on %s and is not cancelled; `shed status` shows who has it\n", *cancel, m.Name)
+			fmt.Fprintf(os.Stderr, "shed: task %s was already handed to a worker on %s and is not canceled; `shed status` shows who has it\n", *cancel, m.Name)
 			return exitAttention
 		}
 		return fail(fmt.Errorf("machine %s has no task %s", m.Name, *cancel))

@@ -164,7 +164,7 @@ func TestTmuxCaptureMarksFaintText(t *testing.T) {
 	var screen string
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		screen, _ = tm.Capture("portal", 20)
-		if strings.Contains(screen, "> [greyed out: Take issue 12]") {
+		if strings.Contains(screen, "> [grayed out: Take issue 12]") {
 			return
 		}
 	}

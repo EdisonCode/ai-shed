@@ -155,7 +155,7 @@ func TestStopCancelsTheTicksContext(t *testing.T) {
 	<-started
 	stop()
 	if err := <-seen; err == nil {
-		t.Fatal("the tick's context was not cancelled")
+		t.Fatal("the tick's context was not canceled")
 	}
 }
 

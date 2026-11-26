@@ -13,7 +13,7 @@ const (
 	CIFailed  = "failed"  // a check failed
 	CIPending = "pending" // a check still runs, and none failed
 	CIPassed  = "passed"  // every check finished, and none failed
-	CISkipped = "skipped" // every check was skipped or cancelled: nothing ran
+	CISkipped = "skipped" // every check was skipped or canceled: nothing ran
 	CINone    = "none"    // no check reported
 )
 

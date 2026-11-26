@@ -1020,10 +1020,10 @@ func TestPendingBriefNoticeSurvivesASecondRestart(t *testing.T) {
 	}
 }
 
-// cancelledReviewer behaves as a reviewer command killed by a stopping agent.
-type cancelledReviewer struct{ cancel context.CancelFunc }
+// canceledReviewer behaves as a reviewer command killed by a stopping agent.
+type canceledReviewer struct{ cancel context.CancelFunc }
 
-func (c cancelledReviewer) Review(ctx context.Context, _ string) (Verdict, error) {
+func (c canceledReviewer) Review(ctx context.Context, _ string) (Verdict, error) {
 	c.cancel()
 	return Verdict{}, ctx.Err()
 }
@@ -1032,7 +1032,7 @@ func TestCheckCutShortByAStoppingAgentIsNotAFailure(t *testing.T) {
 	f := started(t, config.Supervisor{}, onTrack)
 	before := len(f.checkins(t))
 	ctx, cancel := context.WithCancel(context.Background())
-	f.Reviewer = cancelledReviewer{cancel}
+	f.Reviewer = canceledReviewer{cancel}
 	f.now = f.now.Add(2 * time.Minute)
 	f.Tick(ctx)
 
@@ -2412,7 +2412,7 @@ func TestBumpOfAnIssueInTheReserveIsHandedOverAndClaimed(t *testing.T) {
 func TestBumpDoesNotTakeAReserveIssueInAnotherMachinesQueue(t *testing.T) {
 	f := started(t, config.Supervisor{}, onTrack)
 	withBackfill(f, labeled(12))
-	path := f.bump(t, 52, "app") // labelled machine:other
+	path := f.bump(t, 52, "app") // labeled machine:other
 	f.tick(2 * time.Minute)
 
 	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
@@ -2971,7 +2971,7 @@ func (f *fakeClaimer) Claim(_ context.Context, repo string, number int, add, rem
 	return f.err
 }
 
-// withBackfill gives the machine a backfill source. The labelled queue holds
+// withBackfill gives the machine a backfill source. The labeled queue holds
 // the issues given; the backlog holds #50 and #51, and #52, which another
 // machine of the fleet took.
 func withBackfill(f *fixture, queue ...backlog.Issue) *fakeClaimer {
@@ -3013,7 +3013,7 @@ func TestBacklogIsNotTouchedWhileTheQueueHasWork(t *testing.T) {
 	f.tick(2 * time.Minute)
 
 	if got := queueShown(t, f.reviewer.prompts[0]); !slices.Equal(got, []int{12}) {
-		t.Fatalf("queue = %v, want the labelled issue alone", got)
+		t.Fatalf("queue = %v, want the labeled issue alone", got)
 	}
 	if len(claimer.claimed) != 0 {
 		t.Fatalf("claimed = %q", claimer.claimed)
@@ -3219,7 +3219,7 @@ func TestALookOfWorkProductionServesIsHandedOutAfterTheFact(t *testing.T) {
 	}
 }
 
-// inTwoQueues puts an issue labelled machine:linux-box in that machine's
+// inTwoQueues puts an issue labeled machine:linux-box in that machine's
 // queue too, ahead of this one in the fleet file.
 func inTwoQueues(repo string, labels []string) []string {
 	if slices.Contains(labels, "machine:linux-box") {

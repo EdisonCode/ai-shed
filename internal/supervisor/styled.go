@@ -10,7 +10,7 @@ import (
 // might be typed next. Nobody typed that text and nobody sent it, but in a
 // plain capture it reads exactly like a message at the prompt.
 const (
-	faintOpen  = "[greyed out: "
+	faintOpen  = "[grayed out: "
 	faintClose = "]"
 )
 
@@ -83,7 +83,7 @@ func plain(styled string) string {
 
 // faintAfter applies the parameters of a "select graphic rendition" sequence
 // to the faint state. 2 turns faint on; 22 and 0 turn it off. A 2 inside a
-// colour (38;5;2 or 38;2;r;g;b) is a colour value and not the attribute.
+// color (38;5;2 or 38;2;r;g;b) is a color value and not the attribute.
 func faintAfter(params string, faint bool) bool {
 	if params == "" {
 		return false

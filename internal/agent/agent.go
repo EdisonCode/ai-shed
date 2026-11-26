@@ -59,7 +59,7 @@ type Agent struct {
 }
 
 // Run schedules the machine's tasks and supervises its workers until ctx is
-// cancelled. A config file that changes on disk is loaded again; a broken
+// canceled. A config file that changes on disk is loaded again; a broken
 // edit keeps the old one in force.
 func (a Agent) Run(ctx context.Context) error {
 	cfg, m, modified, err := a.read()

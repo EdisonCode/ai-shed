@@ -97,7 +97,7 @@ func TestTheFlowGivesReworkSendsPerMergedPullRequestWithTheWorstIssue(t *testing
 func TestTheFlowGivesTheShareOfEyeChecksThatPassedOnTheFirstLook(t *testing.T) {
 	ask := "## Hand-back\n**PR:** #41 (ready)\nNeeds eyes: the export button"
 	first := issue(5, ask, "Eyes checked")
-	second := issue(6, ask, "Eyes failed: grey", ask, "Eyes checked")
+	second := issue(6, ask, "Eyes failed: gray", ask, "Eyes checked")
 	closed := &countingClosed{issues: []backlog.Issue{first, second}}
 	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{}, Flow: fakeFlow{}, Closed: closed}
 

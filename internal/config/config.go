@@ -745,7 +745,7 @@ type IssueSource struct {
 	Query string `yaml:"query"`
 	// Backfill makes the source a reserve: an issue is taken from it only
 	// when the other sources of the list have nothing a worker can act on.
-	// An issue that is taken gets the label of the list's first labelled
+	// An issue that is taken gets the label of the list's first labeled
 	// source of the same repository, and is in that queue from then on.
 	Backfill bool `yaml:"backfill"`
 }
