@@ -35,9 +35,10 @@ func cmdUI(args []string) int {
 	// Answers post as the owner, so the page offers them only on loopback,
 	// with a token of this run's.
 	var commenter ui.Commenter
+	var labeler ui.Labeler
 	token := ""
 	if ui.Loopback(*listen) {
-		commenter = backlog.GH{}
+		commenter, labeler = backlog.GH{}, backlog.GH{}
 		if token, err = ui.NewToken(); err != nil {
 			return fail(err)
 		}
@@ -65,6 +66,7 @@ func cmdUI(args []string) int {
 		},
 		DeckEvery: *deckEvery,
 		Commenter: commenter,
+		Labeler:   labeler,
 		Token:     token,
 	}
 	go srv.Run(ctx)
