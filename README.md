@@ -1772,6 +1772,19 @@ every machine, and the reviewer judges scope against it. Use it for the rules
 that do not change from task to task: your architecture principles, your
 definition of done, what a worker must never do.
 
+A rule about one repository goes under that repository instead, so that a
+worker on another repository does not read it on every turn:
+
+```yaml
+repos:
+  - repo: my-org/my-app
+    standing_orders: |
+      Mark a pull request ready and never turn on auto-merge: the merge train merges.
+```
+
+A worker's brief carries the fleet's standing orders, then the orders of
+each repository its queue takes issues from, each under its own heading.
+
 ### One home per rule
 
 A worker reads several sources before its first item: the repository's

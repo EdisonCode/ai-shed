@@ -498,6 +498,10 @@ hand to "help" it: a refusal means there is work in it.
 
 ## Tidy the fleet file's prose
 
+A rule about one repository belongs in that repository's
+`standing_orders` under `repos`, not in `defaults.standing_orders`: every
+worker reads the fleet-wide orders on every turn, whatever it works on.
+
 `shed audit` (and `shed audit -model`) finds prose in the standing orders
 and briefs that shed already writes, that the orders already say, that a
 setting now does, or that names what is gone. Go through it with the owner:

@@ -3339,3 +3339,32 @@ func TestAGoalBriefIsNeverHandedOut(t *testing.T) {
 		}
 	}
 }
+
+func TestAWorkerReadsOnlyTheStandingOrdersOfItsOwnRepositories(t *testing.T) {
+	f := newFixture(t, config.Supervisor{})
+	f.StandingOrders = "Be kind."
+	f.Repos = []config.Repo{
+		{Name: "org/app", StandingOrders: "In org/app the merge train merges."},
+		{Name: "org/api", StandingOrders: "In org/api turn on auto-merge."},
+	}
+	brief := f.briefText(f.Machine.Workers[0])
+	if !strings.Contains(brief, "## Standing orders\n\nBe kind.") || !strings.Contains(brief, "## Standing orders for org/app\n\nIn org/app the merge train merges.") {
+		t.Fatalf("brief lacks the fleet's or its repository's orders:\n%s", brief)
+	}
+	if strings.Contains(brief, "auto-merge") {
+		t.Fatalf("brief carries another repository's orders:\n%s", brief)
+	}
+	f.Machine.Issues = append(f.Machine.Issues, config.IssueSource{Repo: "org/api", Label: "machine:box"})
+	if brief := f.briefText(f.Machine.Workers[0]); !strings.Contains(brief, "## Standing orders for org/api") {
+		t.Fatalf("a worker on both repositories lacks the second's orders:\n%s", brief)
+	}
+}
+
+func TestShedsOwnBriefLeavesOutTheOwnersOrders(t *testing.T) {
+	cfg := &config.Config{Repos: []config.Repo{{Name: "org/app", StandingOrders: "In org/app the merge train merges."}},
+		Defaults: config.Defaults{StandingOrders: "Be kind."}}
+	m := config.Machine{Name: "box", Issues: []config.IssueSource{{Repo: "org/app", Label: "machine:box"}}, Workers: []config.Worker{{Name: "app", Brief: "Fix bugs."}}}
+	if got := ShedBrief(cfg, m, m.Workers[0]); strings.Contains(got, "merge train merges") || strings.Contains(got, "Be kind") || strings.Contains(got, "Fix bugs") {
+		t.Fatalf("shed's own brief carries the owner's prose:\n%s", got)
+	}
+}

@@ -2380,7 +2380,11 @@ func (s *Supervisor) writeBrief(w config.Worker) (changed bool, err error) {
 // ShedBrief is what shed itself writes into a worker's brief, without the
 // owner's brief and standing orders: what the owner's prose need not say.
 func ShedBrief(cfg *config.Config, m config.Machine, w config.Worker) string {
-	s := &Supervisor{Repos: cfg.Repos, EyeCheckRepos: cfg.EyeCheckRepos(), Machine: m, Settings: cfg.Supervisor, Signals: cfg.Signals,
+	repos := slices.Clone(cfg.Repos)
+	for n := range repos {
+		repos[n].StandingOrders = ""
+	}
+	s := &Supervisor{Repos: repos, EyeCheckRepos: cfg.EyeCheckRepos(), Machine: m, Settings: cfg.Supervisor, Signals: cfg.Signals,
 		QueueLabels: cfg.QueueLabels(), CrewRepos: cfg.CrewRepos()}
 	if a, ok := cfg.AccountOf(m.Name); ok {
 		s.Account = &a
@@ -2452,6 +2456,9 @@ func (s *Supervisor) askBrief(w config.Worker) string {
 	fmt.Fprintf(&b, "# Brief for worker %s on %s\n\n%s\n", w.Name, s.Machine.Name, strings.TrimSpace(w.Brief))
 	if orders := strings.TrimSpace(s.StandingOrders); orders != "" {
 		fmt.Fprintf(&b, "\n## Standing orders\n\n%s\n", orders)
+	}
+	if orders := s.repoOrders(w); orders != "" {
+		b.WriteString(orders + "\n")
 	}
 	b.WriteString(`
 ## You answer questions
@@ -2621,7 +2628,27 @@ func (s *Supervisor) scope(w config.Worker) string {
 	if orders := strings.TrimSpace(s.StandingOrders); orders != "" {
 		scope += "\n\n## Standing orders\n\n" + orders
 	}
-	return scope + s.choices()
+	return scope + s.repoOrders(w) + s.choices()
+}
+
+// repoOrders are the standing orders of each repository the worker's queue
+// takes issues from, each under its own heading, in the order of its
+// sources. A worker reads only its own repositories' rules.
+func (s *Supervisor) repoOrders(w config.Worker) string {
+	var b strings.Builder
+	var seen []string
+	for _, src := range s.Machine.SourcesFor(w) {
+		if slices.Contains(seen, src.Repo) {
+			continue
+		}
+		seen = append(seen, src.Repo)
+		for _, r := range s.Repos {
+			if orders := strings.TrimSpace(r.StandingOrders); r.Name == src.Repo && orders != "" {
+				fmt.Fprintf(&b, "\n\n## Standing orders for %s\n\n%s", r.Name, orders)
+			}
+		}
+	}
+	return b.String()
 }
 
 // choices tells a worker which choices to make by itself and which to ask
