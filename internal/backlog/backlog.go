@@ -1415,6 +1415,26 @@ func (GH) Release(ctx context.Context, repo string, number int, remove []string,
 // issue to the fleet.
 const ReleasedPhrase = "Released:"
 
+// CrewReleasePhrase is in the comment of an issue released for the crew of
+// its goal: only a crew worker takes it from the fleet's pool.
+const CrewReleasePhrase = "for the goal's crew"
+
+// ReleasedForCrew reports whether the issue's last release was for the crew
+// of its goal, and no hand-back followed it.
+func ReleasedForCrew(issue Issue) bool {
+	crew := false
+	for _, c := range issue.Comments {
+		body := strings.TrimSpace(c.Body)
+		switch {
+		case strings.HasPrefix(body, ReleasedPhrase):
+			crew = strings.Contains(body, CrewReleasePhrase)
+		case strings.Contains(strings.ToLower(body), strings.ToLower(config.DefaultHandBack)):
+			crew = false
+		}
+	}
+	return crew
+}
+
 // ReleasedBy names who released the issue, as in "mini/app", when its last
 // release was not followed by a hand-back; "" otherwise.
 func ReleasedBy(issue Issue) string {

@@ -1551,6 +1551,30 @@ when a session is cleared. A brief is never handed to a worker and is left
 out of the goal's counts. The deck's goal card links it, and the digest's
 Goals block names each goal with none.
 
+**Slices go to whoever is free.** A goal's slices sit in the queue of the
+machine whose label they carry. With `crew_release_after`, a machine whose
+builders all have work in hand gives a waiting slice to the goal's crew on
+the other machines:
+
+```yaml
+supervisor:
+  goal_labels: "goal:"
+  crew_release_after: 20m
+accounts:
+  - name: max-1
+    overflow: "fleet:ready"
+```
+
+- After every builder of the machine has had work in hand for
+  `crew_release_after`, it releases the first unstarted slice of a goal in
+  its queue onto the account's `overflow` label, then one more each
+  `crew_release_after`. A goal in focus moves after half the time.
+- The comment says the slice is released for the goal's crew: only a crew
+  worker takes it from the pool, on any machine that lists the label as a
+  backfill source.
+- Only a machine with a crew worker whose crew-mate is on another machine
+  releases, and only what nobody has started, as with `release_after`.
+
 **Crew review.** When a crew worker hands back a pull request of a goal that
 has another crew-mate, a crew-mate reviews it before any verifier does:
 - **Who reviews.** Shed takes the crew's sessions in order and picks the

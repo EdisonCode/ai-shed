@@ -473,9 +473,19 @@ type Supervisor struct {
 	// owner with no recommendation before an idle worker is given a one-off
 	// task to recommend an answer. Empty for never.
 	RecommendAfter string `yaml:"recommend_after"`
+	// CrewReleaseAfter is how long every builder of a machine may have work
+	// in hand while a goal's slice waits in its queue before the slice is
+	// given to the goal's crew on the other machines. Empty for never.
+	CrewReleaseAfter string `yaml:"crew_release_after"`
 	// Guidance is the owner's standing rules for such a recommendation: what
 	// they usually decide, and why.
 	Guidance string `yaml:"guidance"`
+}
+
+// CrewReleaseAfterOrZero is how long a goal's slice waits behind busy
+// builders before it goes to the crew elsewhere; 0 for never.
+func (s Supervisor) CrewReleaseAfterOrZero() time.Duration {
+	return durationOr(s.CrewReleaseAfter, 0)
 }
 
 // RecommendAfterOrZero is how long an ask waits before a worker recommends
@@ -1274,7 +1284,7 @@ func (c *Config) validate() error {
 	if c.Supervisor.LowQueue < 0 {
 		fail("supervisor: low_queue must not be negative")
 	}
-	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery, "no_work_after": c.Supervisor.NoWorkAfter, "own_wait_max": c.Supervisor.OwnWaitMax, "recommend_after": c.Supervisor.RecommendAfter} {
+	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery, "no_work_after": c.Supervisor.NoWorkAfter, "own_wait_max": c.Supervisor.OwnWaitMax, "recommend_after": c.Supervisor.RecommendAfter, "crew_release_after": c.Supervisor.CrewReleaseAfter} {
 		if value == "" {
 			continue
 		}
