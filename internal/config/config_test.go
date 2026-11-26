@@ -483,7 +483,7 @@ func TestARepoMayBeListedForItsGatesAlone(t *testing.T) {
 
 func TestARepoNeedsStagingOrGatesAndAGatesTimeoutIsADuration(t *testing.T) {
 	for _, tc := range []struct{ repo, want string }{
-		{"{repo: org/app}", "give it staging, gates, verify, max_open_prs, close_finished, issue_quota or circuit_breaker"},
+		{"{repo: org/app}", "give it staging, gates, verify, max_open_prs, close_finished, issue_quota, circuit_breaker or standing_orders"},
 		{"{repo: org/app, gates: {command: make, timeout: soon}}", "gates.timeout"},
 		{"{repo: org/app, gates: {timeout: 5m}, staging: {commit: echo x}}", "gates.timeout needs gates.command"},
 		{"{repo: org/app, staging: {url: https://s.example.com}}", "staging.commit is required"},
@@ -778,5 +778,15 @@ func TestCloseFinishedAloneIsARepoEntryAndWaitsADayByDefault(t *testing.T) {
 	}
 	if got := cfg.Repos[1].CloseAfterOrDefault(); got != 2*time.Hour {
 		t.Errorf("close_after = %s", got)
+	}
+}
+
+func TestARepositoryWithOnlyStandingOrdersIsValid(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + "repos: [{repo: org/app, standing_orders: \"Auto-merge every ready pull request.\"}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Repos[0].StandingOrders != "Auto-merge every ready pull request." {
+		t.Fatalf("repos = %+v", cfg.Repos)
 	}
 }
