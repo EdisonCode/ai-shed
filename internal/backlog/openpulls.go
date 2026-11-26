@@ -32,17 +32,25 @@ type OpenPull struct {
 	// Closes are the issues the pull request closes when it merges.
 	Closes []Dep
 	CI     string
-	// LastCommit is when its latest commit was made; zero when it has none.
+	// LastCommit is when the pull request last changed: a push, a comment, a
+	// review or an edit. Asking GitHub for the commits themselves costs a
+	// node per commit author, which puts a listing of many pull requests
+	// over GitHub's limit on a query's size.
 	LastCommit time.Time
 }
 
 // openPullsLimit is how many open pull requests of a repository are read.
 const openPullsLimit = 200
 
+// openPullsFields are what each open pull request is read with. Each costs
+// GitHub at most a few nodes per pull request: no field that expands every
+// commit (such as commits, whose authors multiply the count) belongs here.
+const openPullsFields = "number,title,body,headRefName,createdAt,updatedAt,isDraft,closingIssuesReferences,statusCheckRollup"
+
 // OpenPulls lists the repository's open pull requests.
 func (GH) OpenPulls(ctx context.Context, repo string) ([]OpenPull, error) {
 	out, err := gh(ctx, "pr", "list", "--repo", repo, "--state", "open", "--limit", fmt.Sprint(openPullsLimit),
-		"--json", "number,title,body,headRefName,createdAt,isDraft,closingIssuesReferences,statusCheckRollup,commits")
+		"--json", openPullsFields)
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +64,7 @@ func parseOpenPulls(data []byte, repo string) ([]OpenPull, error) {
 		Body    string    `json:"body"`
 		Branch  string    `json:"headRefName"`
 		Created time.Time `json:"createdAt"`
+		Updated time.Time `json:"updatedAt"`
 		Draft   bool      `json:"isDraft"`
 		Closes  []struct {
 			Number     int `json:"number"`
@@ -66,10 +75,7 @@ func parseOpenPulls(data []byte, repo string) ([]OpenPull, error) {
 				} `json:"owner"`
 			} `json:"repository"`
 		} `json:"closingIssuesReferences"`
-		Checks  []check `json:"statusCheckRollup"`
-		Commits []struct {
-			CommittedDate time.Time `json:"committedDate"`
-		} `json:"commits"`
+		Checks []check `json:"statusCheckRollup"`
 	}
 	if err := json.Unmarshal(data, &prs); err != nil {
 		return nil, fmt.Errorf("gh pr list %s: parse output: %w", repo, err)
@@ -78,14 +84,9 @@ func parseOpenPulls(data []byte, repo string) ([]OpenPull, error) {
 	for _, pr := range prs {
 		p := OpenPull{Repo: repo, Number: pr.Number, Title: pr.Title, Body: pr.Body, CreatedAt: pr.Created, Draft: pr.Draft,
 			Batch: strings.HasPrefix(pr.Branch, BatchBranchPrefix) && strings.HasPrefix(strings.TrimSpace(pr.Body), BatchPhrase),
-			CI:    ciState(pr.Checks)}
+			CI:    ciState(pr.Checks), LastCommit: pr.Updated}
 		for _, c := range pr.Closes {
 			p.Closes = append(p.Closes, Dep{Repo: c.Repository.Owner.Login + "/" + c.Repository.Name, Number: c.Number})
-		}
-		for _, c := range pr.Commits {
-			if c.CommittedDate.After(p.LastCommit) {
-				p.LastCommit = c.CommittedDate
-			}
 		}
 		pulls = append(pulls, p)
 	}

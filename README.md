@@ -1918,14 +1918,14 @@ A worker is sent back to a pull request through its issue. A pull request
 whose issue is in no machine's queue, or that closes no issue, has no
 worker: it can sit red for days with auto-merge armed. `shed status` and
 `shed digest` list each one in the fleet's repositories, with its age and
-the state of its checks. They also list each draft with no commit for 48
-hours, with what it waits for:
+the state of its checks. They also list each draft quiet for 48 hours (no
+push, comment or review), with what it waits for:
 
 ```
 PRs no queue covers: 2
   3d   my-org/my-app#41  CI failed  closes no issue     Add the export button
   16h  my-org/my-app#44  CI passed  #12 is in no queue  Show the total on the order page
-Drafts with no commit for 48h: 1
+Drafts quiet for 48h: 1
   6d  my-org/my-app#39  waits for #36  Split the importer
 ```
 
@@ -2595,7 +2595,7 @@ counted in `of 7` only. `shed usage` on a machine prints the same totals
 for one machine.
 
 Before `Waiting on you`, the digest lists the pull requests no queue covers
-and the drafts with no commit for 48 hours, as `shed status` does (see
+and the drafts quiet for 48 hours, as `shed status` does (see
 [Pull requests no queue covers](#pull-requests-no-queue-covers)).
 
 It changes nothing and exits 1 when something needs you. To get it every

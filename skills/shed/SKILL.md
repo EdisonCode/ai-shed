@@ -207,7 +207,7 @@ priority rank, the queue hands out the goal nearest done first.
 requests that no worker will be sent back to: their issue is in no machine's
 queue, or they close no issue. Tell the owner, and offer to fix the cause:
 put a machine label on the issue, or add `Closes #N` to the pull request.
-Do not push to it yourself. `Drafts with no commit for 48h` shows each quiet
+Do not push to it yourself. `Drafts quiet for 48h` shows each quiet
 draft with what it waits for; `no hold given`, or a hold that has ended, is
 for the owner to decide.
 

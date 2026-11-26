@@ -602,6 +602,15 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 		report.Error = probeErr.Error()
 		report.Attention = append([]string{"unreachable: " + probeErr.Error()}, report.Attention...)
 	}
+	// The issues of a repository whose pull requests could not be read are
+	// still listed and handed out: one line says what is not seen.
+	unreadPRs := map[string]bool{}
+	for _, i := range issues {
+		if i.PRsUnread != "" && !unreadPRs[i.Repo] {
+			unreadPRs[i.Repo] = true
+			report.Attention = append(report.Attention, fmt.Sprintf("%s: %s: %s", i.Repo, backlog.PRsUnreadWords, i.PRsUnread))
+		}
+	}
 	for _, err := range issueErrs {
 		report.Attention = append(report.Attention, "cannot list issues: "+err.Error())
 	}

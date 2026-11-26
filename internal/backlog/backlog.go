@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -33,6 +34,9 @@ type Issue struct {
 	// MergedPRs holds the numbers of the repo's recently merged pull
 	// requests. It is nil when the lister did not look them up.
 	MergedPRs map[int]bool `json:"-"`
+	// PRsUnread says why the lister could not read the repo's open or
+	// merged pull requests; those of OpenPRs and MergedPRs are then nil.
+	PRsUnread string `json:"-"`
 	// Verify is set by the reader when the issue's repository verifies a
 	// handed-back pull request before the owner reviews it.
 	Verify bool `json:"-"`
@@ -171,21 +175,32 @@ func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 	if err != nil {
 		return nil, err
 	}
-	openPRs, err := openPRs(ctx, src.Repo)
-	if err != nil {
-		return nil, err
-	}
-	merged, err := mergedPRs(ctx, src.Repo)
-	if err != nil {
-		return nil, err
-	}
-	for i := range issues {
-		issues[i].OpenPRs, issues[i].MergedPRs = openPRs, merged
-	}
+	open, openErr := openPRs(ctx, src.Repo)
+	merged, mergedErr := mergedPRs(ctx, src.Repo)
+	withPRs(issues, open, openErr, merged, mergedErr)
 	if err := resolveDeps(ctx, src.Repo, issues); err != nil {
 		return nil, err
 	}
 	return issues, nil
+}
+
+// PRsUnreadWords say what a failed read of a repository's pull requests
+// does to its queue.
+const PRsUnreadWords = "cannot read the pull requests, so rework and merged work are not seen until they can be; issues are still handed out"
+
+// withPRs gives each issue the repository's pull requests. Pull requests
+// that could not be read stay unknown, and the issues are still listed: a
+// queue whose issues are not listed hands nothing to an idle worker, and
+// an issue whose pull request waits on the owner waits on its signal, not
+// on the listing.
+func withPRs(issues []Issue, open map[int]PR, openErr error, merged map[int]bool, mergedErr error) {
+	unread := errors.Join(openErr, mergedErr)
+	for i := range issues {
+		issues[i].OpenPRs, issues[i].MergedPRs = open, merged
+		if unread != nil {
+			issues[i].PRsUnread = strings.ReplaceAll(unread.Error(), "\n", "; ")
+		}
+	}
 }
 
 // View reads the issue by its number. One the repository does not have is

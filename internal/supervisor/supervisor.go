@@ -243,6 +243,9 @@ type Supervisor struct {
 	// lookError is the last failure to read the looks, so that it is logged
 	// once and not at every queue check.
 	lookError string
+	// prsUnread is, by repository, why its pull requests could not be read
+	// at the last queue check, so that it is logged once.
+	prsUnread map[string]string
 	// blockedTold holds the blocked looks the owner was told of.
 	blockedTold map[string]bool
 	// lowTold holds the queues the owner was told are short, by their
@@ -1650,6 +1653,27 @@ func (s *Supervisor) recover(worker string) *workerState {
 // checks that are due on staging, then the goals the owner focused on, then by the
 // owner's priority, then oldest first. An issue that another worker has in
 // hand is not in it, and neither is one the owner moved to another worker.
+// notePRsUnread logs once that a repository's pull requests cannot be read,
+// and once that they can again. Its issues are handed out all the same.
+func (s *Supervisor) notePRsUnread(repo string, issues []backlog.Issue) {
+	if len(issues) == 0 {
+		return
+	}
+	why := issues[0].PRsUnread
+	if s.prsUnread[repo] == why {
+		return
+	}
+	if s.prsUnread == nil {
+		s.prsUnread = map[string]string{}
+	}
+	s.prsUnread[repo] = why
+	if why == "" {
+		s.Logf("%s: the pull requests can be read again", repo)
+		return
+	}
+	s.Logf("%s: %s: %s", repo, backlog.PRsUnreadWords, why)
+}
+
 func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, error) {
 	checkins, err := runlog.ReadCheckins(s.StateDir)
 	if err != nil {
@@ -1675,6 +1699,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		if err != nil {
 			return nil, err
 		}
+		s.notePRsUnread(src.Repo, issues)
 		for n := range issues {
 			issues[n].Verify = s.verifies(issues[n].Repo)
 			issues[n].MergeHigh = s.mergesHigh(issues[n].Repo)

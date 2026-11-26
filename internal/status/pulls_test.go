@@ -98,7 +98,7 @@ func TestADraftWithNoCommitFor48HoursIsListedWithItsHold(t *testing.T) {
 	var out bytes.Buffer
 	RenderPulls(&out, got, now)
 	for _, want := range []string{
-		"Drafts with no commit for 48h: 3",
+		"Drafts quiet for 48h: 3",
 		"6d  org/app#41  waits for #12",
 		"3d  org/app#42  Waits for the API change to ship.",
 		"2d  org/app#43  no hold given",
