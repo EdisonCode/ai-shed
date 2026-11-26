@@ -45,6 +45,8 @@ Usage:
                                     with -apply, remove them
   shed template issue               print an issue template for issues a worker can take
   shed update                       replace this shed with the latest release
+  shed skill [-install|-check]      print the shed skill for your assistant, install it in
+                                    ~/.claude/skills/shed, or say whether yours has fallen behind
   shed preflight [-machine name]    on a machine: check that each worker's command comes up ready
   shed agent [-machine name]        on a machine: supervise its workers and run its tasks
   shed usage [-since 168h] [-json]  on a machine: what its workers spent, at API rates
@@ -90,6 +92,8 @@ func main() {
 		code = cmdPreflight(args)
 	case "recycle":
 		code = cmdRecycle(args)
+	case "skill":
+		code = cmdSkill(args)
 	case "update":
 		code = cmdUpdate(args)
 	case "lock":
