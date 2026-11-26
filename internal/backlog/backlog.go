@@ -759,7 +759,7 @@ func unheeded(issue Issue, s config.Signal, signals []config.Signal) time.Time {
 		return at
 	}
 	for _, c := range issue.Comments[last+1:] {
-		if settled(c.Body, signals) || mentionsSignal(strings.ToLower(c.Body), signals) {
+		if settled(c.Body, signals) || mentionsSignal(strings.ToLower(c.Body), signals) || strings.HasPrefix(strings.TrimSpace(c.Body), ContractChangedPhrase) {
 			continue
 		}
 		at = c.CreatedAt
@@ -814,6 +814,9 @@ func Rework(issue Issue, signals []config.Signal) string {
 	var reasons []string
 	if failedLook(issue, signals) {
 		reasons = append(reasons, "the eye check failed: fix what it found (see the Eyes failed hand-back), then hand back again")
+	}
+	if change := ContractPending(issue, signals); change != "" && handBack >= 0 {
+		reasons = append(reasons, fmt.Sprintf("a contract this slice uses changed (%s): check your part against the goal brief, change it if it must, and hand back with %q in the hand-back", strings.TrimSpace(strings.TrimPrefix(change, ContractChangedPhrase)), ContractCheckedPhrase))
 	}
 	if missing := NoDataLook(issue, signals); missing != "" {
 		reasons = append(reasons, fmt.Sprintf("the eye check was blocked because staging lacks the state it needs (%s): add a seed that makes it, in the repository's tool for staging states, then hand back again with the eye check and how to run the seed", missing))

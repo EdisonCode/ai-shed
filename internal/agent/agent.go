@@ -252,6 +252,7 @@ func (a Agent) supervisor(cfg *config.Config, m config.Machine) *supervisor.Supe
 		Batch:       backlog.GH{},
 		CI:          backlog.GH{},
 		Cost:        backlog.GH{},
+		Contracts:   backlog.GH{},
 		Prices:      cfg.Prices(),
 		QueueLabels: cfg.QueueLabels(),
 		CrewRepos:   cfg.CrewRepos(),

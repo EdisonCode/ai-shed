@@ -1551,6 +1551,23 @@ when a session is cleared. A brief is never handed to a worker and is left
 out of the goal's counts. The deck's goal card links it, and the digest's
 Goals block names each goal with none.
 
+**Providers first, and users told.** A contract in the brief names the slice
+that provides it, and may name the slices that use it:
+
+```markdown
+- GET /prices returns cents per currency, provided by #41, used by my-org/web#12
+```
+
+- A crew worker's queue puts a slice that provides a contract before the
+  goal's other slices: the ones that use it wait on it.
+- When the provider is no longer open, the machine whose queue owns each
+  started slice that uses the contract (every other slice of the goal, when
+  the brief names no user) writes `Contract changed: <the contract>` on it,
+  once.
+- That comment lasts where a message would not. Until a hand-back after it
+  says `Contract checked`, a handed-back slice goes back to its worker as
+  rework, and a merged one is handed out again.
+
 **Slices go to whoever is free.** A goal's slices sit in the queue of the
 machine whose label they carry. With `crew_release_after`, a machine whose
 builders all have work in hand gives a waiting slice to the goal's crew on

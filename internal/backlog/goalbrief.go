@@ -3,7 +3,10 @@ package backlog
 import (
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/edisoncode/ai-shed/internal/config"
 )
 
 // GoalBriefPrefix starts the title of a goal's brief: the one issue of a
@@ -44,6 +47,48 @@ type Contract struct {
 	// Provider is the issue that provides it, as "#41" or "org/api#41";
 	// empty when the brief names none.
 	Provider string `json:"provider,omitempty"`
+	// Users are the issues the brief names after "used by"; none means
+	// every other slice of the goal may use it.
+	Users []string `json:"users,omitempty"`
+}
+
+// The phrases of a contract that changed under a slice: shed writes the
+// first on the slice, and the worker's next hand-back says the second once
+// its part fits the contract again.
+const (
+	ContractChangedPhrase = "Contract changed:"
+	ContractCheckedPhrase = "Contract checked"
+)
+
+// Ref resolves an issue reference of the brief, "#41" or "org/api#41", to
+// "org/api#41".
+func (b GoalBrief) Ref(ref string) string {
+	if strings.HasPrefix(ref, "#") {
+		return b.Repo + ref
+	}
+	return ref
+}
+
+// Provides reports whether the issue provides a contract of the brief.
+func (b GoalBrief) Provides(repo string, number int) bool {
+	key := repo + "#" + strconv.Itoa(number)
+	return slices.ContainsFunc(b.Contracts, func(c Contract) bool { return c.Provider != "" && b.Ref(c.Provider) == key })
+}
+
+// ContractPending returns the contract change on the issue that no
+// hand-back after it has checked; "" when there is none.
+func ContractPending(issue Issue, signals []config.Signal) string {
+	pending := ""
+	for _, c := range issue.Comments {
+		body := strings.TrimSpace(c.Body)
+		switch {
+		case strings.HasPrefix(body, ContractChangedPhrase):
+			pending, _, _ = strings.Cut(body, "\n")
+		case isHandBack(c.Body, signals) && strings.Contains(strings.ToLower(body), strings.ToLower(ContractCheckedPhrase)):
+			pending = ""
+		}
+	}
+	return pending
 }
 
 var (
@@ -58,8 +103,12 @@ func ParseGoalBrief(i Issue) GoalBrief {
 	b.DoneWhen = briefPart(i.Body, briefDoneWhen)
 	for _, line := range briefPart(i.Body, briefContracts) {
 		c := Contract{Text: line}
-		if m := briefIssueRE.FindStringSubmatch(line); m != nil {
+		provides, users, _ := strings.Cut(line, "used by")
+		if m := briefIssueRE.FindStringSubmatch(provides); m != nil {
 			c.Provider = m[0]
+		}
+		if users != "" {
+			c.Users = briefIssueRE.FindAllString(users, -1)
 		}
 		b.Contracts = append(b.Contracts, c)
 	}

@@ -24,8 +24,8 @@ func TestAGoalBriefIsReadIntoItsSlicesContractsAndDoneWhen(t *testing.T) {
 	if !slices.Equal(b.Slices, []string{"#41 the pricing API", "org/web#12 the checkout page uses it"}) {
 		t.Fatalf("slices = %q", b.Slices)
 	}
-	want := []Contract{{Text: "GET /prices returns cents per currency — provided by #41", Provider: "#41"}, {Text: "the price-changed event, provided by org/api#7", Provider: "org/api#7"}}
-	if !slices.Equal(b.Contracts, want) {
+	if len(b.Contracts) != 2 || b.Contracts[0].Text != "GET /prices returns cents per currency — provided by #41" || b.Contracts[0].Provider != "#41" ||
+		b.Contracts[1].Provider != "org/api#7" || len(b.Contracts[0].Users) != 0 {
 		t.Fatalf("contracts = %+v", b.Contracts)
 	}
 	if !slices.Equal(b.DoneWhen, []string{"a customer pays the new price on staging, end to end"}) {

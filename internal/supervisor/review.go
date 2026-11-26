@@ -140,6 +140,9 @@ type QueueItem struct {
 	goalDone float64
 	// focus is set when the issue's goal is one the owner focused on.
 	focus bool
+	// provides is set on a slice that its goal's brief names as providing
+	// a contract: it goes before the slices that use it.
+	provides bool
 }
 
 // Workable reports whether a worker can act on the item: it needs a worker
