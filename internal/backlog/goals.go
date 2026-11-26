@@ -34,6 +34,8 @@ const goalLimit = 1000
 // GoalIssue is one issue of a goal: whether it is closed, and when it was
 // opened and closed.
 type GoalIssue struct {
+	Number    int       `json:"number,omitempty"`
+	Title     string    `json:"title,omitempty"`
 	Closed    bool      `json:"closed"`
 	CreatedAt time.Time `json:"created_at"`
 	ClosedAt  time.Time `json:"closed_at,omitempty"`
@@ -95,7 +97,7 @@ func (p Pace) Words() string {
 
 // GoalIssues lists the repository's issues with the label.
 func (GH) GoalIssues(ctx context.Context, repo, label string) ([]GoalIssue, error) {
-	out, err := gh(ctx, "issue", "list", "--repo", repo, "--label", label, "--state", "all", "--limit", fmt.Sprint(goalLimit), "--json", "state,createdAt,closedAt")
+	out, err := gh(ctx, "issue", "list", "--repo", repo, "--label", label, "--state", "all", "--limit", fmt.Sprint(goalLimit), "--json", "number,title,state,createdAt,closedAt")
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +110,8 @@ func (GH) GoalIssues(ctx context.Context, repo, label string) ([]GoalIssue, erro
 
 func parseGoalIssues(data []byte) ([]GoalIssue, error) {
 	var raw []struct {
+		Number    int       `json:"number"`
+		Title     string    `json:"title"`
 		State     string    `json:"state"`
 		CreatedAt time.Time `json:"createdAt"`
 		ClosedAt  time.Time `json:"closedAt"`
@@ -117,7 +121,7 @@ func parseGoalIssues(data []byte) ([]GoalIssue, error) {
 	}
 	out := make([]GoalIssue, len(raw))
 	for n, i := range raw {
-		out[n] = GoalIssue{Closed: i.State == "CLOSED", CreatedAt: i.CreatedAt, ClosedAt: i.ClosedAt}
+		out[n] = GoalIssue{Number: i.Number, Title: i.Title, Closed: i.State == "CLOSED", CreatedAt: i.CreatedAt, ClosedAt: i.ClosedAt}
 	}
 	return out, nil
 }

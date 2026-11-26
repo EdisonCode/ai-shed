@@ -284,8 +284,9 @@ function renderGoals(snap) {
   const byLabel = new Map();
   for (const g of goals) {
     const p = g.pace || {};
-    const t = byLabel.get(g.label) || { label: g.label, repos: [], closed: 0, total: 0, open: 0, opened: 0, closedWeek: 0, next: [], error: "" };
+    const t = byLabel.get(g.label) || { label: g.label, repos: [], closed: 0, total: 0, open: 0, opened: 0, closedWeek: 0, next: [], error: "", brief: null };
     t.repos.push(g.repo); t.closed += g.closed; t.total += g.total;
+    if (g.brief && !t.brief) t.brief = { repo: g.repo, number: g.brief };
     t.open += p.open || 0; t.opened += p.opened_week || 0; t.closedWeek += p.closed_week || 0;
     if (g.next) t.next.push((goals.filter(o => o.label === g.label).length > 1 ? short(g.repo) + ": " : "") + g.next);
     if (g.error) t.error = g.error;
@@ -318,6 +319,8 @@ function renderGoals(snap) {
       el("div", { class: "bar" }, el("div", { style: "width:" + pct + "%" })),
       el("div", { class: "nums" }, el("span", {}, t.closed + " of " + t.total + " closed (" + pct + "%)"), el("span", { class: "meta" }, t.open + " open")),
       eta,
+      t.brief ? el("div", { class: "next" }, el("a", { href: "https://github.com/" + t.brief.repo + "/issues/" + t.brief.number, target: "_blank", rel: "noopener" }, "Goal brief " + short(t.brief.repo) + "#" + t.brief.number))
+        : el("div", { class: "next dim", title: "An issue titled \"Goal brief: …\" with this goal's label, with Slices, Contracts and Done when, lets its crew build it together." }, "no goal brief"),
       crewLine(crews.get(t.label)),
       ...t.next.map(n => el("div", { class: "next" }, n)));
   }));

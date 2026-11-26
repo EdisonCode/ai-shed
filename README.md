@@ -1528,6 +1528,29 @@ crew-mate builds on (an API, an event, a schema, a shared type), it messages
 that crew-mate and reads the answer before it hands back. A change of plan
 still goes on the issue.
 
+**Goal brief.** A crew builds one goal from several parts, often on several
+machines. The goal's shape belongs in one place that outlives every session:
+an issue titled `Goal brief: <the goal>`, with the goal's label:
+
+```markdown
+**Slices:**
+1. #41 the pricing API
+2. my-org/web#12 the checkout page uses it
+
+**Contracts:**
+- GET /prices returns cents per currency, provided by #41
+
+**Done when:**
+- a customer pays the new price on staging, end to end
+```
+
+Each crew worker's `Your crew` section carries the brief of every goal it
+builds. A change to a contract is an edit of the brief, with a comment on
+it, and then a message to the crew-mates who use it: a message alone is lost
+when a session is cleared. A brief is never handed to a worker and is left
+out of the goal's counts. The deck's goal card links it, and the digest's
+Goals block names each goal with none.
+
 **Crew review.** When a crew worker hands back a pull request of a goal that
 has another crew-mate, a crew-mate reviews it before any verifier does:
 - **Who reviews.** Shed takes the crew's sessions in order and picks the

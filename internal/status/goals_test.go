@@ -144,3 +144,21 @@ func TestAMergedIssueIsNotAGoalsNextSlice(t *testing.T) {
 		t.Fatalf("only merged: %q", got)
 	}
 }
+
+func TestAGoalsBriefIsNamedAndLeftOutOfItsCounts(t *testing.T) {
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{withLabels(issue(14), "goal:export"), withLabels(issue(21), "goal:refunds")}},
+		Goals: fakeGoalIssues{
+			"goal:export": {
+				{Number: 9, Title: "Goal brief: export", CreatedAt: now.Add(-60 * 24 * time.Hour)},
+				{Number: 14, Title: "Export endpoint", CreatedAt: now.Add(-60 * 24 * time.Hour)},
+			},
+			"goal:refunds": {{Number: 21, Title: "Refund button", CreatedAt: now.Add(-60 * 24 * time.Hour)}},
+		}}
+
+	d := c.Digest(context.Background(), goalsConfig(), &fakeMerged{}, now.Add(-24*time.Hour), now)
+
+	if len(d.Goals) != 2 || d.Goals[0].Brief != 9 || d.Goals[0].Total != 1 || d.Goals[1].Brief != 0 {
+		t.Fatalf("goals = %+v", d.Goals)
+	}
+	wantLines(t, digestText(t, d), "no goal brief: goal:refunds.")
+}

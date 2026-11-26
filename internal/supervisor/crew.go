@@ -82,6 +82,7 @@ func crewText(w config.Worker, goals []string, issues map[string][]backlog.Issue
 	var b strings.Builder
 	b.WriteString("\n# Your crew\n\nThe crew-mates who build other parts of the goals you build, and what each has signed. Before you push a change to something one of them builds on (an API, an event, a schema, a shared type), message them what changes and why.\n")
 	for _, goal := range goals {
+		brief := briefText(issues[goal])
 		var lines []string
 		for _, i := range issues[goal] {
 			session := backlog.PlanSession(i)
@@ -97,10 +98,49 @@ func crewText(w config.Worker, goals []string, issues map[string][]backlog.Issue
 		fmt.Fprintf(&b, "\n## %s\n\n", goal)
 		if len(lines) == 0 {
 			b.WriteString("No crew-mate has signed a plan on this goal yet.\n")
-			continue
+		} else {
+			b.WriteString(strings.Join(lines, "\n") + "\n")
 		}
-		b.WriteString(strings.Join(lines, "\n") + "\n")
+		b.WriteString("\n" + brief)
 	}
+	return b.String()
+}
+
+// briefMax bounds each part of a goal brief in the roster.
+const briefMax = 12
+
+// briefText is a goal's brief as a crew worker's roster gives it: the shape
+// of the whole goal, and how a change to a contract is made. A goal with no
+// brief says so, so the crew asks the owner for one.
+func briefText(issues []backlog.Issue) string {
+	i, ok := backlog.BriefOf(issues)
+	if !ok {
+		return fmt.Sprintf("This goal has no brief: the crew has no shared plan of its slices and the contracts between them. Tell the owner in your hand-back, as a decision, that an issue titled %q with Slices, Contracts and Done when would let the crew build it together.\n\n", backlog.GoalBriefPrefix+" <the goal>")
+	}
+	brief := backlog.ParseGoalBrief(i)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Goal brief: %s#%d. It is the crew's shared plan, and it outlives every session. Build your slice to it. When a contract must change, edit the brief and comment on it what changed and why, then message the crew-mates who use it: a message alone is lost when a session is cleared.\n", i.Repo, i.Number)
+	part := func(title string, entries []string) {
+		if len(entries) == 0 {
+			return
+		}
+		fmt.Fprintf(&b, "\n%s:\n", title)
+		for n, e := range entries {
+			if n == briefMax {
+				fmt.Fprintf(&b, "- … %d more in the brief\n", len(entries)-briefMax)
+				break
+			}
+			b.WriteString("- " + e + "\n")
+		}
+	}
+	part("Slices", brief.Slices)
+	var contracts []string
+	for _, c := range brief.Contracts {
+		contracts = append(contracts, c.Text)
+	}
+	part("Contracts", contracts)
+	part("Done when", brief.DoneWhen)
+	b.WriteString("\n")
 	return b.String()
 }
 
