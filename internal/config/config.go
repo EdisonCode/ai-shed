@@ -1409,8 +1409,8 @@ func (c *Config) validate() error {
 		switch {
 		case deploys && r.Staging.Commit == "":
 			fail("%s: staging.commit is required: a command that prints the commit staging serves", where)
-		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0 && !r.CloseFinished && r.IssueQuota == 0 && !r.CircuitBreaker:
-			fail("%s: give it staging, gates, verify, max_open_prs, close_finished, issue_quota or circuit_breaker, or leave it out", where)
+		case !deploys && r.Gates.Command == "" && r.Verify == nil && r.MaxOpenPRs == 0 && !r.CloseFinished && r.IssueQuota == 0 && !r.CircuitBreaker && strings.TrimSpace(r.StandingOrders) == "":
+			fail("%s: give it staging, gates, verify, max_open_prs, close_finished, issue_quota, circuit_breaker or standing_orders, or leave it out", where)
 		}
 		if r.IssueQuota < 0 {
 			fail("%s: issue_quota %d must not be negative", where, r.IssueQuota)
