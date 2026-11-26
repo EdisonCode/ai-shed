@@ -195,8 +195,79 @@ func TestAsksSayHowLongTheOwnerHasBeenAskedAndForWhichPullRequest(t *testing.T) 
 		{Body: "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders", CreatedAt: second},
 	}}
 	want := []Ask{{Name: "decision", Since: first, Text: "1. Keep the column? See #3."}, {Name: "eyes", Since: second, Text: "open /orders"}, {Name: "review", Since: second, PR: 41}}
-	if got := Asks(issue, config.DefaultSignals()); !slices.Equal(got, want) {
+	got := Asks(issue, config.DefaultSignals())
+	// What clears each ask has its own test.
+	for n := range got {
+		got[n].Answer, got[n].Phrases = "", ""
+	}
+	if !slices.Equal(got, want) {
 		t.Fatalf("asks = %+v, want %+v", got, want)
+	}
+}
+
+func TestEachAskSaysWhatClearsIt(t *testing.T) {
+	issue := Issue{OpenPRs: map[int]PR{41: {}}, Comments: []Comment{
+		{Body: "## Hand-back\n**PR:** #41 (ready)\n**Decisions needed:** keep the column?\n**Needs eyes:** open /orders"},
+	}}
+	got := map[string]Ask{}
+	for _, a := range Asks(issue, config.DefaultSignals()) {
+		got[a.Name] = a
+	}
+	for name, want := range map[string]string{
+		"decision": `answer in a comment that starts "Owner ruling" ("Owner ruling: accepted" takes the work as it stands)`,
+		"eyes":     `answer in a comment that starts "Eyes checked"`,
+		"review":   "merge or close pull request #41",
+	} {
+		if got[name].Answer != want {
+			t.Errorf("%s: answer = %q, want %q", name, got[name].Answer, want)
+		}
+	}
+	if got["decision"].Phrases != `"Owner ruling"` || got["review"].Phrases != "" {
+		t.Fatalf("phrases = %q, %q", got["decision"].Phrases, got["review"].Phrases)
+	}
+}
+
+func TestABlockedLookSaysToUnblockItOrLook(t *testing.T) {
+	issue := Issue{OpenPRs: map[int]PR{}, Comments: []Comment{
+		{Body: "## Hand-back\n**PR:** #41 (ready)\n**Needs eyes:** open /orders"},
+		{Body: "Eyes blocked: staging was down"},
+	}}
+	asks := Asks(issue, config.DefaultSignals())
+	i := slices.IndexFunc(asks, func(a Ask) bool { return a.Name == "eyes" })
+	if i < 0 {
+		t.Fatalf("asks = %+v, want an eyes ask", asks)
+	}
+	if want := `when the cause is gone, comment "Eyes unblocked"; or look yourself and comment "Eyes checked"`; asks[i].Answer != want {
+		t.Fatalf("answer = %q, want %q", asks[i].Answer, want)
+	}
+}
+
+func TestAnAnswerInOtherWordsIsSaidToHaveChangedNothing(t *testing.T) {
+	asked, answered := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	issue := Issue{Comments: []Comment{
+		{Body: "## Hand-back\n**PR:** none\n**Decisions needed:** keep the column?", CreatedAt: asked},
+		{Body: "Yes, keep it.", CreatedAt: answered},
+	}}
+	asks := Asks(issue, config.DefaultSignals())
+	if len(asks) != 1 || !asks[0].Unheeded.Equal(answered) {
+		t.Fatalf("asks = %+v, want the decision unheeded since %s", asks, answered)
+	}
+
+	issue.Comments = append(issue.Comments, Comment{Body: "Owner ruling: keep it.", CreatedAt: answered.Add(time.Hour)})
+	if asks := Asks(issue, config.DefaultSignals()); len(asks) != 0 {
+		t.Fatalf("asks = %+v, want the ruling to close the decision", asks)
+	}
+}
+
+func TestAWorkersCommentWithAShedPhraseIsNotAnAnswerInOtherWords(t *testing.T) {
+	issue := Issue{Comments: []Comment{
+		{Body: "## Hand-back\n**PR:** none\n**Decisions needed:** keep the column?"},
+		{Body: "Not ready: the acceptance is missing"},
+	}}
+	for _, a := range Asks(issue, config.DefaultSignals()) {
+		if a.Name == "decision" && !a.Unheeded.IsZero() {
+			t.Fatalf("ask = %+v, want no unheeded answer", a)
+		}
 	}
 }
 

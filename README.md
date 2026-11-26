@@ -1972,6 +1972,24 @@ hand-back: a comment that contains the word `Hand-back` (configurable as
 | review | `**PR:** #41` | `none` | that pull request is merged or closed |
 | ready | `Not ready:` | `none` | `Ready now` |
 
+An answer counts only where its phrase begins a line: "Yes, keep it" or
+"Unblocked" changes nothing. Each `waits on you` line in `shed status` ends
+with what clears it (`To clear it: answer in a comment that starts "Owner
+ruling"`), and says so when a comment after the ask had none of the phrases:
+`answered 5h ago in a comment with none of "Owner ruling", which changed
+nothing`. `shed status -json` carries the same as each ask's `answer`,
+`phrases` and `unheeded`.
+
+`shed answer` posts an answer under the right phrase for you. It reads which
+signal is open on the issue and refuses when none takes an answer, or when
+more than one does (pick one with `-signal`):
+
+```sh
+shed answer box 41 ruling.md     # Owner ruling: <the file's text>
+shed answer -accept box 41       # Owner ruling: accepted
+shed answer -unblock box 52 -    # Eyes unblocked: <standard input>
+```
+
 `Decided without you:` in a hand-back is no signal: it tells you what a
 worker chose and asks nothing.
 

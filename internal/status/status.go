@@ -400,6 +400,9 @@ type RepoReport struct {
 	Lookers int `json:"lookers"`
 	// Now is when the report was made, by the watcher's clock.
 	Now time.Time `json:"now"`
+	// Unblock says what clears a blocked look, in the words of the fleet
+	// file's eyes signal; empty when it has no unblocking phrase.
+	Unblock string `json:"unblock,omitempty"`
 	// Train is where the merge train stands; nil where the repository runs
 	// none.
 	Train *Train `json:"train,omitempty"`
@@ -422,7 +425,7 @@ func (c Collector) CollectRepos(ctx context.Context, cfg *config.Config) []RepoR
 func (c Collector) collectRepo(parent context.Context, cfg *config.Config, repo config.Repo) RepoReport {
 	ctx, cancel := context.WithTimeout(parent, probeTimeout)
 	defer cancel()
-	report := RepoReport{Report: looks.Report{Repo: repo.Name}, Now: time.Now()}
+	report := RepoReport{Report: looks.Report{Repo: repo.Name}, Now: time.Now(), Unblock: unblockWords(cfg.Signals)}
 	var sources []config.IssueSource
 	var open []backlog.Issue
 	seen := map[config.IssueSourceKey]bool{}
@@ -489,6 +492,17 @@ func RepoAttention(r Report) []string {
 	return lines
 }
 
+// unblockWords says what clears a blocked look: the eyes signal's
+// unblocking phrase once the cause is gone, or a look by the owner.
+func unblockWords(signals []config.Signal) string {
+	for _, s := range signals {
+		if s.Name == config.EyesSignal && s.UnblockedBy != "" {
+			return fmt.Sprintf("when the cause is gone, comment %q on the issue; or look yourself and comment %q", s.UnblockedBy, s.AnsweredBy)
+		}
+	}
+	return ""
+}
+
 // Attention lists what a repository's release state needs from the owner.
 func (r RepoReport) Attention() []string {
 	if r.Error != "" {
@@ -512,7 +526,11 @@ func (r RepoReport) Attention() []string {
 		if why == "" {
 			why = "the worker's comment on the issue says why"
 		}
-		attention = append(attention, fmt.Sprintf("the eye check of %s#%d (pull request #%d) is blocked: %s", l.Repo, l.Number, l.PR, why))
+		line := fmt.Sprintf("the eye check of %s#%d (pull request #%d) is blocked: %s", l.Repo, l.Number, l.PR, why)
+		if r.Unblock != "" {
+			line += ". To clear it: " + r.Unblock
+		}
+		attention = append(attention, line)
 	}
 	return attention
 }
@@ -1285,6 +1303,29 @@ func oldestAsk(asks []backlog.Ask) time.Time {
 	return oldest
 }
 
+// clearWords says what clears each of an issue's asks, and which answer
+// changed nothing because it had none of the phrases.
+func clearWords(asks []backlog.Ask, now time.Time) string {
+	var parts []string
+	for _, a := range asks {
+		if a.Answer == "" {
+			continue
+		}
+		words := a.Answer
+		if len(asks) > 1 {
+			words = a.Name + ": " + words
+		}
+		if !a.Unheeded.IsZero() {
+			words += fmt.Sprintf("; answered %s ago in a comment with none of %s, which changed nothing", Short(now.Sub(a.Unheeded)), a.Phrases)
+		}
+		parts = append(parts, words)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return ". To clear it: " + strings.Join(parts, "; ")
+}
+
 // workerIdle reports whether the worker has no work now.
 func workerIdle(workers []WorkerStatus, name string) bool {
 	for _, w := range workers {
@@ -1327,7 +1368,7 @@ func attendWaiting(waiting []IssueStatus, now time.Time, attend func(string, ...
 		case effect == backlog.EffectGrace:
 			what += "; the worker goes on with the rest until it parks"
 		}
-		attend("%s#%d waits on you (%s): %s", st.Repo, st.Number, what, st.Title)
+		attend("%s#%d waits on you (%s): %s%s", st.Repo, st.Number, what, st.Title, clearWords(st.Asks, now))
 	}
 	if len(merges) > 0 {
 		age := ""

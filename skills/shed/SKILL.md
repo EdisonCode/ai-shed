@@ -275,7 +275,25 @@ Run this as a checklist and report each line.
    first inside each. Start with the returns, `which is idle` first: a
    worker waits behind each of them. A review waits for nobody but the
    owner, and verified low-risk merges are one sitting at the end.
-2. For each `!` line, give the owner the fact and your recommendation:
+2. Each `waits on you` line ends with what clears it (`To clear it: ...`),
+   from the fleet file's signals. An answer counts only where its phrase
+   begins a line. The default phrases:
+
+   | Open | Clears it |
+   | --- | --- |
+   | decision | `Owner ruling: <the ruling>`; `Owner ruling: accepted` takes the work as it stands |
+   | eyes | `Eyes checked` after a look; a worker that looked and it failed writes `Eyes failed` |
+   | blocked eye check | `Eyes unblocked` once the cause is gone, or look yourself and comment `Eyes checked` |
+   | ready | `Ready now` |
+   | review #N | merge or close the pull request |
+   | no worker step | do the step, then close the issue or write what a worker should do next |
+
+   Post an answer with `shed answer <machine> <issue> <file|->`
+   (`-accept`, `-unblock`, `-signal <name>`): it picks the phrase of the
+   open signal, so it cannot be written in other words. A line that says
+   `answered ... in a comment with none of ...` was answered in other
+   words and still waits: post the answer again with `shed answer`.
+3. For each `!` line, give the owner the fact and your recommendation:
    - `issue waits on you (decision)`: read the worker's comment
      (`gh issue view <n> --repo <r> --comments`), put the question to the
      owner, and post their answer as a comment that contains the
@@ -362,7 +380,7 @@ Run this as a checklist and report each line.
      `shed lock <name> -- <command>` (one at a time per machine).
    - `worker could not be checked`: the reason is in the line. Usually the
      reviewer command or `gh` on that machine.
-3. The supervisor's log is on each machine:
+4. The supervisor's log is on each machine:
    `ssh <host> tail -n 40 '~/.local/state/shed/checkins.jsonl'`. It shows each
    check-in, what was typed into the worker, and why.
 
@@ -397,9 +415,10 @@ workers. The owner decides; you prepare each decision.
      a worker with no other context can act on it; for a look, what to
      check and where.
    - Put the question and your draft to the owner. Post nothing until they
-     rule. Then post their ruling with the signal's `answered_by` phrase
-     (`Owner ruling`, `Eyes checked` by default; the fleet file may set
-     others), as "Pick up the results" says for each kind.
+     rule. Then post their ruling with `shed answer`, which puts it under
+     the open signal's phrase (the item's `ask.answer` says what clears
+     it). An item with `ask.unheeded` was answered in other words and
+     still waits: raise it first.
    - Merges come last and together: list them with their checks, and
      merge only those the owner names.
 4. Then the `attention` lines, as "Pick up the results" says for each.

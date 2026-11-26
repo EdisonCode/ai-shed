@@ -141,6 +141,32 @@ func TestIssueWaitingOnDecisionNeedsOwner(t *testing.T) {
 	}
 }
 
+func TestAWaitingLineEndsWithWhatClearsIt(t *testing.T) {
+	res := healthy()
+	res.Windows = []probe.Window{window("app-7", 3*time.Hour)}
+	r := Assess(config.Machine{}, signals, now, res, []backlog.Issue{issue(7, "## Hand-back\nDecisions needed: 1. which one?")})
+	wantAttention(t, r, `Fix the thing. To clear it: answer in a comment that starts "Owner ruling"`)
+}
+
+func TestAWaitingLineSaysWhenAnAnswerHadNoneOfThePhrases(t *testing.T) {
+	asked := issue(7)
+	asked.Comments = []backlog.Comment{
+		{Body: "## Hand-back\nDecisions needed: 1. which one?", CreatedAt: now.Add(-9 * time.Hour)},
+		{Body: "The first one.", CreatedAt: now.Add(-5 * time.Hour)},
+	}
+	r := Assess(config.Machine{}, signals, now, healthy(), []backlog.Issue{asked})
+	wantAttention(t, r, `answered 5h ago in a comment with none of "Owner ruling", which changed nothing`)
+}
+
+func TestABlockedLookSaysWhatClearsIt(t *testing.T) {
+	r := RepoReport{Report: looks.Report{Repo: "org/app", Looks: []looks.Look{{Repo: "org/app", Number: 4, PR: 44, State: looks.Blocked, Note: "staging was down"}}},
+		Unblock: unblockWords(config.DefaultSignals())}
+	want := `the eye check of org/app#4 (pull request #44) is blocked: staging was down. To clear it: when the cause is gone, comment "Eyes unblocked" on the issue; or look yourself and comment "Eyes checked"`
+	if got := r.Attention(); len(got) != 1 || got[0] != want {
+		t.Fatalf("attention = %q, want %q", got, want)
+	}
+}
+
 func TestWaitingIssueSaysHowLongAndWhichPullRequest(t *testing.T) {
 	handedBack := issue(7)
 	handedBack.OpenPRs = map[int]backlog.PR{41: {}}
