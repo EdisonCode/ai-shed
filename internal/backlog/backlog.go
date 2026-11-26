@@ -69,7 +69,7 @@ type PR struct {
 	// checks pass, or waits in a merge queue.
 	AutoMerge bool
 	// NoCI is set when checks were reported on its head and every one was
-	// skipped or cancelled: its CI did not run on it, as when its last
+	// skipped or canceled: its CI did not run on it, as when its last
 	// commit came while it was a draft that CI skips.
 	NoCI bool
 	// Head is the pull request's head commit.
@@ -597,7 +597,7 @@ func problemAt(checks []check) time.Time {
 }
 
 // noCI reports whether checks were reported and every one was skipped or
-// cancelled: nothing ran.
+// canceled: nothing ran.
 func noCI(checks []check) bool {
 	for _, c := range checks {
 		if c.Conclusion != "SKIPPED" && c.Conclusion != "CANCELLED" {

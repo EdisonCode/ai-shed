@@ -24,7 +24,7 @@ not cross.
 ## Acceptance
 
 - [ ] One check per line that a worker can run or show.
-- [ ] For each, what must fail when the behaviour is broken: the test that
+- [ ] For each, what must fail when the behavior is broken: the test that
       goes red, or the change that must make it go red.
 
 ## Out of scope

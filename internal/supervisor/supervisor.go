@@ -1788,7 +1788,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	if items, offered, reserve, err = s.withBackfill(ctx, w, items, taken, checkins); err != nil {
 		return nil, err
 	}
-	// A backfill issue is in no labelled source, so applyHolds needs it
+	// A backfill issue is in no labeled source, so applyHolds needs it
 	// beside them to hold it as it holds queued work.
 	s.applyHolds(w, items, append(slices.Clone(open), offered...), elsewhere, checkins)
 	s.applyGoalModes(w, items, append(slices.Clone(open), offered...), modes, checkins)
@@ -1874,7 +1874,7 @@ func (s *Supervisor) item(i backlog.Issue, src config.IssueSource, checkins []ru
 	case backlog.VerifyPending:
 		item.Blocked = fmt.Sprintf("pull request #%d waits for its checks, then for a verifier", v.PR)
 		if i.OpenPRs[v.PR].NoCI {
-			item.Blocked = fmt.Sprintf("pull request #%d has no CI on its head: every check was skipped or cancelled, and the supervisor starts them again", v.PR)
+			item.Blocked = fmt.Sprintf("pull request #%d has no CI on its head: every check was skipped or canceled, and the supervisor starts them again", v.PR)
 		}
 	case backlog.VerifyDue:
 		item.Blocked = fmt.Sprintf("pull request #%d waits for a verifier", v.PR)
@@ -1984,7 +1984,7 @@ func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []
 				skipped.add("its work is merged", i.Number)
 				continue
 			case label >= 0:
-				skipped.add(fmt.Sprintf("labelled %s, a queue of the fleet", i.LabelNames()[label]), i.Number)
+				skipped.add(fmt.Sprintf("labeled %s, a queue of the fleet", i.LabelNames()[label]), i.Number)
 				continue
 			case !w.Crew && backlog.ReleasedForCrew(i):
 				skipped.add("released for its goal's crew", i.Number)
@@ -1996,7 +1996,7 @@ func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []
 				continue
 			}
 			item.Backfill, item.claim = true, s.Machine.ClaimLabel(w, i.Repo)
-			// A labelled backfill source is a pool: what is taken leaves it.
+			// A labeled backfill source is a pool: what is taken leaves it.
 			item.unclaim, item.ReleasedBy = src.Label, backlog.ReleasedBy(i)
 			items = append(items, item)
 			offered = append(offered, i)

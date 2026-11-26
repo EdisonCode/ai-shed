@@ -278,13 +278,13 @@ func TestCancelRemovesOnlyATaskThatStillWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for id, want := range map[string]string{"t1": TaskCancelled, "t2": TaskTaken, "t3": TaskAbsent} {
+	for id, want := range map[string]string{"t1": TaskCanceled, "t2": TaskTaken, "t3": TaskAbsent} {
 		if got, err := CancelTask(ctx, r, here, id); err != nil || got != want {
 			t.Errorf("cancel %s = %q, %v; want %q", id, got, err, want)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(tasks, "_any/t1.md")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the cancelled task is still on the machine: %v", err)
+		t.Errorf("the canceled task is still on the machine: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasks, "_taken/t2.md")); err != nil {
 		t.Errorf("a task in a worker's hands was removed: %v", err)

@@ -19,7 +19,7 @@ func TestPlainMarksTheGreyedSuggestionAndNothingElse(t *testing.T) {
 	want := "  Ready for the supervisor to name the issue.\n\n" +
 		"✻ Cogitated for 21s · done 1:29 PM\n\n" +
 		"────────\n" +
-		"❯ [greyed out: Your issue is #128: apply the owner ruling]\n" +
+		"❯ [grayed out: Your issue is #128: apply the owner ruling]\n" +
 		"────────\n" +
 		"  ⏵⏵ auto mode on (shift+tab to cycle) · PR #131 · ← for agents\n"
 	if got := plain(idleWithSuggestion); got != want {
@@ -30,14 +30,14 @@ func TestPlainMarksTheGreyedSuggestionAndNothingElse(t *testing.T) {
 func TestPlain(t *testing.T) {
 	cases := []struct{ name, styled, want string }{
 		{"no styles", "❯ hello\n", "❯ hello\n"},
-		{"faint ended by 22", "a \x1b[2mhint\x1b[22m b", "a [greyed out: hint] b"},
-		{"faint ended by a bare reset", "\x1b[2mhint\x1b[mdone", "[greyed out: hint]done"},
-		{"faint combined with a colour", "\x1b[2;38;5;246mhint\x1b[0m", "[greyed out: hint]"},
-		{"colour number 2 is not faint", "\x1b[38;5;2mgreen\x1b[39m", "green"},
-		{"true colour with a 2 in it is not faint", "\x1b[38;2;2;2;2mdark\x1b[39m", "dark"},
-		{"a faint span ends with its line", "\x1b[2mone\ntwo\x1b[0m", "[greyed out: one]\n[greyed out: two]"},
+		{"faint ended by 22", "a \x1b[2mhint\x1b[22m b", "a [grayed out: hint] b"},
+		{"faint ended by a bare reset", "\x1b[2mhint\x1b[mdone", "[grayed out: hint]done"},
+		{"faint combined with a color", "\x1b[2;38;5;246mhint\x1b[0m", "[grayed out: hint]"},
+		{"color number 2 is not faint", "\x1b[38;5;2mgreen\x1b[39m", "green"},
+		{"true color with a 2 in it is not faint", "\x1b[38;2;2;2;2mdark\x1b[39m", "dark"},
+		{"a faint span ends with its line", "\x1b[2mone\ntwo\x1b[0m", "[grayed out: one]\n[grayed out: two]"},
 		{"faint spaces are left alone", "a\x1b[2m   \x1b[0mb", "a   b"},
-		{"the span's own spacing stays outside the marker", "\x1b[2m  hint \x1b[0m", "  [greyed out: hint] "},
+		{"the span's own spacing stays outside the marker", "\x1b[2m  hint \x1b[0m", "  [grayed out: hint] "},
 		{"cursor and erase sequences are removed", "\x1b[2Kline\x1b[1;1H", "line"},
 		{"a hyperlink keeps its text", "\x1b]8;;https://x.test\x07link\x1b]8;;\x07", "link"},
 		{"a cut-off sequence does not break it", "text\x1b[38;5", "text"},

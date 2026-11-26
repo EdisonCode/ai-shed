@@ -23,7 +23,7 @@ func TestTheEyeChecksDoneOnAnIssueAreCountedInOrder(t *testing.T) {
 		firstPass bool
 	}{
 		{"passed on the first look", comments(ask, "Eyes checked: fine"), 1, true},
-		{"failed, then passed", comments(ask, "Eyes failed: the button is grey", ask, "Eyes checked"), 2, false},
+		{"failed, then passed", comments(ask, "Eyes failed: the button is gray", ask, "Eyes checked"), 2, false},
 		{"asked and not looked at", comments(ask), 0, false},
 		{"an answer with no ask", comments("Eyes checked"), 0, false},
 	} {

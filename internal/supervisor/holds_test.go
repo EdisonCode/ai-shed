@@ -250,7 +250,7 @@ func TestTheKeptQueueSaysWhatTheReserveOfferedAndWhatItLeftOut(t *testing.T) {
 	withBackfill(f, asksADecision(12, t0.Add(-time.Hour)))
 	f.tick(2 * time.Minute)
 	v := keptQueue(t, f, "app")
-	if want := "listed: 2 issue(s) offered; left out: 1 labelled machine:other, a queue of the fleet (#52)"; v.Reserve != want {
+	if want := "listed: 2 issue(s) offered; left out: 1 labeled machine:other, a queue of the fleet (#52)"; v.Reserve != want {
 		t.Fatalf("reserve = %q, want %q", v.Reserve, want)
 	}
 	for _, e := range v.Items {

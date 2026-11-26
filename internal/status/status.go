@@ -1257,7 +1257,7 @@ func verifyState(issue backlog.Issue, signals []config.Signal) string {
 	switch v := backlog.Verification(issue, signals); v.State {
 	case backlog.VerifyPending:
 		if issue.OpenPRs[v.PR].NoCI {
-			return fmt.Sprintf("no CI on head: every check of pull request #%d was skipped or cancelled; its supervisor starts them again", v.PR)
+			return fmt.Sprintf("no CI on head: every check of pull request #%d was skipped or canceled; its supervisor starts them again", v.PR)
 		}
 		return fmt.Sprintf("pull request #%d waits for its checks", v.PR)
 	case backlog.VerifyDue:
