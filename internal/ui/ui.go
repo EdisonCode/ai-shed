@@ -112,11 +112,7 @@ func (s *Server) refresh(ctx context.Context) {
 	for _, m := range r.Machines {
 		snap.NeedsYou += len(m.Attention)
 	}
-	for _, repo := range r.Repos {
-		for _, a := range repo.Attention() {
-			snap.RepoAttention = append(snap.RepoAttention, repo.Repo+": "+a)
-		}
-	}
+	snap.RepoAttention = status.RepoAttention(r)
 	snap.NeedsYou += len(snap.RepoAttention)
 	s.mu.Lock()
 	if s.snap != nil {
@@ -148,7 +144,9 @@ func (s *Server) actions(r status.Report, deck *status.Digest) []Action {
 // with the latest report.
 func (s *Server) readDeck(ctx context.Context, r status.Report) {
 	d := s.Digest(ctx, r)
-	d.Report = status.Report{}
+	// What the deck read from the report is the snapshot's to show, from
+	// the current report.
+	d.Report, d.Waiting, d.RepoAttention = status.Report{}, nil, nil
 	s.mu.Lock()
 	s.reading = false
 	s.deckAt = time.Now()
