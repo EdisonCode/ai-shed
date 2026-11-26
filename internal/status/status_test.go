@@ -264,6 +264,32 @@ func TestIssueListFailureNeedsOwner(t *testing.T) {
 	wantAttention(t, c.Collect(context.Background(), oneMachine())[0], "cannot list issues: gh: not logged in")
 }
 
+func TestIssuesWhosePullRequestsCouldNotBeReadAreListedWithOneLineSayingSo(t *testing.T) {
+	unread := "gh pr list org/app: exit status 1: GraphQL: timeout"
+	a, b := issue(12), issue(13)
+	a.PRsUnread, b.PRsUnread = unread, unread
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{a, b}}}
+
+	m := c.Collect(context.Background(), oneMachine())[0]
+
+	if len(m.Issues) != 2 {
+		t.Fatalf("issues = %+v, want both listed", m.Issues)
+	}
+	want := "org/app: " + backlog.PRsUnreadWords + ": " + unread
+	n := 0
+	for _, line := range m.Attention {
+		if strings.Contains(line, "cannot read the pull requests") {
+			n++
+			if line != want {
+				t.Fatalf("line = %q, want %q", line, want)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("attention = %q, want one line for the repository", m.Attention)
+	}
+}
+
 func TestRenderSummarizesWhatNeedsTheOwner(t *testing.T) {
 	res := healthy()
 	res.Checks = []probe.CheckResult{{Name: "claude"}}

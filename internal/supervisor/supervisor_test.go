@@ -3299,3 +3299,26 @@ func TestAWorkerWhoseQueueGitHubRateLimitsIsNotPausedAsLimited(t *testing.T) {
 		t.Fatalf("reason = %q", c.Reason)
 	}
 }
+
+func TestAnIdleWorkerIsHandedAnIssueWhenThePullRequestsCannotBeRead(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(12))
+	var logs []string
+	f.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	f.lister.issues[0].PRsUnread = "gh pr list org/app: GraphQL: timeout"
+
+	f.tick(2 * time.Minute)
+	f.tick(time.Minute)
+
+	if !slices.Equal(f.term.sent, []string{"Take the next issue."}) {
+		t.Fatalf("sent = %q, want the issue handed out", f.term.sent)
+	}
+	unread := 0
+	for _, l := range logs {
+		if strings.Contains(l, backlog.PRsUnreadWords) {
+			unread++
+		}
+	}
+	if unread != 1 {
+		t.Fatalf("logs = %q, want the unread pull requests logged once", logs)
+	}
+}

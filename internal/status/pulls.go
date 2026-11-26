@@ -29,7 +29,8 @@ type OpenPulls struct {
 	// Uncovered are the open pull requests whose closing issues are in no
 	// machine's queue, or that close no issue. No worker is sent to them.
 	Uncovered []LoosePull `json:"uncovered"`
-	// StaleDrafts are the drafts with no commit for 48 hours.
+	// StaleDrafts are the drafts with no push, comment or review for 48
+	// hours.
 	StaleDrafts []LoosePull `json:"stale_drafts"`
 	// Problems lists the repositories whose pull requests could not be read.
 	Problems []string `json:"problems,omitempty"`
@@ -43,8 +44,9 @@ type LoosePull struct {
 	Opened time.Time `json:"opened"`
 	CI     string    `json:"ci"`
 	Draft  bool      `json:"draft,omitempty"`
-	// LastCommit is when its latest commit was made, or when it was opened
-	// if GitHub listed no commit.
+	// LastCommit is when it last changed (a push, a comment, a review), or
+	// when it was opened if GitHub gave no time. The name is kept for the
+	// JSON readers it has.
 	LastCommit time.Time `json:"last_commit"`
 	// Why says why no queue covers it.
 	Why string `json:"why,omitempty"`
@@ -177,7 +179,7 @@ func renderPulls(w io.Writer, p *OpenPulls, now time.Time) {
 		tw.Flush()
 	}
 	if len(p.StaleDrafts) > 0 {
-		fmt.Fprintf(w, "Drafts with no commit for 48h: %d\n", len(p.StaleDrafts))
+		fmt.Fprintf(w, "Drafts quiet for 48h: %d\n", len(p.StaleDrafts))
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		for _, lp := range p.StaleDrafts {
 			hold := lp.Hold
