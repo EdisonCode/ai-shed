@@ -72,7 +72,20 @@ and looked at. A goal's place is the mean of its issues', a closed issue at
 the bottom of the far side; a dot's size is its open issues. Right-click a
 goal's card or its dot to **Focus: finish this goal first**, **Table this
 goal**, or take either back, as `shed goal` does. A goal in focus is
-listed first, and a tabled one last.
+listed first, and a tabled one last. The same menu changes a goal's label
+in each repository where it has issues, and says first how many issues
+change:
+- **End this goal** takes the label off its open issues: it stops counting
+  as a goal and its card goes away. No issue is closed, and closed issues
+  keep the label.
+- **Rename this goal…** renames the label (it must keep the `goal_labels`
+  prefix). It refuses a name a repository already has: merge instead.
+- **Merge into <goal>** moves every issue of the goal, closed ones too, to
+  the other, then deletes the old label. Where the other label does not
+  exist yet, the old one is renamed.
+
+A focus or table moves with a renamed or merged goal, and ends with an
+ended one.
 
 **Quick answers.** Needs you opens with the answers a worker teed up, each
 with what the worker wrote under its ask:

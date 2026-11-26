@@ -80,8 +80,10 @@ type Server struct {
 	// that a page must send with one. Either empty turns actions off.
 	Commenter Commenter
 	Token     string
-	// Labeler takes an issue off a queue; nil leaves that action out.
-	Labeler Labeler
+	// Labeler takes an issue off a queue, and GoalLabels ends, renames and
+	// merges goals; nil leaves those actions out.
+	Labeler    Labeler
+	GoalLabels GoalLabels
 
 	mu      sync.Mutex
 	latest  []byte
@@ -140,7 +142,11 @@ func (s *Server) actions(r status.Report, deck *status.Digest) []Action {
 		return nil
 	}
 	out := append(actionsFor(r, s.signals()), goalActions(r, deck)...)
-	return append(out, cardActions(r, s.Config, s.signals(), s.Labeler != nil)...)
+	out = append(out, cardActions(r, s.Config, s.signals(), s.Labeler != nil)...)
+	if s.GoalLabels != nil {
+		out = append(out, goalLabelActions(r, deck)...)
+	}
+	return out
 }
 
 // readDeck reads the deck from a report and sends it to every open page

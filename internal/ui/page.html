@@ -394,7 +394,7 @@ function renderHill(snap, goals, modes) {
 // or clear either, on every machine.
 function goalMenu(e, label) {
   const all = (last && last.actions) || [];
-  const mine = all.filter(a => a.kind === "goal" && a.goal === label);
+  const mine = all.filter(a => a.goal === label);
   const items = mine.map(a => [a.label, null, () => confirmAction(a), a.warn ? "check it first" : ""]);
   // Without actions (the page is not on loopback), the commands to copy.
   if (!all.length) items.push(["Focus: finish this goal first", "shed goal focus " + label], ["Table this goal", "shed goal table " + label], ["Clear its focus or table", "shed goal clear " + label]);
@@ -538,22 +538,25 @@ function confirmAction(a) {
   const close = () => c.remove();
   const doLabel = a.comment ? "Post on GitHub" : a.label;
   const post = el("button", { class: "post" + (a.warn ? " risky" : "") }, doLabel);
+  // An action that needs a name (a goal's new label) starts from the old one.
+  const name = a.ask ? el("input", { type: "text", value: a.goal || "", style: "display:block;width:100%;margin:6px 0" }) : null;
   const c = el("div", { class: "confirm", onclick: e => { if (e.target === c) close(); } },
     el("div", { class: "box" },
-      el("h3", {}, a.label + " · " + (a.kind === "goal" ? goalName(a.goal) : short(a.repo) + "#" + a.number)),
+      el("h3", {}, a.label + " · " + (a.goal ? goalName(a.goal) : short(a.repo) + "#" + a.number)),
       a.context ? el("div", {}, el("div", { class: "meta" }, a.for ? "Why it waits" : "What it answers"), el("pre", {}, a.context)) : null,
       a.warn ? el("div", { class: "warn" }, a.warn) : null,
       a.comment ? el("div", {}, el("div", { class: "meta" }, "Posts this comment as you"), el("pre", {}, a.comment)) : el("div", { class: "does" }, a.does || ""),
+      a.ask ? el("label", { class: "meta" }, a.ask, name) : null,
       el("div", { class: "row2" }, el("button", { onclick: close }, "Cancel"), post)));
   post.addEventListener("click", async () => {
     post.disabled = true;
     post.textContent = "Posting…";
     try {
-      const r = await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json", "X-Shed-Token": token }, body: JSON.stringify({ id: a.id }) });
+      const r = await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json", "X-Shed-Token": token }, body: JSON.stringify({ id: a.id, name: name ? name.value : "" }) });
       const text = await r.text();
       if (!r.ok) throw new Error(text.trim());
       close();
-      toast(a.comment ? "Posted on " + short(a.repo) + "#" + a.number + ": " + a.comment : a.label + ": done" + (a.kind === "goal" ? ". The machines apply it at their next check-in; the page shows it after its next read." : ""));
+      toast(a.comment ? "Posted on " + short(a.repo) + "#" + a.number + ": " + a.comment : a.label + ": done" + (a.goal ? ". The page shows it after its next read." : ""));
     } catch (e) {
       post.disabled = false;
       post.textContent = doLabel;

@@ -300,3 +300,96 @@ func TestAPauseAndARecycleFromACardReachTheMachine(t *testing.T) {
 		t.Fatalf("commands = %q, want a pause and a recycle on box", r.commands)
 	}
 }
+
+type fakeGoalLabels struct {
+	fakeLabeler
+	labeled map[string][]int // by repo and label, as "org/app goal: a"
+	has     map[string]bool
+	done    []string
+}
+
+func (f *fakeGoalLabels) Labeled(_ context.Context, repo, label string, closedToo bool) ([]int, error) {
+	f.done = append(f.done, fmt.Sprintf("list %s %s all=%v", repo, label, closedToo))
+	return f.labeled[repo+" "+label], nil
+}
+func (f *fakeGoalLabels) HasLabel(_ context.Context, repo, label string) (bool, error) {
+	return f.has[repo+" "+label], nil
+}
+func (f *fakeGoalLabels) RenameLabel(_ context.Context, repo, from, to string) error {
+	f.done = append(f.done, fmt.Sprintf("rename %s %s -> %s", repo, from, to))
+	return nil
+}
+func (f *fakeGoalLabels) DeleteLabel(_ context.Context, repo, label string) error {
+	f.done = append(f.done, fmt.Sprintf("delete %s %s", repo, label))
+	return nil
+}
+
+func goalDeck() *status.Digest {
+	return &status.Digest{Goals: []status.GoalProgress{
+		{Repo: "org/app", Label: "goal: a", Total: 5, Pace: backlog.Pace{Open: 2}},
+		{Repo: "org/api", Label: "goal: a", Total: 3, Pace: backlog.Pace{Open: 1}},
+		{Repo: "org/app", Label: "goal: b", Total: 4, Pace: backlog.Pace{Open: 4}},
+	}}
+}
+
+func goalAction(t *testing.T, id string) Action {
+	t.Helper()
+	for _, a := range goalLabelActions(status.Report{}, goalDeck()) {
+		if a.ID == id {
+			return a
+		}
+	}
+	t.Fatalf("no action %s", id)
+	return Action{}
+}
+
+func TestEndingAGoalSaysHowManyOpenIssuesChangeAndTakesItsLabelOffThem(t *testing.T) {
+	a := goalAction(t, "goal-end:goal: a")
+	if !strings.Contains(a.Warn, "3 open issue(s) in 2 repositories") {
+		t.Fatalf("warn = %q", a.Warn)
+	}
+	g := &fakeGoalLabels{labeled: map[string][]int{"org/app goal: a": {4, 7}, "org/api goal: a": {2}}}
+	s := &Server{GoalLabels: g}
+	if err := s.do(context.Background(), a, ""); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"org/app#4 + -goal: a", "org/app#7 + -goal: a", "org/api#2 + -goal: a"}; strings.Join(g.changed, ";") != strings.Join(want, ";") {
+		t.Fatalf("changed = %q, want %q", g.changed, want)
+	}
+}
+
+func TestMergingAGoalRenamesWhereTheOtherIsMissingAndMovesTheIssuesWhereItIsThere(t *testing.T) {
+	g := &fakeGoalLabels{labeled: map[string][]int{"org/app goal: a": {4}}, has: map[string]bool{"org/app goal: b": true}}
+	s := &Server{GoalLabels: g}
+	if err := s.do(context.Background(), goalAction(t, "goal-merge:goal: a:goal: b"), ""); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"list org/app goal: a all=true", "delete org/app goal: a", "rename org/api goal: a -> goal: b"}
+	if strings.Join(g.done, ";") != strings.Join(want, ";") || len(g.changed) != 1 || g.changed[0] != "org/app#4 +goal: b -goal: a" {
+		t.Fatalf("done = %q, changed = %q", g.done, g.changed)
+	}
+}
+
+func TestARenameKeepsTheGoalPrefixAndRefusesALabelThatIsThere(t *testing.T) {
+	g := &fakeGoalLabels{has: map[string]bool{"org/api goal: taken": true}}
+	s := &Server{GoalLabels: g, Config: &config.Config{Supervisor: config.Supervisor{GoalLabels: "goal:"}}}
+	a := goalAction(t, "goal-rename:goal: a")
+	for name, want := range map[string]string{
+		"exports":     "does not start with the goal prefix",
+		"goal: taken": "already has the label",
+		"goal: a":     "give a new name",
+	} {
+		if err := s.do(context.Background(), a, name); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", name, err, want)
+		}
+	}
+	if len(g.done) != 0 {
+		t.Fatalf("refused renames changed labels: %q", g.done)
+	}
+	if err := s.do(context.Background(), a, "goal: exports"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"rename org/app goal: a -> goal: exports", "rename org/api goal: a -> goal: exports"}; strings.Join(g.done, ";") != strings.Join(want, ";") {
+		t.Fatalf("done = %q", g.done)
+	}
+}
