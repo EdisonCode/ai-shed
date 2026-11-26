@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/edisoncode/ai-shed/internal/config"
@@ -69,6 +71,51 @@ func HookWarnings(home string, w config.Worker) []string {
 		warnings = append(warnings, "the worker has peers, but no PostToolUseFailure hook on SendMessage runs `shed mark message`: a message that cannot reach a peer is not recorded, so a peer whose Remote Control is down goes unflagged (see the README)")
 	}
 	return warnings
+}
+
+// PermissionRules reads the permission rules of the Claude Code settings a
+// worker's session loads, each as "allow <rule>", "ask <rule>" or "deny
+// <rule>", sorted and once each. Another tool's settings are not read. Only
+// the rules' text is read: they are the owner's to compare across machines.
+func PermissionRules(home string, w config.Worker) ([]string, error) {
+	fields := strings.Fields(w.CommandOrDefault())
+	if len(fields) == 0 || filepath.Base(fields[0]) != "claude" {
+		return nil, nil
+	}
+	dir := w.Dir
+	if rest, ok := strings.CutPrefix(dir, "~/"); ok {
+		dir = filepath.Join(home, rest)
+	}
+	seen := map[string]bool{}
+	for _, path := range []string{
+		filepath.Join(home, ".claude", "settings.json"),
+		filepath.Join(dir, ".claude", "settings.json"),
+		filepath.Join(dir, ".claude", "settings.local.json"),
+	} {
+		data, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read the permission rules in %s: %w", path, err)
+		}
+		var settings struct {
+			Permissions struct {
+				Allow []string `json:"allow"`
+				Ask   []string `json:"ask"`
+				Deny  []string `json:"deny"`
+			} `json:"permissions"`
+		}
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return nil, fmt.Errorf("read the permission rules in %s: %w", path, err)
+		}
+		for kind, rules := range map[string][]string{"allow": settings.Permissions.Allow, "ask": settings.Permissions.Ask, "deny": settings.Permissions.Deny} {
+			for _, r := range rules {
+				seen[kind+" "+r] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // readHooks returns the commands of a settings file's hooks, by event. A

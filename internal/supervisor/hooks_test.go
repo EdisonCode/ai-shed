@@ -54,6 +54,25 @@ func TestStateHooksWithoutThePermissionDeniedHookLeaveRefusalsUnrecorded(t *test
 	}
 }
 
+func TestPermissionRulesAreReadFromEverySettingsFileTheWorkerLoads(t *testing.T) {
+	home, dir := t.TempDir(), t.TempDir()
+	writeSettings(t, home, "settings.json", `{"permissions": {"allow": ["Bash(gh pr ready:*)", "Bash(gh issue comment:*)"], "deny": ["Bash(rm -rf:*)"]}}`)
+	writeSettings(t, dir, "settings.local.json", `{"permissions": {"allow": ["Bash(gh pr ready:*)"], "ask": ["Bash(git push --force:*)"]}}`)
+	got, err := PermissionRules(home, config.Worker{Name: "app", Dir: dir})
+	want := []string{"allow Bash(gh issue comment:*)", "allow Bash(gh pr ready:*)", "ask Bash(git push --force:*)", "deny Bash(rm -rf:*)"}
+	if err != nil || strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("rules = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestAnotherToolsPermissionRulesAreNotRead(t *testing.T) {
+	home, dir := t.TempDir(), t.TempDir()
+	writeSettings(t, home, "settings.json", `{"permissions": {"allow": ["Bash(gh pr ready:*)"]}}`)
+	if got, err := PermissionRules(home, config.Worker{Name: "app", Dir: dir, Command: "codex"}); err != nil || len(got) != 0 {
+		t.Fatalf("rules = %q, %v", got, err)
+	}
+}
+
 func TestSubagentHookInTheWorkersOwnSettingsIsFound(t *testing.T) {
 	home, dir := t.TempDir(), t.TempDir()
 	writeSettings(t, home, "settings.json", stateHooks)
