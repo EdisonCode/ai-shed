@@ -36,9 +36,10 @@ func cmdUI(args []string) int {
 	// with a token of this run's.
 	var commenter ui.Commenter
 	var labeler ui.Labeler
+	var goalLabels ui.GoalLabels
 	token := ""
 	if ui.Loopback(*listen) {
-		commenter, labeler = backlog.GH{}, backlog.GH{}
+		commenter, labeler, goalLabels = backlog.GH{}, backlog.GH{}, backlog.GH{}
 		if token, err = ui.NewToken(); err != nil {
 			return fail(err)
 		}
@@ -64,10 +65,11 @@ func cmdUI(args []string) int {
 			now := time.Now()
 			return deck.DigestFrom(ctx, cfg, looks.GH{}, r, now.Add(-24*time.Hour), now)
 		},
-		DeckEvery: *deckEvery,
-		Commenter: commenter,
-		Labeler:   labeler,
-		Token:     token,
+		DeckEvery:  *deckEvery,
+		Commenter:  commenter,
+		Labeler:    labeler,
+		GoalLabels: goalLabels,
+		Token:      token,
 	}
 	go srv.Run(ctx)
 

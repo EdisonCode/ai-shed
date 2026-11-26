@@ -385,6 +385,63 @@ func (GH) Relabel(ctx context.Context, repo string, number int, add, remove stri
 	return nil
 }
 
+// Labeled lists the numbers of the repository's issues with the label: the
+// open ones, or every one when closedToo is set.
+func (GH) Labeled(ctx context.Context, repo, label string, closedToo bool) ([]int, error) {
+	state := "open"
+	if closedToo {
+		state = "all"
+	}
+	out, err := gh(ctx, "issue", "list", "--repo", repo, "--label", label, "--state", state, "--limit", "1000", "--json", "number")
+	if err != nil {
+		return nil, err
+	}
+	var issues []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return nil, fmt.Errorf("gh issue list %s --label %s: parse output: %w", repo, label, err)
+	}
+	numbers := make([]int, len(issues))
+	for n, i := range issues {
+		numbers[n] = i.Number
+	}
+	return numbers, nil
+}
+
+// HasLabel reports whether the repository has the label, in any case.
+func (GH) HasLabel(ctx context.Context, repo, label string) (bool, error) {
+	out, err := gh(ctx, "label", "list", "--repo", repo, "--search", label, "--limit", "100", "--json", "name")
+	if err != nil {
+		return false, err
+	}
+	var labels []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(out, &labels); err != nil {
+		return false, fmt.Errorf("gh label list %s: parse output: %w", repo, err)
+	}
+	for _, l := range labels {
+		if strings.EqualFold(l.Name, label) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// RenameLabel renames a label of the repository. Every issue that has it,
+// closed ones too, keeps it under the new name.
+func (GH) RenameLabel(ctx context.Context, repo, from, to string) error {
+	_, err := gh(ctx, "label", "edit", from, "--name", to, "--repo", repo)
+	return err
+}
+
+// DeleteLabel deletes a label of the repository, from every issue.
+func (GH) DeleteLabel(ctx context.Context, repo, label string) error {
+	_, err := gh(ctx, "label", "delete", label, "--yes", "--repo", repo)
+	return err
+}
+
 func openPRs(ctx context.Context, repo string) (map[int]PR, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000",
 		"--json", "number,headRefOid,mergeable,isDraft,statusCheckRollup,autoMergeRequest")

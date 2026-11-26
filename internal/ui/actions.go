@@ -61,6 +61,21 @@ type Action struct {
 	Worker string `json:"worker,omitempty"`
 	// Remove is the queue label a cancel takes off the issue.
 	Remove string `json:"remove,omitempty"`
+	// Into is the goal a merge moves the issues to, and Repos the
+	// repositories a goal's labels are changed in.
+	Into  string   `json:"into,omitempty"`
+	Repos []string `json:"repos,omitempty"`
+	// Ask is set on an action that needs a name from the owner.
+	Ask string `json:"ask,omitempty"`
+}
+
+// GoalLabels changes a goal's labels across a repository, as the owner.
+type GoalLabels interface {
+	Labeler
+	Labeled(ctx context.Context, repo, label string, closedToo bool) ([]int, error)
+	HasLabel(ctx context.Context, repo, label string) (bool, error)
+	RenameLabel(ctx context.Context, repo, from, to string) error
+	DeleteLabel(ctx context.Context, repo, label string) error
 }
 
 // Labeler changes an issue's labels, as the owner.
@@ -70,18 +85,160 @@ type Labeler interface {
 
 // Action kinds.
 const (
-	ActAccept   = "accept"   // accept the recommendation of a decision
-	ActReady    = "ready"    // say an issue that was not ready is ready now
-	ActEyes     = "eyes"     // say an eye check passed
-	ActUndepend = "undepend" // end a dependency the issue's text named
-	ActBump     = "bump"     // put a queued issue first in its queue
-	ActUnbump   = "unbump"   // put a bumped issue back in its place
-	ActGoal     = "goal"     // focus on a goal, table it, or clear either
-	ActPause    = "pause"    // pause the machine a card's issue is queued on
-	ActRecycle  = "recycle"  // give the worker on a card a fresh session
-	ActReshape  = "reshape"  // send an issue back to the owner as too big
-	ActCancel   = "cancel"   // take an issue off a machine's queue
+	ActAccept   = "accept"      // accept the recommendation of a decision
+	ActReady    = "ready"       // say an issue that was not ready is ready now
+	ActEyes     = "eyes"        // say an eye check passed
+	ActUndepend = "undepend"    // end a dependency the issue's text named
+	ActBump     = "bump"        // put a queued issue first in its queue
+	ActUnbump   = "unbump"      // put a bumped issue back in its place
+	ActGoal     = "goal"        // focus on a goal, table it, or clear either
+	ActPause    = "pause"       // pause the machine a card's issue is queued on
+	ActRecycle  = "recycle"     // give the worker on a card a fresh session
+	ActReshape  = "reshape"     // send an issue back to the owner as too big
+	ActCancel   = "cancel"      // take an issue off a machine's queue
+	ActGoalEnd  = "goal-end"    // take a goal's label off its open issues
+	ActRename   = "goal-rename" // rename a goal's label in each repository
+	ActMerge    = "goal-merge"  // move a goal's issues to another goal
 )
+
+// goalLabelActions works out what the owner can do with each goal's label:
+// end the goal, rename it, or merge it into another. They need the deck's
+// counts, to say first how many issues change.
+func goalLabelActions(r status.Report, deck *status.Digest) []Action {
+	if deck == nil {
+		return nil
+	}
+	modes := map[string]string{}
+	for _, m := range r.Machines {
+		if m.Probe != nil {
+			maps.Copy(modes, m.Probe.Goals)
+		}
+	}
+	type counts struct {
+		repos       []string
+		open, total int
+	}
+	byLabel := map[string]*counts{}
+	for _, g := range deck.Goals {
+		c := byLabel[g.Label]
+		if c == nil {
+			c = &counts{}
+			byLabel[g.Label] = c
+		}
+		c.repos = append(c.repos, g.Repo)
+		c.open += g.Pace.Open
+		c.total += g.Total
+	}
+	labels := slices.Sorted(maps.Keys(byLabel))
+	var out []Action
+	for _, label := range labels {
+		c := byLabel[label]
+		where := fmt.Sprintf("%d repositor%s (%s)", len(c.repos), map[bool]string{true: "y", false: "ies"}[len(c.repos) == 1], strings.Join(c.repos, ", "))
+		out = append(out, Action{ID: ActGoalEnd + ":" + label, Kind: ActGoalEnd, Label: "End this goal", Goal: label, Mode: modes[label], Repos: c.repos,
+			Does: fmt.Sprintf("Takes %s off its %d open issue(s) in %s: it stops counting as a goal and its card goes away. No issue is closed, and closed issues keep the label.", label, c.open, where),
+			Warn: fmt.Sprintf("Relabels %d open issue(s) in %s.", c.open, where)})
+		out = append(out, Action{ID: ActRename + ":" + label, Kind: ActRename, Label: "Rename this goal…", Goal: label, Mode: modes[label], Repos: c.repos,
+			Ask:  "The new label, with the goal prefix",
+			Does: fmt.Sprintf("Renames the label %s in %s: all %d of its issues, closed ones too, keep it under the new name.", label, where, c.total)})
+		for _, into := range labels {
+			if into == label {
+				continue
+			}
+			out = append(out, Action{ID: ActMerge + ":" + label + ":" + into, Kind: ActMerge, Label: "Merge into " + into, Goal: label, Into: into, Mode: modes[label], Repos: c.repos,
+				Does: fmt.Sprintf("Moves all %d issue(s) of %s, closed ones too, to %s in %s, then deletes the label %s there. For one outcome that ended up under two labels.", c.total, label, into, where, label),
+				Warn: fmt.Sprintf("Relabels %d issue(s) in %s and deletes a label: the page cannot undo it.", c.total, where)})
+		}
+	}
+	return out
+}
+
+// goalName checks a new goal label from the owner: it has the goal prefix,
+// fits a label, and is not the old one.
+func goalName(name, prefix, old string) (string, error) {
+	name = strings.TrimSpace(name)
+	switch {
+	case name == "" || name == old:
+		return "", fmt.Errorf("give a new name for %s", old)
+	case prefix != "" && !strings.HasPrefix(name, prefix):
+		return "", fmt.Errorf("%q does not start with the goal prefix %q, so it would not count as a goal", name, prefix)
+	case len(name) > 50 || strings.ContainsAny(name, ",\r\n\""):
+		return "", fmt.Errorf("%q is not a label: at most 50 characters, with no comma, quote or line break", name)
+	}
+	return name, nil
+}
+
+// doGoalLabels ends, renames or merges a goal, repository by repository, and
+// moves its focus or table to its new label.
+func (s *Server) doGoalLabels(ctx context.Context, a Action, name string) error {
+	if s.GoalLabels == nil {
+		return fmt.Errorf("the page cannot change labels")
+	}
+	g := s.GoalLabels
+	to := a.Into
+	if a.Kind == ActRename {
+		prefix := ""
+		if s.Config != nil {
+			prefix = s.Config.Supervisor.GoalLabels
+		}
+		var err error
+		if to, err = goalName(name, prefix, a.Goal); err != nil {
+			return err
+		}
+		for _, repo := range a.Repos {
+			if has, err := g.HasLabel(ctx, repo, to); err != nil {
+				return err
+			} else if has {
+				return fmt.Errorf("%s already has the label %s: merge into it instead", repo, to)
+			}
+		}
+	}
+	for _, repo := range a.Repos {
+		var err error
+		switch a.Kind {
+		case ActGoalEnd:
+			err = relabelAll(ctx, g, repo, a.Goal, "", false)
+		case ActRename:
+			err = g.RenameLabel(ctx, repo, a.Goal, to)
+		case ActMerge:
+			var has bool
+			if has, err = g.HasLabel(ctx, repo, to); err == nil && !has {
+				err = g.RenameLabel(ctx, repo, a.Goal, to)
+			} else if err == nil {
+				if err = relabelAll(ctx, g, repo, a.Goal, to, true); err == nil {
+					err = g.DeleteLabel(ctx, repo, a.Goal)
+				}
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("%s: %w", repo, err)
+		}
+	}
+	if a.Mode == "" {
+		return nil
+	}
+	if to != "" {
+		if _, err := deploy.SetFleetGoalMode(ctx, s.Runner, s.Config, to, a.Mode); err != nil {
+			return err
+		}
+	}
+	_, err := deploy.SetFleetGoalMode(ctx, s.Runner, s.Config, a.Goal, "")
+	return err
+}
+
+// relabelAll moves the repository's issues with a label to another, or
+// takes it off them when to is empty.
+func relabelAll(ctx context.Context, g GoalLabels, repo, from, to string, closedToo bool) error {
+	numbers, err := g.Labeled(ctx, repo, from, closedToo)
+	if err != nil {
+		return err
+	}
+	for _, n := range numbers {
+		if err := g.Relabel(ctx, repo, n, to, from); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // cardPause is how long a pause from a card lasts, as shed pause's default.
 const cardPause = 30 * time.Minute
@@ -352,7 +509,8 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID string `json:"id"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		http.Error(w, "the request names no action", http.StatusBadRequest)
@@ -375,7 +533,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), askTimeout)
 	defer cancel()
-	if err := s.do(ctx, *found); err != nil {
+	if err := s.do(ctx, *found, req.Name); err != nil {
 		http.Error(w, fmt.Sprintf("%s on %s: %v", found.Label, found.target(), err), http.StatusBadGateway)
 		return
 	}
@@ -392,7 +550,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 
 // target names what an action acts on: its issue, or its goal.
 func (a Action) target() string {
-	if a.Kind == ActGoal {
+	if a.Goal != "" {
 		return a.Goal
 	}
 	return fmt.Sprintf("%s#%d", a.Repo, a.Number)
@@ -400,8 +558,10 @@ func (a Action) target() string {
 
 // do carries out an action: a comment through the owner's gh, or a bump on
 // the machine through the owner's ssh, as shed bump makes it.
-func (s *Server) do(ctx context.Context, a Action) error {
+func (s *Server) do(ctx context.Context, a Action, name string) error {
 	switch a.Kind {
+	case ActGoalEnd, ActRename, ActMerge:
+		return s.doGoalLabels(ctx, a, name)
 	case ActGoal:
 		_, err := deploy.SetFleetGoalMode(ctx, s.Runner, s.Config, a.Goal, a.Mode)
 		return err
@@ -449,6 +609,7 @@ func (s *Server) signals() []config.Signal {
 }
 
 var (
-	_ Commenter = backlog.GH{}
-	_ Labeler   = backlog.GH{}
+	_ Commenter  = backlog.GH{}
+	_ Labeler    = backlog.GH{}
+	_ GoalLabels = backlog.GH{}
 )
