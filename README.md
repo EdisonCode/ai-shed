@@ -1921,6 +1921,18 @@ could hold a secret. Then:
 
 With the state hooks set and this one missing, `shed deploy` says so.
 
+`shed deploy` also reads the tool permission rules each machine's workers
+load (`permissions.allow`, `ask` and `deny` in the same settings files) and,
+when it deploys two machines or more, lists each rule that some have and
+others lack:
+
+```
+Tool permission rules that not every machine has (...):
+  allow Bash(gh pr merge --auto:*): on box; not on mini
+```
+
+It reports the rules' text only. They are yours to change.
+
 ### Settings
 
 ```yaml

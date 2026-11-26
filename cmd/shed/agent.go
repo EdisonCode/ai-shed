@@ -88,13 +88,24 @@ func cmdDeploy(args []string) int {
 	ctx := context.Background()
 	runner := probe.ShellRunner{}
 	var ok, failed []string
+	rules := map[string][]string{}
 	for _, m := range machines {
-		if err := deployOne(ctx, runner, cfg, path, m, binaryFor, *preflight, *installAgent); err != nil {
+		machineRules, err := deployOne(ctx, runner, cfg, path, m, binaryFor, *preflight, *installAgent)
+		if machineRules != nil {
+			rules[m.Name] = machineRules
+		}
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", m.Name, err)
 			failed = append(failed, m.Name)
 			continue
 		}
 		ok = append(ok, m.Name)
+	}
+	if diffs := ruleDifferences(rules); len(diffs) > 0 {
+		fmt.Println("Tool permission rules that not every machine has (a worker on a machine without one is refused what another is allowed):")
+		for _, d := range diffs {
+			fmt.Println("  " + d)
+		}
 	}
 	// The last line says the outcome in full, for output that is cut or piped.
 	if len(failed) > 0 {
@@ -130,15 +141,17 @@ func binarySource(dist string) (func(platform string) (string, error), error) {
 	}, nil
 }
 
-func deployOne(ctx context.Context, runner probe.Runner, cfg *config.Config, path string, m config.Machine, binaryFor func(string) (string, error), preflight, installAgent bool) error {
+// deployOne deploys one machine, and returns the tool permission rules its
+// preflight read; nil when there was no preflight.
+func deployOne(ctx context.Context, runner probe.Runner, cfg *config.Config, path string, m config.Machine, binaryFor func(string) (string, error), preflight, installAgent bool) (rules []string, err error) {
 	unlock, err := deploy.Lock(ctx, runner, m)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer unlock()
 	res, err := deploy.Machine(ctx, runner, m, version, binaryFor, path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !res.BinaryInstalled {
 		// The agent loads a changed fleet file by itself.
@@ -146,7 +159,7 @@ func deployOne(ctx context.Context, runner probe.Runner, cfg *config.Config, pat
 	} else {
 		restarted, err := deploy.RestartAgent(ctx, runner, m, res.Platform)
 		if err != nil {
-			return err
+			return rules, err
 		}
 		fmt.Printf("%s: shed %s installed, fleet file sent", m.Name, version)
 		if restarted {
@@ -156,18 +169,18 @@ func deployOne(ctx context.Context, runner probe.Runner, cfg *config.Config, pat
 	}
 	// The hook runs only after a good copy: it adds to a deployed machine.
 	if err := deploy.Hook(ctx, cfg.Defaults.DeployHook, m, os.Stdout, os.Stderr); err != nil {
-		return err
+		return rules, err
 	}
 
 	notReady := 0
 	if preflight && len(m.Workers) > 0 {
-		if notReady, err = preflightMachine(ctx, runner, cfg, m); err != nil {
-			return err
+		if notReady, rules, err = preflightMachine(ctx, runner, cfg, m); err != nil {
+			return rules, err
 		}
 	}
 	installed, err := deploy.AgentInstalled(ctx, runner, m, res.Platform)
 	if err != nil {
-		return err
+		return rules, err
 	}
 	switch {
 	case installed:
@@ -179,7 +192,7 @@ func deployOne(ctx context.Context, runner probe.Runner, cfg *config.Config, pat
 	default:
 		note, err := deploy.InstallAgent(ctx, runner, m, res.Platform)
 		if err != nil {
-			return err
+			return rules, err
 		}
 		fmt.Printf("%s: agent service installed and started\n", m.Name)
 		if note != "" {
@@ -187,7 +200,7 @@ func deployOne(ctx context.Context, runner probe.Runner, cfg *config.Config, pat
 		}
 	}
 	if notReady > 0 {
-		return fmt.Errorf("%d worker(s) not ready", notReady)
+		return rules, fmt.Errorf("%d worker(s) not ready", notReady)
 	}
-	return nil
+	return rules, nil
 }
