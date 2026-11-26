@@ -179,6 +179,9 @@ type Supervisor struct {
 	// Cost posts the tokens an issue cost onto the pull request its hand-back
 	// named. Nil posts nothing.
 	Cost CostPoster
+	// Contracts writes on a goal's slice that a contract it uses changed;
+	// nil writes nothing.
+	Contracts Commenter
 	// Account is the account the machine shares, with its weekly budget;
 	// nil paces nothing.
 	Account *config.Account
@@ -612,6 +615,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 	}
 	s.shedQueue(ctx, s.Now())
 	s.shedCrewSlices(ctx, s.Now())
+	s.tellConsumers(ctx)
 }
 
 // paused reports whether the owner paused the machine. While it is paused
@@ -1786,6 +1790,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	s.applyGoalModes(w, items, append(slices.Clone(open), offered...), modes, checkins)
 	s.applyPace(w, items, checkins)
 	s.shareGoals(ctx, items, open)
+	s.markProviders(ctx, items, open, crewGoals)
 	sort.SliceStable(items, func(a, b int) bool {
 		x, y := items[a], items[b]
 		switch {
@@ -1808,6 +1813,10 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 			// The goals the owner focused on are finished before more
 			// are started.
 			return x.focus
+		case x.provides != y.provides:
+			// A slice that provides a contract goes before the slices
+			// that wait to use it.
+			return x.provides
 		case x.rank != y.rank:
 			return x.rank < y.rank
 		case x.goalDone != y.goalDone:

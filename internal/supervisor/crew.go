@@ -119,7 +119,7 @@ func briefText(issues []backlog.Issue) string {
 	}
 	brief := backlog.ParseGoalBrief(i)
 	var b strings.Builder
-	fmt.Fprintf(&b, "Goal brief: %s#%d. It is the crew's shared plan, and it outlives every session. Build your slice to it. When a contract must change, edit the brief and comment on it what changed and why, then message the crew-mates who use it: a message alone is lost when a session is cleared.\n", i.Repo, i.Number)
+	fmt.Fprintf(&b, "Goal brief: %s#%d. It is the crew's shared plan, and it outlives every session. Build your slice to it. When a contract must change, edit the brief and comment on it what changed and why, then message the crew-mates who use it: a message alone is lost when a session is cleared. A slice that provides a contract is built first. When shed writes %q on your slice, the contract changed under it: check your part, and say %q in your next hand-back.\n", i.Repo, i.Number, backlog.ContractChangedPhrase, backlog.ContractCheckedPhrase)
 	part := func(title string, entries []string) {
 		if len(entries) == 0 {
 			return
