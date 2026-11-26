@@ -366,6 +366,69 @@ Run this as a checklist and report each line.
    `ssh <host> tail -n 40 '~/.local/state/shed/checkins.jsonl'`. It shows each
    check-in, what was typed into the worker, and why.
 
+## Run a sitting
+
+A sitting is a session with the owner that works the fleet from one
+reading, as `shed observe` shows it, in the order that frees the most
+workers. The owner decides; you prepare each decision.
+
+1. Read the deck once: `shed digest -json` (`-since 24h` by default).
+   Keep the JSON and work from it; read it again only at the end, or when
+   the owner says something changed. Its parts:
+   - `waiting`: what the issues ask of the owner, already in the order to
+     answer it: returns to a worker (`ask.effect` `returns`, an idle one
+     first: `returns_idle`), then `read`, then `merge`, then `in grace`;
+     the oldest first inside each. Each has the issue, `what` (such as
+     `decision` or `review #52`), and `ask.text`, what the worker wrote.
+   - `report.machines[].attention` and `repo_attention`: everything
+     else that needs the owner, the lines `shed status` prints with `!`.
+   - `goals` (each with its `pace`), `flow` by repository,
+     `idle_hours` and `machine_idle_hours` by cause, `imbalance`,
+     `usage`, `stages`.
+   - Workers and peers: `report.machines[].workers`, each with its
+     `peers` and how many messages went between them.
+2. Open with three lines: how many items wait and the age of the oldest,
+   which workers are idle and why, and the goal that is furthest behind.
+3. Work `waiting` from the top, one item at a time:
+   - Read the issue (`gh issue view <n> --repo <r> --comments`), and the
+     pull request's diff and checks when there is one. A worker's report
+     is a claim.
+   - Draft the answer: for a decision, the ruling and why, written so that
+     a worker with no other context can act on it; for a look, what to
+     check and where.
+   - Put the question and your draft to the owner. Post nothing until they
+     rule. Then post their ruling with the signal's `answered_by` phrase
+     (`Owner ruling`, `Eyes checked` by default; the fleet file may set
+     others), as "Pick up the results" says for each kind.
+   - Merges come last and together: list them with their checks, and
+     merge only those the owner names.
+4. Then the `attention` lines, as "Pick up the results" says for each.
+5. End with at most three fleet-level suggestions, each with the command
+   that acts on it, for the owner to take or leave:
+   - a goal behind its pace while workers sit idle: `shed goal focus
+     "<label>"`, or file the issue that holds its next slice;
+   - an `imbalance`: move the label of an unstarted issue to the idle
+     machine, or set `capacity.release_after` on the busy one;
+   - rework rising in a repository's `flow`: name the issue with the most
+     sends and what the workers keep missing, as a brief change or a
+     lesson for the owner to settle;
+   - idle hours mostly of one cause (`no work`, `usage limit`, `held for
+     room`, `waits on you`): that cause's remedy, as "Why a worker has no
+     work" says.
+
+Do not change a label, a brief or the fleet file during a sitting
+without the owner's word.
+
+### Watch mode
+
+To keep watching between sittings, run the sitting under `/loop` with no
+interval, so the assistant paces itself: each round reads
+`shed digest -json` again and speaks only when `waiting` or
+`attention` holds something it has not raised yet. Every read lists the
+fleet's queues on GitHub with the owner's `gh`, on the account the
+supervisors use, and GitHub limits its calls per hour: wait at least 10
+minutes between rounds, longer on a large fleet.
+
 ## Set up a machine
 
 Do this with the owner, not for them: it starts sessions that spend their
@@ -405,7 +468,9 @@ hand to "help" it: a refusal means there is work in it.
 
 ## Keep shed current
 
-`shed update` replaces the owner's shed with the latest release. `shed deploy`
+`shed update` replaces the owner's shed with the latest release, and says
+when the installed copy of this skill is not the one that release ships:
+`shed skill -install` replaces it (`shed skill -check` only asks). `shed deploy`
 then brings every machine to the same version and restarts its agent. Workers
 keep running across that restart.
 

@@ -531,6 +531,10 @@ It is a view, not a new role:
 
 Without `goal_labels`, nothing changes. `shed digest -json` carries the
 goals under `goals`, and `shed status -json` each issue's `goal`.
+`shed digest -json` also carries what waits on you under `waiting`, in the
+order to answer it, and what the release state needs under
+`repo_attention`: with `report`, `flow` and `idle_hours`, every panel of
+the deck.
 
 #### Focus on a goal, or table one
 
@@ -2654,9 +2658,16 @@ a worker has rested that long beside an issue in hand that it can act on.
 
 [`skills/shed/SKILL.md`](skills/shed/SKILL.md) teaches an AI assistant to
 operate the shed for you: label issues for a machine and a model, write a
-brief, deploy, and pick up the results. It is plain markdown.
+brief, deploy, and pick up the results. Its "Run a sitting" section works
+the fleet with you from `shed digest -json`, the same reading `shed observe`
+shows: what waits on you in the order that frees the most workers, each
+answer drafted for you to rule on, then a few fleet-level suggestions. It is
+plain markdown; `shed skill` prints the copy your shed ships.
 
-- **Claude Code:** `cp -r skills/shed ~/.claude/skills/`
+- **Claude Code:** `shed skill -install` writes it to
+  `~/.claude/skills/shed/SKILL.md`. The skill changes with shed: `shed update`
+  says when your copy is not the one the new release ships, and
+  `shed skill -check` asks at any time.
 - **Other tools:** give the file to the agent, or include it from your `AGENTS.md`.
 
 ## The repository matters more than the supervisor
