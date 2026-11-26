@@ -776,7 +776,8 @@ setInterval(() => {
   const every = parseFloat(last.every) * (/h/.test(last.every) ? 3600 : /m/.test(last.every) && !/ms/.test(last.every) ? 60 : 1);
   const late = (new Date() - new Date(last.at)) / 1000 > 2 * every + 60;
   when.style.color = late ? "var(--warn)" : "";
-  when.textContent = "read " + ago(last.at, new Date()) + " ago, took " + last.took + ", every " + last.every;
+  when.textContent = "read " + ago(last.at, new Date()) + " ago, took " + last.took + ", every " + last.every + (last.held ? " · " + last.held : "");
+  if (last.held) when.style.color = "var(--warn)";
 }, 1000);
 if (location.hash === "#board") show("board");
 connect();

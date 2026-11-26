@@ -243,3 +243,38 @@ func TestTheDefaultAddressIsLoopback(t *testing.T) {
 }
 
 var _ = errors.New
+
+func TestTheFleetIsNotReadWhileTheGitHubQuotaIsLow(t *testing.T) {
+	reads := 0
+	s, _ := newServer(t, func(context.Context) status.Report { reads++; return report("box") })
+	left := 4000
+	s.Quota = func(context.Context) (int, time.Time, error) {
+		return left, time.Date(2026, 11, 26, 10, 0, 0, 0, time.Local), nil
+	}
+	s.refresh(context.Background())
+	left = 300
+	s.refresh(context.Background())
+
+	var snap Snapshot
+	json.Unmarshal(s.snapshot(), &snap)
+	if reads != 1 || !strings.Contains(snap.Held, "300 of the account's GitHub quota left until 10:00") {
+		t.Fatalf("reads = %d, held = %q", reads, snap.Held)
+	}
+	left = 4000
+	s.refresh(context.Background())
+	var after Snapshot
+	json.Unmarshal(s.snapshot(), &after)
+	if reads != 2 || after.Held != "" {
+		t.Fatalf("after the quota came back: reads = %d, held = %q", reads, after.Held)
+	}
+}
+
+func TestTheFirstReadGoesAheadWhateverTheQuota(t *testing.T) {
+	reads := 0
+	s, _ := newServer(t, func(context.Context) status.Report { reads++; return report("box") })
+	s.Quota = func(context.Context) (int, time.Time, error) { return 10, time.Now(), nil }
+	s.refresh(context.Background())
+	if reads != 1 {
+		t.Fatalf("reads = %d, want the first read", reads)
+	}
+}

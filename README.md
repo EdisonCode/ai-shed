@@ -38,7 +38,12 @@ The exit code is 1 when anything needs you, so a script or a notifier can act on
 every 2 minutes (`-every`) and pushes each new report to the page. Each read
 lists every queue on GitHub with your `gh`, the same account the supervisors
 read with, and GitHub limits each account's API calls per hour: read more
-often only on a small fleet. Until the
+often only on a small fleet. When less than 1000 of the hour's GraphQL
+quota is left, the page holds its reads and says so until the quota resets,
+so the supervisors keep what is left. Within 25 seconds, shed reads each
+repository's pull requests and each issue list once, however many sources
+and workers ask for them: in a supervisor's check, and in a read by
+`shed status` or `shed observe`. Until the
 first read is back, the page says how long it has taken: on a large fleet it
 can take a minute or more. The page has two views:
 
@@ -58,7 +63,7 @@ can take a minute or more. The page has two views:
     it.
 
   Goals, flow and idle hours cost more GitHub calls than the report, so
-  they are read every 5 minutes (`-deck-every`), apart from it.
+  they are read every 15 minutes (`-deck-every`), apart from it.
 - **Board** puts every issue in the queues in a column by its state: held,
   queued, working, rework, verifying, waiting on you, draft, eye check,
   merged. It filters by goal, repository and machine. Right-click a card for
