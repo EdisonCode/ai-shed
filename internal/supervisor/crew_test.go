@@ -79,6 +79,25 @@ func TestTheRosterNamesWhichCrewMateBuildsWhichPartOfEachGoal(t *testing.T) {
 	}
 }
 
+func TestTheRosterGivesEachGoalItsBriefOrSaysItHasNone(t *testing.T) {
+	issues := map[string][]backlog.Issue{
+		"goal:export": {{Repo: "org/api", Number: 39, Title: "Goal brief: export", Body: "**Slices:**\n1. #40 the endpoint\n\n**Contracts:**\n- GET /export returns CSV, provided by #40\n\n**Done when:**\n- a user downloads a CSV on staging"}},
+	}
+	got := crewText(crewWorker(), []string{"goal:export", "goal:refunds"}, issues)
+	for _, want := range []string{
+		"Goal brief: org/api#39. It is the crew's shared plan",
+		"edit the brief and comment on it what changed and why",
+		"Slices:\n- #40 the endpoint\n",
+		"Contracts:\n- GET /export returns CSV, provided by #40\n",
+		"Done when:\n- a user downloads a CSV on staging\n",
+		"## goal:refunds\n\nNo crew-mate has signed a plan on this goal yet.\n\nThis goal has no brief",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("crew text lacks %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestAGoalsIssuesAreReadInEveryCrewRepositoryAndReused(t *testing.T) {
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
 	l := &countingLister{byQuery: map[string][]backlog.Issue{

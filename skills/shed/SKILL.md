@@ -89,6 +89,17 @@ PR limit, a dependency, what waits on the owner), and why the reserve was
 not listed or what it left out. Trust it over your own reading of the
 issues: the agent knows the machine's pace and what each worker has in hand.
 
+## Write a goal brief
+
+A goal that a crew builds across repositories or machines needs a brief: an
+issue titled `Goal brief: <the goal>` with the goal's label, and three parts:
+**Slices** (the issues, in order), **Contracts** (what one slice provides and
+others use, each with the issue that provides it) and **Done when** (what
+makes the whole goal done, checked end to end). Draft it with the owner from
+the goal's issues; the owner rules on the contracts. Every crew worker on the
+goal reads it in its roster, so a contract it names is the one they build
+to. The digest says which goals have none.
+
 ## Focus on a goal, or table one
 
 When many goals move at once and none finishes, focus the fleet:

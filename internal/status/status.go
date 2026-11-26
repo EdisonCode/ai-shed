@@ -614,6 +614,8 @@ func (c Collector) collectOne(ctx context.Context, cfg *config.Config, m config.
 			unlisted = append(unlisted, src.Repo)
 			continue
 		}
+		// A goal's brief is no work in a queue.
+		found = slices.DeleteFunc(found, func(i backlog.Issue) bool { return backlog.IsGoalBrief(i.Title) })
 		issues = append(issues, found...)
 	}
 	for n := range issues {

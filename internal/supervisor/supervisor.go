@@ -1708,6 +1708,11 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 		}
 		open = append(open, issues...)
 		for _, i := range issues {
+			// A goal's brief holds the goal's shape for its crew: it is
+			// read, never built.
+			if backlog.IsGoalBrief(i.Title) {
+				continue
+			}
 			first := ""
 			if i.Number != inHand {
 				first = s.firstQueue(i)

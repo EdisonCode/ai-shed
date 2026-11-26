@@ -3322,3 +3322,20 @@ func TestAnIdleWorkerIsHandedAnIssueWhenThePullRequestsCannotBeRead(t *testing.T
 		t.Fatalf("logs = %q, want the unread pull requests logged once", logs)
 	}
 }
+
+func TestAGoalBriefIsNeverHandedOut(t *testing.T) {
+	f := started(t, config.Supervisor{}, assign(13))
+	f.lister.issues = []backlog.Issue{
+		{Repo: "org/app", Number: 12, Title: "Goal brief: new pricing"},
+		{Repo: "org/app", Number: 13, Title: "The pricing API"},
+	}
+	items, err := f.queue(context.Background(), f.Machine.Workers[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.Number == 12 {
+			t.Fatalf("queue = %+v, want the brief left out", items)
+		}
+	}
+}

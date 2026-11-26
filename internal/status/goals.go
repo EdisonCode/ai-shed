@@ -38,6 +38,9 @@ type GoalProgress struct {
 	Pace backlog.Pace `json:"pace"`
 	// Error says why the goal could not be counted.
 	Error string `json:"error,omitempty"`
+	// Brief is the goal's brief in this repository; 0 for none. A brief is
+	// not one of the goal's issues: it is left out of every count.
+	Brief int `json:"brief,omitempty"`
 }
 
 // markGoals puts on each issue of the report its goal, and the group its
@@ -84,6 +87,15 @@ func (c Collector) collectGoals(ctx context.Context, cfg *config.Config, d *Dige
 			p.Error = err.Error()
 			d.Problems = append(d.Problems, err.Error())
 		}
+		issues = slices.DeleteFunc(issues, func(i backlog.GoalIssue) bool {
+			if !backlog.IsGoalBrief(i.Title) {
+				return false
+			}
+			if p.Brief == 0 || i.Number < p.Brief {
+				p.Brief = i.Number
+			}
+			return true
+		})
 		p.Pace = backlog.GoalPace(issues, d.Now)
 		p.Total, p.Closed = len(issues), len(issues)-p.Pace.Open
 		for _, i := range d.flowIssues[g[0]] {
@@ -146,6 +158,20 @@ func renderGoals(w io.Writer, goals []GoalProgress) {
 		fmt.Fprintf(tw, "  %s\t%s\t%s\tnet %+d\t%s\t%s\n", g.Repo, g.Label, count, g.Net, pace, g.Next)
 	}
 	tw.Flush()
+	// A goal spans repositories: its brief may be in any of them.
+	briefed := map[string]bool{}
+	for _, g := range goals {
+		briefed[g.Label] = briefed[g.Label] || g.Brief != 0
+	}
+	var none []string
+	for _, label := range slices.Sorted(maps.Keys(briefed)) {
+		if !briefed[label] {
+			none = append(none, label)
+		}
+	}
+	if len(none) > 0 {
+		fmt.Fprintf(w, "  no goal brief: %s. An issue titled %q with the goal's label, and Slices, Contracts and Done when, lets its crew build it together.\n", strings.Join(none, ", "), backlog.GoalBriefPrefix+" <the goal>")
+	}
 }
 
 // renderDecided writes the choices the workers made by themselves. They ask
