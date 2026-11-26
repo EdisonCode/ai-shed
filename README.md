@@ -2832,6 +2832,39 @@ a worker has rested that long beside an issue in hand that it can act on.
 - A task that is still running when its next time comes is skipped (and shows as missed).
 - Runs are recorded in `~/.local/state/shed/runs.jsonl` with the last 2000 bytes of output.
 
+## Audit the fleet file's prose
+
+The standing orders and each brief are read by every worker they reach, on
+every turn. Prose written before shed had a setting for the same rule
+costs tokens and can say something the setting now does differently.
+`shed audit` reads the fleet file only, on your machine, and changes
+nothing:
+
+```sh
+shed audit           # no model, no network
+shed audit -model    # also asks the reviewer model
+shed audit -json     # the same, for an assistant to draft the edits
+```
+
+- **Shed writes it**: lines of your prose that repeat what shed writes into
+  every worker's brief. Delete them.
+- **In the orders**: a brief's lines that the standing orders already say.
+  That worker reads both. Delete them from the brief.
+- **The same in several briefs**: no cost a turn (a worker reads only its
+  own brief), but an edit of one copy leaves the other behind. Keep them in
+  step, or give briefs that can be the same one text with a YAML anchor.
+- **Stale**: a queue label of a kind the fleet uses that no queue has, a
+  session of a known machine with no such worker, a `` `shed <command>` ``
+  that shed does not have.
+- With `-model`, the reviewer model reads each line against what each
+  setting does, and whether it is on: **a setting does it** (delete it),
+  **a setting is off** (turn it on and delete it, or keep it), and
+  **contradicts**. That is the model's reading: check each before you
+  delete anything.
+
+Each finding names its line and what it costs a turn. It exits 1 when it
+finds anything.
+
 ## A skill for your agent
 
 [`skills/shed/SKILL.md`](skills/shed/SKILL.md) teaches an AI assistant to

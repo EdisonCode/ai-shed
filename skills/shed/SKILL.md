@@ -496,6 +496,17 @@ while workers are busy, since a worker's directory and anything with
 uncommitted or unmerged work is never touched. Never remove a worktree by
 hand to "help" it: a refusal means there is work in it.
 
+## Tidy the fleet file's prose
+
+`shed audit` (and `shed audit -model`) finds prose in the standing orders
+and briefs that shed already writes, that the orders already say, that a
+setting now does, or that names what is gone. Go through it with the owner:
+draft the edits from `shed audit -json`, show the owner each deletion with
+the finding behind it, and change the fleet file only on their word. A
+model finding is a reading, not a fact: check the setting really is on and
+really says the same before you propose deleting the line. Then `shed
+validate` and `shed deploy`.
+
 ## Keep shed current
 
 `shed update` replaces the owner's shed with the latest release, and says

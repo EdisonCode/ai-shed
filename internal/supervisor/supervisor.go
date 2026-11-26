@@ -2377,6 +2377,18 @@ func (s *Supervisor) writeBrief(w config.Worker) (changed bool, err error) {
 	return readErr == nil, nil
 }
 
+// ShedBrief is what shed itself writes into a worker's brief, without the
+// owner's brief and standing orders: what the owner's prose need not say.
+func ShedBrief(cfg *config.Config, m config.Machine, w config.Worker) string {
+	s := &Supervisor{Repos: cfg.Repos, EyeCheckRepos: cfg.EyeCheckRepos(), Machine: m, Settings: cfg.Supervisor, Signals: cfg.Signals,
+		QueueLabels: cfg.QueueLabels(), CrewRepos: cfg.CrewRepos()}
+	if a, ok := cfg.AccountOf(m.Name); ok {
+		s.Account = &a
+	}
+	w.Brief = ""
+	return s.briefText(w)
+}
+
 func (s *Supervisor) briefText(w config.Worker) string {
 	if w.Ask {
 		return s.askBrief(w)
