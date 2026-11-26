@@ -1,8 +1,15 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/sources"
 )
 
 func TestTheAuditKnowsEveryCommandTheUsageNames(t *testing.T) {
@@ -24,4 +31,26 @@ func TestTheAuditKnowsEveryCommandTheUsageNames(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestTheAuditReadsEachWorkersStartupFilesFromItsMachine(t *testing.T) {
+	report, _ := json.Marshal(contextReport{Version: version, Audit: sources.Audit{Sources: []sources.Source{{Path: "/w/CLAUDE.md", Kind: "repository", Tokens: 10, Body: "# App"}}}})
+	cfg := &config.Config{Machines: []config.Machine{{Name: "box", Workers: []config.Worker{{Name: "app"}}}, {Name: "far", Workers: []config.Worker{{Name: "web"}}}}}
+	runner := byMachine{"box": fakeRunner{out: report}, "far": fakeRunner{err: errors.New("far: exit status 255: Connection refused")}}
+
+	startups, problems := collectStartups(context.Background(), runner, cfg)
+
+	if len(startups) != 1 || startups[0].Sources[0].Text != "# App" || startups[0].Sources[0].Body != "" {
+		t.Fatalf("startups = %+v", startups)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "far/web: cannot read what it loads") {
+		t.Fatalf("problems = %q", problems)
+	}
+}
+
+// byMachine answers each machine with its own runner.
+type byMachine map[string]fakeRunner
+
+func (b byMachine) Run(ctx context.Context, m config.Machine, command string, in io.Reader) ([]byte, error) {
+	return b[m.Name].Run(ctx, m, command, in)
 }

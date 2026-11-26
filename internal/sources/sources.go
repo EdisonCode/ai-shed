@@ -25,6 +25,9 @@ type Source struct {
 	Kind   string `json:"kind"`
 	Tokens int    `json:"tokens"`
 	Text   string `json:"-"`
+	// Body is Text, sent only when the reader asks for it: shed audit reads
+	// each worker's sources from its machine.
+	Body string `json:"body,omitempty"`
 }
 
 // Location is a line of a source.
