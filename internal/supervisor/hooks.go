@@ -28,7 +28,7 @@ func HookWarnings(home string, w config.Worker) []string {
 		dir = filepath.Join(home, rest)
 	}
 	var warnings []string
-	state, usage, message, failure := false, false, false, false
+	state, usage, message, failure, denied := false, false, false, false, false
 	for _, path := range []string{
 		filepath.Join(home, ".claude", "settings.json"),
 		filepath.Join(dir, ".claude", "settings.json"),
@@ -48,6 +48,8 @@ func HookWarnings(home string, w config.Worker) []string {
 					message = true
 				case event == "PostToolUseFailure" && strings.Contains(command, "shed mark message"):
 					failure = true
+				case event == "PermissionDenied" && strings.Contains(command, "shed mark denied"):
+					denied = true
 				case strings.Contains(command, "shed mark working"), strings.Contains(command, "shed mark idle"), strings.Contains(command, "shed mark waiting"):
 					state = true
 				}
@@ -56,6 +58,9 @@ func HookWarnings(home string, w config.Worker) []string {
 	}
 	if state && !usage {
 		warnings = append(warnings, "cost comments leave out sub-agents: add the SubagentStop hook that runs `shed mark usage` (see the README)")
+	}
+	if state && !denied {
+		warnings = append(warnings, "calls its tool's permission check refuses are not recorded: add the PermissionDenied hook that runs `shed mark denied` (see the README)")
 	}
 	if len(w.PeerList) > 0 && !message {
 		warnings = append(warnings, "the worker has peers, but no PostToolUse hook on SendMessage runs `shed mark message`: its messages are not counted, so a message loop goes unseen (see the README)")

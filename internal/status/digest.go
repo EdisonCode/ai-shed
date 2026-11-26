@@ -62,6 +62,9 @@ type Digest struct {
 	// Releases counts, by machine/worker, the releases to the fleet on the
 	// issues closed in the window.
 	Releases map[string]int `json:"releases,omitempty"`
+	// Refused is, by machine, how many tool calls of each kind its workers'
+	// tools refused in the window.
+	Refused map[string]map[string]int `json:"refused,omitempty"`
 	// Flow is, by repository, whether its backlog shrank in the window.
 	Flow map[string]RepoFlow `json:"flow,omitempty"`
 	// Goals is each goal label's progress, for goal_labels.
@@ -136,6 +139,7 @@ func (c Collector) DigestFrom(ctx context.Context, cfg *config.Config, merged Me
 		}
 	}
 	d.Imbalance = imbalance(cfg, d.MachineIdle, d.Peaks)
+	collectRefusals(&d)
 	c.collectUsage(ctx, cfg, &d)
 	for _, repo := range fleetRepos(cfg) {
 		pulls, err := merged.MergedSince(ctx, repo, since)
@@ -251,6 +255,7 @@ func RenderDigest(w io.Writer, d Digest) {
 		fmt.Fprintf(w, "\nIdle worker-hours: %s\n", strings.Join(idle, ", "))
 	}
 	renderMachineIdle(w, d)
+	renderRefusals(w, d.Refused)
 
 	renderUsage(w, d)
 

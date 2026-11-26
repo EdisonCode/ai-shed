@@ -1894,6 +1894,33 @@ worker's session loads (`~/.claude/settings.json` and the worker directory's
 set and this one is not, the worker's line carries
 `note: cost comments leave out sub-agents`.
 
+#### Refused tool calls
+
+An unattended worker in the tool's automatic permission mode does not stop
+at a prompt when a call is refused: it works around it or hands back, and
+the refusal is one sentence in a hand-back. A `PermissionDenied` hook records
+each one:
+
+```json
+"PermissionDenied": [
+  { "hooks": [{ "type": "command", "command": "$HOME/.local/bin/shed mark denied" }] }
+]
+```
+
+shed keeps the command's first words (`gh pr ready`,
+`git push --force-with-lease`) and the tool's reason, never an argument that
+could hold a secret. Then:
+
+- `shed status` adds `[refused today: gh pr ready (2), ...]` to the
+  worker's line, and `shed digest` totals refusals by machine and kind.
+- The same kind refused on 3 items in a row is one `!` line: the standing
+  orders ask for something the machine's permission rules do not allow.
+- A refused `gh issue comment` on the worker's own issue is `worker needs
+  you` at once: its hand-back cannot reach you, and nothing else would say
+  so.
+
+With the state hooks set and this one missing, `shed deploy` says so.
+
 ### Settings
 
 ```yaml

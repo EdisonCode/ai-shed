@@ -13,7 +13,13 @@ import (
 const (
 	stateHooks = `{"hooks": {
 		"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "$HOME/.local/bin/shed mark working"}]}],
-		"Stop": [{"hooks": [{"type": "command", "command": "$HOME/.local/bin/shed mark idle"}]}]
+		"Stop": [{"hooks": [{"type": "command", "command": "$HOME/.local/bin/shed mark idle"}]}],
+		"PermissionDenied": [{"hooks": [{"type": "command", "command": "$HOME/.local/bin/shed mark denied"}]}]
+	}}`
+	// stateHooksOnly has the state hooks and nothing else.
+	stateHooksOnly = `{"hooks": {
+		"Stop": [{"hooks": [{"type": "command", "command": "$HOME/.local/bin/shed mark idle"}]}],
+		"SubagentStop": [{"hooks": [{"type": "command", "command": "$HOME/.local/bin/shed mark usage"}]}]
 	}}`
 	usageHook = `{"hooks": {
 		"SubagentStop": [{"hooks": [{"type": "command", "command": "$HOME/.local/bin/shed mark usage"}]}]
@@ -35,6 +41,15 @@ func TestStateHooksWithoutTheSubagentHookLeaveSubAgentsOutOfTheCost(t *testing.T
 	writeSettings(t, home, "settings.json", stateHooks)
 	got := HookWarnings(home, config.Worker{Name: "app", Dir: dir})
 	if len(got) != 1 || !strings.Contains(got[0], "cost comments leave out sub-agents: add the SubagentStop hook") {
+		t.Fatalf("warnings = %q", got)
+	}
+}
+
+func TestStateHooksWithoutThePermissionDeniedHookLeaveRefusalsUnrecorded(t *testing.T) {
+	home, dir := t.TempDir(), t.TempDir()
+	writeSettings(t, home, "settings.json", stateHooksOnly)
+	got := HookWarnings(home, config.Worker{Name: "app", Dir: dir})
+	if len(got) != 1 || !strings.Contains(got[0], "add the PermissionDenied hook that runs `shed mark denied`") {
 		t.Fatalf("warnings = %q", got)
 	}
 }

@@ -1775,3 +1775,63 @@ func TestALostRemoteControlNeedsYouOnlyWhenTypingItDidNotHelp(t *testing.T) {
 		}
 	}
 }
+
+func refusing(at time.Duration, kind string, issue int) runlog.Denial {
+	return runlog.Denial{Time: now.Add(-at), Kind: kind, Issue: issue, Reason: "auto mode blocked it"}
+}
+
+func handed(at time.Duration, issue int) runlog.Checkin {
+	return runlog.Checkin{Time: now.Add(-at), Worker: "app", Sent: true, Issue: issue, Verdict: runlog.VerdictOnTrack}
+}
+
+func refusalMachine() config.Machine {
+	return config.Machine{Name: "box", Host: "me@box", Workers: []config.Worker{{Name: "app"}}}
+}
+
+func TestAWorkersLineCountsWhatItsToolRefusedToday(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{handed(2*time.Hour, 7)}
+	res.Denials = map[string][]runlog.Denial{"app": {refusing(30*time.Hour, "gh pr ready", 0), refusing(time.Hour, "gh pr ready", 0), refusing(50*time.Minute, "gh pr ready", 0), refusing(40*time.Minute, "git push --force-with-lease", 0)}}
+	r := Assess(refusalMachine(), signals, now, res, nil)
+	var out bytes.Buffer
+	Render(&out, []MachineReport{r}, nil)
+	if !strings.Contains(out.String(), "[refused today: gh pr ready (2), git push --force-with-lease (1)]") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+func TestTheSameKindRefusedOnThreeItemsInARowNeedsTheOwner(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{handed(6*time.Hour, 1), handed(4*time.Hour, 2), handed(2*time.Hour, 3)}
+	res.Denials = map[string][]runlog.Denial{"app": {refusing(5*time.Hour, "gh pr ready", 0), refusing(3*time.Hour, "gh pr ready", 0), refusing(time.Hour, "gh pr ready", 0)}}
+	wantAttention(t, Assess(refusalMachine(), signals, now, res, nil), "worker app: gh pr ready was refused on 3 items in a row (#1, #2, #3)")
+}
+
+func TestTwoItemsInARowAreNotYetAPattern(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{handed(4*time.Hour, 2), handed(2*time.Hour, 3)}
+	res.Denials = map[string][]runlog.Denial{"app": {refusing(3*time.Hour, "gh pr ready", 0), refusing(time.Hour, "gh pr ready", 0)}}
+	for _, a := range Assess(refusalMachine(), signals, now, res, nil).Attention {
+		if strings.Contains(a, "in a row") {
+			t.Fatalf("attention = %q", a)
+		}
+	}
+}
+
+func TestARefusedHandBackNeedsTheOwnerAtOnce(t *testing.T) {
+	res := healthy()
+	res.Checkins = []runlog.Checkin{handed(2*time.Hour, 7)}
+	res.Denials = map[string][]runlog.Denial{"app": {refusing(time.Minute, "gh issue comment", 7)}}
+	wantAttention(t, Assess(refusalMachine(), signals, now, res, nil), "worker app needs you: its comment on its own issue #7 was refused by its tool's permission check (auto mode blocked it)")
+}
+
+func TestTheDigestTotalsRefusalsByMachineAndKind(t *testing.T) {
+	res := healthy()
+	res.Denials = map[string][]runlog.Denial{"app": {refusing(2*time.Hour, "gh pr ready", 0), refusing(time.Hour, "gh pr ready", 0), refusing(48*time.Hour, "gh issue edit", 0)}}
+	d := Digest{Since: now.Add(-24 * time.Hour), Now: now, Report: Report{Machines: []MachineReport{{Name: "box", Probe: res}}}}
+	collectRefusals(&d)
+	if d.Refused["box"]["gh pr ready"] != 2 || d.Refused["box"]["gh issue edit"] != 0 {
+		t.Fatalf("refused = %v", d.Refused)
+	}
+	wantLines(t, digestText(t, d), "Refused by the tools' permission checks:\n  box: gh pr ready (2)")
+}
