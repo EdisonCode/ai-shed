@@ -62,8 +62,8 @@ can take a minute or more. The page has two views:
 - **Board** puts every issue in the queues in a column by its state: held,
   queued, working, rework, verifying, waiting on you, draft, eye check,
   merged. It filters by goal, repository and machine. Right-click a card for
-  the `shed` command that bumps it, puts it back, recycles its worker or
-  pauses its machine, ready to copy.
+  what you can do with it (see *Card actions*); with actions off, the menu
+  gives the `shed` commands to copy.
 
 **Goals.** A hill chart puts each goal where it stands: uphill while its
 issues are still being worked out (queued, held, waiting on you), over the
@@ -91,6 +91,14 @@ with what the worker wrote under its ask:
   is ended on GitHub), and it warns first. A dropped dependency sends the
   issue to a worker at once, and a worker that builds on a part that is not
   there yet hands back rework or files a follow-up.
+- **Pause <machine> for 30m** and **Recycle worker <name>** do what
+  `shed pause` and `shed recycle` (without `-now`) do.
+- **Too big: send it back to shape** posts `Not ready: too big: ...` (the
+  ready signal's phrase) on a queued or held issue: it waits for you to
+  split it, and `Ready now` lets it go again.
+- **Take it off <machine>'s queue** removes the machine's queue label. The
+  issue stays open. It is offered only where one label puts the
+  repository's issues in that machine's queue, and it warns first.
 - The answers above, for that card.
 
 Each action first shows what it does: the exact comment it posts, as you,

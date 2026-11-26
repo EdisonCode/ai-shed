@@ -57,6 +57,15 @@ type Action struct {
 	// it is set to on every machine; "" clears it.
 	Goal string `json:"goal,omitempty"`
 	Mode string `json:"mode,omitempty"`
+	// Worker is the worker a recycle gives a fresh session.
+	Worker string `json:"worker,omitempty"`
+	// Remove is the queue label a cancel takes off the issue.
+	Remove string `json:"remove,omitempty"`
+}
+
+// Labeler changes an issue's labels, as the owner.
+type Labeler interface {
+	Relabel(ctx context.Context, repo string, issue int, add, remove string) error
 }
 
 // Action kinds.
@@ -68,7 +77,84 @@ const (
 	ActBump     = "bump"     // put a queued issue first in its queue
 	ActUnbump   = "unbump"   // put a bumped issue back in its place
 	ActGoal     = "goal"     // focus on a goal, table it, or clear either
+	ActPause    = "pause"    // pause the machine a card's issue is queued on
+	ActRecycle  = "recycle"  // give the worker on a card a fresh session
+	ActReshape  = "reshape"  // send an issue back to the owner as too big
+	ActCancel   = "cancel"   // take an issue off a machine's queue
 )
+
+// cardPause is how long a pause from a card lasts, as shed pause's default.
+const cardPause = 30 * time.Minute
+
+// cancelWarning is said before an issue is taken off a queue from the page.
+const cancelWarning = "The issue stays open, with no queue label: no worker starts it until you label it for a machine again. A branch or pull request a worker already has for it stays where it is."
+
+// cardActions works out what the owner can do with the machine and worker
+// behind each card: pause the machine, recycle the worker, send the issue
+// back as too big, or take it off the queue. Each is offered on the card of
+// the issue it came from.
+func cardActions(r status.Report, cfg *config.Config, signals []config.Signal, relabel bool) []Action {
+	ready := ""
+	for _, s := range signals {
+		if s.Name == config.ReadySignal {
+			ready = s.Ask
+		}
+	}
+	var out []Action
+	seen := map[string]bool{}
+	add := func(a Action) {
+		a.ID = fmt.Sprintf("%s:%s#%d:%s:%s:%s%s", a.Kind, a.Repo, a.Number, a.Machine, a.Worker, a.Remove, a.Comment)
+		if !seen[a.ID] {
+			seen[a.ID] = true
+			out = append(out, a)
+		}
+	}
+	for _, m := range r.Machines {
+		machine, known := config.Machine{}, false
+		if cfg != nil {
+			machine, known = cfg.Machine(m.Name)
+		}
+		for _, i := range m.Issues {
+			if i.Worker != "" {
+				add(Action{Kind: ActRecycle, Label: "Recycle worker " + i.Worker, Repo: i.Repo, Number: i.Number, Machine: m.Name, Worker: i.Worker,
+					Does: fmt.Sprintf("Gives worker %s on %s a fresh session as soon as it has no issue in progress, as shed recycle does. Nothing it has in hand is lost.", i.Worker, m.Name)})
+			}
+			if known && len(machine.Workers) > 0 {
+				add(Action{Kind: ActPause, Label: "Pause " + m.Name + " for 30m", Repo: i.Repo, Number: i.Number, Machine: m.Name,
+					Does: fmt.Sprintf("Hands out nothing on %s and nudges nobody for 30 minutes, as shed pause does. A worker finishes the turn it is in; shed resume %s ends it early.", m.Name, m.Name)})
+			}
+			if i.State != status.Queued && i.State != status.Held {
+				continue
+			}
+			if ready != "" {
+				add(Action{Kind: ActReshape, Label: "Too big: send it back to shape", Repo: i.Repo, Number: i.Number,
+					Comment: ready + " too big: split it into slices that a worker can each finish in one pull request, each with its own acceptance."})
+			}
+			if label := queueLabel(machine, i.Repo); relabel && known && label != "" {
+				add(Action{Kind: ActCancel, Label: "Take it off " + m.Name + "'s queue", Repo: i.Repo, Number: i.Number, Machine: m.Name, Remove: label, Warn: cancelWarning,
+					Does: fmt.Sprintf("Takes the label %s off #%d, so no worker on %s starts it.", label, i.Number, m.Name)})
+			}
+		}
+	}
+	return out
+}
+
+// queueLabel is the label that puts the repository's issues in the
+// machine's queue; "" when a query or an assignee selects them too, or more
+// than one label does: then no single label takes an issue off.
+func queueLabel(m config.Machine, repo string) string {
+	label := ""
+	for _, src := range m.AllSources() {
+		if src.Repo != repo {
+			continue
+		}
+		if src.Label == "" || src.Query != "" || src.Assignee != "" || (label != "" && label != src.Label) {
+			return ""
+		}
+		label = src.Label
+	}
+	return label
+}
 
 // focusKept is how many goals focus works for: past it, focus spreads the
 // fleet as thin as no focus does.
@@ -319,6 +405,21 @@ func (s *Server) do(ctx context.Context, a Action) error {
 	case ActGoal:
 		_, err := deploy.SetFleetGoalMode(ctx, s.Runner, s.Config, a.Goal, a.Mode)
 		return err
+	case ActPause, ActRecycle:
+		m, ok := s.Config.Machine(a.Machine)
+		if !ok {
+			return fmt.Errorf("machine %q is not in the fleet file", a.Machine)
+		}
+		if a.Kind == ActPause {
+			_, err := deploy.Pause(ctx, s.Runner, m, cardPause)
+			return err
+		}
+		return deploy.Recycle(ctx, s.Runner, m, a.Worker, false)
+	case ActCancel:
+		if s.Labeler == nil {
+			return fmt.Errorf("the page cannot change labels")
+		}
+		return s.Labeler.Relabel(ctx, a.Repo, a.Number, "", a.Remove)
 	case ActBump, ActUnbump:
 		m, ok := s.Config.Machine(a.Machine)
 		if !ok {
@@ -347,4 +448,7 @@ func (s *Server) signals() []config.Signal {
 	return config.DefaultSignals()
 }
 
-var _ Commenter = backlog.GH{}
+var (
+	_ Commenter = backlog.GH{}
+	_ Labeler   = backlog.GH{}
+)

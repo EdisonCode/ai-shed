@@ -366,6 +366,25 @@ func (GH) Claim(ctx context.Context, repo string, number int, add, remove string
 	return nil
 }
 
+// Relabel puts a label on an issue and takes another off; either may be
+// empty.
+func (GH) Relabel(ctx context.Context, repo string, number int, add, remove string) error {
+	args := []string{"issue", "edit", strconv.Itoa(number), "--repo", repo}
+	if add != "" {
+		args = append(args, "--add-label", add)
+	}
+	if remove != "" {
+		args = append(args, "--remove-label", remove)
+	}
+	if add == "" && remove == "" {
+		return nil
+	}
+	if _, err := gh(ctx, args...); err != nil {
+		return fmt.Errorf("relabel %s#%d: %w", repo, number, err)
+	}
+	return nil
+}
+
 func openPRs(ctx context.Context, repo string) (map[int]PR, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000",
 		"--json", "number,headRefOid,mergeable,isDraft,statusCheckRollup,autoMergeRequest")

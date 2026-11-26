@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/edisoncode/ai-shed/internal/backlog"
 	"github.com/edisoncode/ai-shed/internal/config"
@@ -209,5 +211,92 @@ func TestAGoalActionFromThePageSetsItsModeOnEveryMachine(t *testing.T) {
 	}
 	if len(r.commands) != 2 || !strings.Contains(r.commands[0], "box: ") || !strings.Contains(r.commands[1], "mini: ") || !strings.Contains(r.commands[1], "goals/goal:%20export") {
 		t.Fatalf("commands = %q, want the goal's mode written on box and mini", r.commands)
+	}
+}
+
+type fakeLabeler struct{ changed []string }
+
+func (f *fakeLabeler) Relabel(_ context.Context, repo string, issue int, add, remove string) error {
+	f.changed = append(f.changed, fmt.Sprintf("%s#%d +%s -%s", repo, issue, add, remove))
+	return nil
+}
+
+func cardFleet() *config.Config {
+	return &config.Config{Machines: []config.Machine{{Name: "box", Host: "local",
+		Issues:  []config.IssueSource{{Repo: "org/app", Label: "machine:box"}},
+		Workers: []config.Worker{{Name: "app"}}}}}
+}
+
+func cardReport() status.Report {
+	return status.Report{Machines: []status.MachineReport{{Name: "box", Issues: []status.IssueStatus{
+		{Repo: "org/app", Number: 3, State: status.Working, Worker: "app"},
+		{Repo: "org/app", Number: 9, State: status.Queued},
+	}}}}
+}
+
+func TestACardOffersToPauseRecycleReshapeAndCancel(t *testing.T) {
+	var lines []string
+	for _, a := range cardActions(cardReport(), cardFleet(), config.DefaultSignals(), true) {
+		lines = append(lines, fmt.Sprintf("%s %s#%d %s %s %s%s", a.Kind, a.Repo, a.Number, a.Machine, a.Worker, a.Remove, a.Comment))
+	}
+	want := []string{
+		"recycle org/app#3 box app ",
+		"pause org/app#3 box  ",
+		"pause org/app#9 box  ",
+		"reshape org/app#9   Not ready: too big: split it into slices that a worker can each finish in one pull request, each with its own acceptance.",
+		"cancel org/app#9 box  machine:box",
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("actions:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestACancelIsNotOfferedWhenNoSingleLabelPutsTheIssueInTheQueue(t *testing.T) {
+	cfg := cardFleet()
+	cfg.Machines[0].Issues = append(cfg.Machines[0].Issues, config.IssueSource{Repo: "org/app", Query: "label:bug"})
+	for _, a := range cardActions(cardReport(), cfg, config.DefaultSignals(), true) {
+		if a.Kind == ActCancel {
+			t.Fatalf("cancel offered with a query source: %+v", a)
+		}
+	}
+}
+
+func cardServer(t *testing.T) (*Server, *fakeRunner, *fakeLabeler) {
+	t.Helper()
+	s, r := newServer(t, func(context.Context) status.Report { return cardReport() })
+	l := &fakeLabeler{}
+	s.Config, s.Commenter, s.Labeler, s.Token = cardFleet(), &fakeCommenter{}, l, "secret"
+	s.refresh(context.Background())
+	return s, r, l
+}
+
+func TestACancelFromACardTakesTheQueueLabelOff(t *testing.T) {
+	s, _, l := cardServer(t)
+	rec := post(s, "127.0.0.1:7777", "http://127.0.0.1:7777", "secret", "cancel:org/app#9:box::machine:box")
+	if rec.Code != http.StatusOK || len(l.changed) != 1 || l.changed[0] != "org/app#9 + -machine:box" {
+		t.Fatalf("code %d, body %s, changed %q", rec.Code, rec.Body, l.changed)
+	}
+}
+
+// timeRunner answers every command with a time in Unix seconds, as a
+// machine answers a pause with when it ends.
+type timeRunner struct{ commands []string }
+
+func (r *timeRunner) Run(_ context.Context, m config.Machine, command string, _ io.Reader) ([]byte, error) {
+	r.commands = append(r.commands, m.Name+": "+command)
+	return []byte(fmt.Sprintln(time.Now().Add(30 * time.Minute).Unix())), nil
+}
+
+func TestAPauseAndARecycleFromACardReachTheMachine(t *testing.T) {
+	s, _, _ := cardServer(t)
+	r := &timeRunner{}
+	s.Runner = r
+	for _, id := range []string{"pause:org/app#3:box::", "recycle:org/app#3:box:app:"} {
+		if rec := post(s, "127.0.0.1:7777", "http://127.0.0.1:7777", "secret", id); rec.Code != http.StatusOK {
+			t.Fatalf("%s: code %d, body %s", id, rec.Code, rec.Body)
+		}
+	}
+	if len(r.commands) != 2 {
+		t.Fatalf("commands = %q, want a pause and a recycle on box", r.commands)
 	}
 }
