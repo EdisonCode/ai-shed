@@ -42,3 +42,22 @@ func TestTheBriefOfAGoalIsTheIssueTitledSoWithTheLowestNumber(t *testing.T) {
 		t.Fatal("a goal with no brief has one")
 	}
 }
+
+func TestAGoalCheckIsDueUntilACrewWorkerPassesOrFailsItAndDueAgainWhenAsked(t *testing.T) {
+	brief := Issue{Title: "Goal brief: pricing"}
+	if s, asked := GoalCheck(brief); s != GoalCheckDue || asked != -1 {
+		t.Fatalf("state = %q, asked = %d", s, asked)
+	}
+	brief.Comments = append(brief.Comments, Comment{Body: "Goal check failed: the checkout shows dollars"})
+	if s, _ := GoalCheck(brief); s != GoalCheckFailed {
+		t.Fatalf("state = %q, want failed", s)
+	}
+	brief.Comments = append(brief.Comments, Comment{Body: "Goal check again: the fix merged"})
+	if s, asked := GoalCheck(brief); s != GoalCheckDue || asked != 1 {
+		t.Fatalf("state = %q, asked = %d, want due from comment 1", s, asked)
+	}
+	brief.Comments = append(brief.Comments, Comment{Body: "Goal checked:\n- a customer pays the new price: yes"})
+	if s, _ := GoalCheck(brief); s != GoalCheckPassed {
+		t.Fatalf("state = %q, want passed", s)
+	}
+}

@@ -60,6 +60,41 @@ const (
 	ContractCheckedPhrase = "Contract checked"
 )
 
+// The phrases of a goal check: a crew worker writes the first or the second
+// on the goal's brief once it has checked the goal's done-when on staging,
+// and the owner writes the third to have it checked again.
+const (
+	GoalCheckedPhrase = "Goal checked"
+	GoalFailedPhrase  = "Goal check failed"
+	GoalAgainPhrase   = "Goal check again"
+)
+
+// Goal check states.
+const (
+	GoalCheckDue    = "due"    // no check since the last time one was asked for
+	GoalCheckPassed = "passed" // a crew worker checked the done-when and it held
+	GoalCheckFailed = "failed" // it did not
+)
+
+// GoalCheck reads where a goal's check stands on its brief, and the index
+// of the comment that last asked for one (-1 for the brief itself): a task
+// for each such ask is offered once.
+func GoalCheck(brief Issue) (state string, asked int) {
+	state, asked = GoalCheckDue, -1
+	for n, c := range brief.Comments {
+		body := strings.ToLower(c.Body)
+		switch {
+		case askAt(body, strings.ToLower(GoalAgainPhrase)) >= 0:
+			state, asked = GoalCheckDue, n
+		case askAt(body, strings.ToLower(GoalFailedPhrase)) >= 0:
+			state = GoalCheckFailed
+		case askAt(body, strings.ToLower(GoalCheckedPhrase)) >= 0:
+			state = GoalCheckPassed
+		}
+	}
+	return state, asked
+}
+
 // Ref resolves an issue reference of the brief, "#41" or "org/api#41", to
 // "org/api#41".
 func (b GoalBrief) Ref(ref string) string {

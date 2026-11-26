@@ -162,3 +162,19 @@ func TestAGoalsBriefIsNamedAndLeftOutOfItsCounts(t *testing.T) {
 	}
 	wantLines(t, digestText(t, d), "no goal brief: goal:refunds.")
 }
+
+func TestAGoalWithABriefIsDoneOnlyWhenItsCheckPassed(t *testing.T) {
+	brief := withLabels(issue(9), "goal:export")
+	brief.Title = "Goal brief: export"
+	c := Collector{Runner: fakeRunner{}, Lister: fakeLister{issues: []backlog.Issue{brief}},
+		Goals: fakeGoalIssues{"goal:export": {
+			{Number: 9, Title: "Goal brief: export", CreatedAt: now.Add(-60 * 24 * time.Hour)},
+			{Number: 14, Title: "Export endpoint", Closed: true, CreatedAt: now.Add(-60 * 24 * time.Hour), ClosedAt: now.Add(-time.Hour)},
+		}}}
+	d := Digest{Since: now.Add(-24 * time.Hour), Now: now, Report: Report{Machines: []MachineReport{{Name: "box", Issues: []IssueStatus{{Repo: "org/app", Number: 14, Goal: "goal:export"}}}}}}
+	c.collectGoals(context.Background(), goalsConfig(), &d)
+	if len(d.Goals) != 1 || d.Goals[0].Check != backlog.GoalCheckDue {
+		t.Fatalf("goals = %+v", d.Goals)
+	}
+	wantLines(t, digestText(t, d), "slices done; the goal check is due")
+}

@@ -287,6 +287,7 @@ function renderGoals(snap) {
     const t = byLabel.get(g.label) || { label: g.label, repos: [], closed: 0, total: 0, open: 0, opened: 0, closedWeek: 0, next: [], error: "", brief: null };
     t.repos.push(g.repo); t.closed += g.closed; t.total += g.total;
     if (g.brief && !t.brief) t.brief = { repo: g.repo, number: g.brief };
+    if (g.check) t.check = g.check;
     t.open += p.open || 0; t.opened += p.opened_week || 0; t.closedWeek += p.closed_week || 0;
     if (g.next) t.next.push((goals.filter(o => o.label === g.label).length > 1 ? short(g.repo) + ": " : "") + g.next);
     if (g.error) t.error = g.error;
@@ -306,6 +307,8 @@ function renderGoals(snap) {
     const pct = t.total ? Math.round(100 * t.closed / t.total) : 0;
     let eta;
     if (t.error) eta = el("div", { class: "eta no" }, "cannot be counted");
+    else if (!t.open && t.check === "due") eta = el("div", { class: "eta" }, "slices done · goal check due");
+    else if (!t.open && t.check === "failed") eta = el("div", { class: "eta no" }, "slices done · goal check failed");
     else if (!t.open) eta = el("div", { class: "eta good" }, "done");
     else if (t.eta) eta = el("div", { class: "eta" }, "ETA " + t.eta.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
       el("span", { class: "meta" }, "  " + t.perDay.toFixed(1) + " net a day"));
