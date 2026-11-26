@@ -43,7 +43,16 @@ quota is left, the page holds its reads and says so until the quota resets,
 so the supervisors keep what is left. Within 25 seconds, shed reads each
 repository's pull requests and each issue list once, however many sources
 and workers ask for them: in a supervisor's check, and in a read by
-`shed status` or `shed observe`. Until the
+`shed status` or `shed observe`.
+
+A source that is only a label, and the list of recently merged pull
+requests, are read with conditional requests: shed keeps each response and
+its ETag in `~/.local/state/shed/gh`, and GitHub answers `304 Not Modified`,
+which costs no quota, while nothing changed. An issue's comments are read
+again only when the issue changed. A search, an assignee, a list longer
+than a page, and the open pull requests with their checks are read in one
+GraphQL query as before. What issues depend on is read at most every 2
+minutes. Until the
 first read is back, the page says how long it has taken: on a large fleet it
 can take a minute or more. The page has two views:
 

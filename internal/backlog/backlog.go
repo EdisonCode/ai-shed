@@ -172,14 +172,14 @@ type GH struct{}
 
 func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
 	issues, err := listCache.get(sourceKey(src), func() ([]Issue, error) {
-		issues, err := issueList(ctx, src, "--state", "open")
+		issues, err := openIssues(ctx, src)
 		if err != nil {
 			return nil, err
 		}
 		open, openErr := openPRCache.get(src.Repo, func() (map[int]PR, error) { return openPRs(ctx, src.Repo) })
-		merged, mergedErr := mergedPRCache.get(src.Repo, func() (map[int]bool, error) { return mergedPRs(ctx, src.Repo) })
+		merged, mergedErr := mergedPRCache.get(src.Repo, func() (map[int]bool, error) { return recentlyMerged(ctx, src.Repo) })
 		withPRs(issues, open, openErr, merged, mergedErr)
-		if err := resolveDeps(ctx, src.Repo, issues); err != nil {
+		if err := cachedDeps(ctx, src.Repo, issues); err != nil {
 			return nil, err
 		}
 		return issues, nil
@@ -206,6 +206,65 @@ func (GH) GraphQLQuota(ctx context.Context) (int, time.Time, error) {
 		return 0, time.Time{}, fmt.Errorf("gh api rate_limit: parse output: %w", err)
 	}
 	return limits.Resources.GraphQL.Remaining, time.Unix(limits.Resources.GraphQL.Reset, 0), nil
+}
+
+// openIssues reads a source's open issues. A source that is only a label is
+// read with conditional reads, which cost nothing while it does not change;
+// a search, an assignee, or a list longer than a page is read in one query.
+func openIssues(ctx context.Context, src config.IssueSource) ([]Issue, error) {
+	if src.Label != "" && src.Query == "" && src.Assignee == "" {
+		issues, err := restIssues(ctx, src)
+		if err == nil {
+			return issues, nil
+		}
+		// Read in one query; its comments let the next read be conditional.
+		issues, err = issueList(ctx, src, "--state", "open")
+		if err == nil {
+			keepComments(issues)
+		}
+		return issues, err
+	}
+	return issueList(ctx, src, "--state", "open")
+}
+
+// recentlyMerged reads the repository's recently merged pull requests with
+// conditional reads, or in one query when those fail.
+func recentlyMerged(ctx context.Context, repo string) (map[int]bool, error) {
+	if merged, err := restMerged(ctx, repo); err == nil {
+		return merged, nil
+	}
+	return mergedPRs(ctx, repo)
+}
+
+// cachedDeps sets each issue's open dependencies, read again only when the
+// issues or what they say they depend on changed, or after depsTTL.
+func cachedDeps(ctx context.Context, repo string, issues []Issue) error {
+	var key strings.Builder
+	key.WriteString(repo)
+	for _, i := range issues {
+		fmt.Fprintf(&key, " %d:%v", i.Number, DependencyRefs(i))
+	}
+	deps, err := depsCache.get(key.String(), func() (map[int][]Dep, error) {
+		read := slices.Clone(issues)
+		if err := resolveDeps(ctx, repo, read); err != nil {
+			return nil, err
+		}
+		byNumber := map[int][]Dep{}
+		for _, i := range read {
+			byNumber[i.Number] = i.Deps
+		}
+		return byNumber, nil
+	})
+	if err != nil {
+		return err
+	}
+	for n := range issues {
+		issues[n].Deps = deps[issues[n].Number]
+		if issues[n].Deps == nil && len(issues) > 0 {
+			issues[n].Deps = []Dep{}
+		}
+	}
+	return nil
 }
 
 // sourceKey names a source for the cache of issue lists.
