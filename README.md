@@ -89,6 +89,14 @@ ended one.
 
 **Quick answers.** Needs you opens with the answers a worker teed up, each
 with what the worker wrote under its ask:
+- **Accept shed's recommendation** posts the answer an idle worker
+  recommended (see `recommend_after`). With `recommend_after` set, a decision
+  or a ready ask that has waited that long with no recommendation becomes a
+  one-off task for an idle worker on the machine whose queue owns it: it
+  reads the issue, the brief's Choices section and your `guidance`, and
+  posts `Shed recommends: Owner ruling: ...` with its reason. It never posts
+  the answer itself, and the page offers it only when it starts with the
+  ask's own phrase.
 - **Accept the recommendation** on a decision posts `Owner ruling: accepted`.
 - **Ready now** on an issue that was not ready.
 - **Looked: it passes** on an eye check posts `Eyes checked: passed on staging.`
@@ -1897,6 +1905,9 @@ supervisor:
   clear_command: /clear               # typed into a worker to empty its context
   model_command: "/model {model}"     # typed into a worker to switch model
   no_work_after: 30m                  # optional: notify when a worker has had no work this long
+  recommend_after: 4h                 # optional: an idle worker recommends an answer to a decision or a ready ask that waited this long with none
+  guidance: |                         # optional: your standing rules, which that worker goes by
+    Keep old database columns; drop them in a later release.
   low_queue: 3                        # optional: notify when a queue has fewer workable issues
   stack: true                         # optional: go on with an issue on a branch from its pull request while it waits for review
   context_budget: 20000               # optional: tokens a worker may load before its first item

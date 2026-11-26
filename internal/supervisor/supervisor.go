@@ -1693,6 +1693,7 @@ func (s *Supervisor) queue(ctx context.Context, w config.Worker) ([]QueueItem, e
 	// own are the open issues this machine acts on: not the ones an
 	// earlier machine's queue takes.
 	var open, own []backlog.Issue
+	defer func() { s.offerRecommendations(own, s.Now()) }()
 	inHand := runlog.IssueInHand(checkins, w.Name)
 	for _, src := range s.Machine.SourcesFor(w) {
 		issues, err := s.Lister.List(ctx, src)

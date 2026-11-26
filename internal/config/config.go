@@ -469,6 +469,19 @@ type Supervisor struct {
 	// ContextBudget is how many tokens a worker's tool may load before its
 	// first item; above it, shed status says so. 0 for no budget.
 	ContextBudget int `yaml:"context_budget"`
+	// RecommendAfter is how long a decision or a ready ask may wait on the
+	// owner with no recommendation before an idle worker is given a one-off
+	// task to recommend an answer. Empty for never.
+	RecommendAfter string `yaml:"recommend_after"`
+	// Guidance is the owner's standing rules for such a recommendation: what
+	// they usually decide, and why.
+	Guidance string `yaml:"guidance"`
+}
+
+// RecommendAfterOrZero is how long an ask waits before a worker recommends
+// an answer; 0 for never.
+func (s Supervisor) RecommendAfterOrZero() time.Duration {
+	return durationOr(s.RecommendAfter, 0)
 }
 
 // NoWorkAfterOrZero is how long a worker may have no work before the owner
@@ -1261,7 +1274,7 @@ func (c *Config) validate() error {
 	if c.Supervisor.LowQueue < 0 {
 		fail("supervisor: low_queue must not be negative")
 	}
-	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery, "no_work_after": c.Supervisor.NoWorkAfter, "own_wait_max": c.Supervisor.OwnWaitMax} {
+	for name, value := range map[string]string{"cache_ttl": c.Supervisor.CacheTTL, "scope_every": c.Supervisor.ScopeEvery, "no_work_after": c.Supervisor.NoWorkAfter, "own_wait_max": c.Supervisor.OwnWaitMax, "recommend_after": c.Supervisor.RecommendAfter} {
 		if value == "" {
 			continue
 		}
