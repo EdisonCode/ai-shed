@@ -171,17 +171,46 @@ func FindNow(ctx context.Context, lister Lister, viewer Viewer, sources []config
 type GH struct{}
 
 func (GH) List(ctx context.Context, src config.IssueSource) ([]Issue, error) {
-	issues, err := issueList(ctx, src, "--state", "open")
+	issues, err := listCache.get(sourceKey(src), func() ([]Issue, error) {
+		issues, err := issueList(ctx, src, "--state", "open")
+		if err != nil {
+			return nil, err
+		}
+		open, openErr := openPRCache.get(src.Repo, func() (map[int]PR, error) { return openPRs(ctx, src.Repo) })
+		merged, mergedErr := mergedPRCache.get(src.Repo, func() (map[int]bool, error) { return mergedPRs(ctx, src.Repo) })
+		withPRs(issues, open, openErr, merged, mergedErr)
+		if err := resolveDeps(ctx, src.Repo, issues); err != nil {
+			return nil, err
+		}
+		return issues, nil
+	})
+	return sharedList(issues), err
+}
+
+// GraphQLQuota is how much of the account's hourly GraphQL quota is left,
+// and when it resets. Asking costs none of it.
+func (GH) GraphQLQuota(ctx context.Context) (int, time.Time, error) {
+	out, err := gh(ctx, "api", "rate_limit")
 	if err != nil {
-		return nil, err
+		return 0, time.Time{}, err
 	}
-	open, openErr := openPRs(ctx, src.Repo)
-	merged, mergedErr := mergedPRs(ctx, src.Repo)
-	withPRs(issues, open, openErr, merged, mergedErr)
-	if err := resolveDeps(ctx, src.Repo, issues); err != nil {
-		return nil, err
+	var limits struct {
+		Resources struct {
+			GraphQL struct {
+				Remaining int   `json:"remaining"`
+				Reset     int64 `json:"reset"`
+			} `json:"graphql"`
+		} `json:"resources"`
 	}
-	return issues, nil
+	if err := json.Unmarshal(out, &limits); err != nil {
+		return 0, time.Time{}, fmt.Errorf("gh api rate_limit: parse output: %w", err)
+	}
+	return limits.Resources.GraphQL.Remaining, time.Unix(limits.Resources.GraphQL.Reset, 0), nil
+}
+
+// sourceKey names a source for the cache of issue lists.
+func sourceKey(src config.IssueSource) string {
+	return src.Repo + "\x00" + src.Label + "\x00" + src.Query + "\x00" + src.Assignee
 }
 
 // PRsUnreadWords say what a failed read of a repository's pull requests

@@ -59,6 +59,9 @@ type Snapshot struct {
 	// Actions are the answers the owner can give from the page; empty when
 	// actions are off.
 	Actions []Action `json:"actions,omitempty"`
+	// Held says why the page is not reading the fleet now: the account's
+	// GitHub quota is low, and what is left is the supervisors'.
+	Held string `json:"held,omitempty"`
 	// readStart is when the read of this report began: an answer posted
 	// after it is not in the report yet.
 	readStart time.Time
@@ -80,6 +83,10 @@ type Server struct {
 	// that a page must send with one. Either empty turns actions off.
 	Commenter Commenter
 	Token     string
+	// Quota says how much of the account's hourly GitHub quota is left and
+	// when it resets; nil reads without asking. Below QuotaReserve the page
+	// holds its reads, so the supervisors on the same account keep theirs.
+	Quota func(context.Context) (int, time.Time, error)
 	// Labeler takes an issue off a queue, and GoalLabels ends, renames and
 	// merges goals; nil leaves those actions out.
 	Labeler    Labeler
@@ -107,9 +114,40 @@ func (s *Server) Run(ctx context.Context) {
 	}
 }
 
+// QuotaReserve is the part of the account's hourly GitHub quota the page
+// leaves to the supervisors: below it, the page does not read.
+const QuotaReserve = 1000
+
+// held says why the page must not read GitHub now; "" when it may.
+func (s *Server) held(ctx context.Context) string {
+	if s.Quota == nil {
+		return ""
+	}
+	left, reset, err := s.Quota(ctx)
+	if err != nil || left >= QuotaReserve {
+		// A quota that cannot be asked for is no reason to stop reading.
+		return ""
+	}
+	return fmt.Sprintf("reads held: %d of the account's GitHub quota left until %s, kept for the supervisors", left, reset.Local().Format("15:04"))
+}
+
 // refresh reads the fleet once and sends the report to every open page.
-// When the deck is due, it is read after, in the background.
+// When the deck is due, it is read after, in the background. With the
+// GitHub quota low, it reads nothing and the page says so.
 func (s *Server) refresh(ctx context.Context) {
+	// The first read goes ahead: a page with nothing to show helps nobody.
+	s.mu.Lock()
+	first := s.snap == nil
+	s.mu.Unlock()
+	if why := ""; !first {
+		if why = s.held(ctx); why != "" {
+			s.mu.Lock()
+			s.snap.Held = why
+			s.mu.Unlock()
+			s.publish()
+			return
+		}
+	}
 	start := time.Now()
 	r := s.Collect(ctx)
 	snap := Snapshot{At: time.Now(), Took: time.Since(start).Round(100 * time.Millisecond).String(), Every: s.Every.String(), Report: r, readStart: start}
