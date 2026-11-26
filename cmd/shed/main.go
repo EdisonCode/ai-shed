@@ -48,8 +48,10 @@ Usage:
                                     so that it counts
   shed template issue               print an issue template for issues a worker can take
   shed update                       replace this shed with the latest release
-  shed audit [-model] [-json]       find prose in the fleet file that shed already writes, that is
-                                    said twice, that names what is gone, or (-model) that a setting does
+  shed audit [-workers] [-model] [-json]
+                                    find prose that shed already writes, that is said twice, that names
+                                    what is gone, or (-model) that a setting does; -workers adds what
+                                    each worker loads at start (CLAUDE.md, AGENTS.md, memory)
   shed skill [-install|-check]      print the shed skill for your assistant, install it in
                                     ~/.claude/skills/shed, or say whether yours has fallen behind
   shed preflight [-machine name]    on a machine: check that each worker's command comes up ready

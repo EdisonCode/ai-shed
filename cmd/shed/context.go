@@ -36,6 +36,7 @@ func cmdContext(args []string) int {
 	here := fs.Bool("here", false, "run on the worker's machine (shed context runs this over SSH)")
 	contradictions := fs.Bool("contradictions", false, "also ask the reviewer model which statements contradict each other")
 	asJSON := fs.Bool("json", false, "print the audit as JSON")
+	texts := fs.Bool("texts", false, "with -json, include each source's text (shed audit -workers reads them)")
 	cfg, _, err := loadConfig(fs, args)
 	if err != nil {
 		return fail(err)
@@ -56,12 +57,17 @@ func cmdContext(args []string) int {
 	if *here {
 		audit, err = localAudit(ctx, cfg, m, w, *contradictions)
 	} else {
-		audit, err = remoteAudit(ctx, probe.ShellRunner{}, m, w, *contradictions)
+		audit, err = remoteAudit(ctx, probe.ShellRunner{}, m, w, *contradictions, false)
 	}
 	if err != nil {
 		return fail(err)
 	}
 	if *asJSON || *here {
+		if *texts {
+			for n := range audit.Sources {
+				audit.Sources[n].Body = audit.Sources[n].Text
+			}
+		}
 		if err := json.NewEncoder(os.Stdout).Encode(contextReport{Version: version, Audit: audit}); err != nil {
 			return fail(err)
 		}
@@ -122,10 +128,13 @@ func localAudit(ctx context.Context, cfg *config.Config, m config.Machine, w con
 }
 
 // remoteAudit asks the worker's machine for its audit over SSH.
-func remoteAudit(ctx context.Context, runner probe.Runner, m config.Machine, w config.Worker, withContradictions bool) (sources.Audit, error) {
+func remoteAudit(ctx context.Context, runner probe.Runner, m config.Machine, w config.Worker, withContradictions, withTexts bool) (sources.Audit, error) {
 	command := `"$HOME/` + deploy.RemoteBinary + `" context -here `
 	if withContradictions {
 		command += "-contradictions "
+	}
+	if withTexts {
+		command += "-texts "
 	}
 	command += shellWord(m.Name) + " " + shellWord(w.Name)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -142,6 +151,10 @@ func remoteAudit(ctx context.Context, runner probe.Runner, m config.Machine, w c
 	}
 	if report.Version != version {
 		return sources.Audit{}, fmt.Errorf("the machine runs shed %s, this is %s: deploy it", report.Version, version)
+	}
+	for n := range report.Audit.Sources {
+		report.Audit.Sources[n].Text = report.Audit.Sources[n].Body
+		report.Audit.Sources[n].Body = ""
 	}
 	return report.Audit, nil
 }

@@ -2841,10 +2841,21 @@ costs tokens and can say something the setting now does differently.
 nothing:
 
 ```sh
-shed audit           # no model, no network
+shed audit           # the fleet file only: no model, no network
+shed audit -workers  # also what each worker loads at start, read on its machine over SSH
 shed audit -model    # also asks the reviewer model
 shed audit -json     # the same, for an assistant to draft the edits
 ```
+
+With `-workers`, each machine reports what every worker loads before its
+first item (its global, parent and repository instructions such as
+`CLAUDE.md` and `AGENTS.md`, their imports, its memory index, and its
+brief), with each one's size. Every line there is read again on every
+turn, so the audit also finds a line of one of those files that shed
+writes, that the standing orders or the worker's own brief say (**in its
+brief**), or that an earlier file says (**said twice**). A file several
+workers load is reported once, and `shed context`'s stale paths and closed
+issues come along.
 
 - **Shed writes it**: lines of your prose that repeat what shed writes into
   every worker's brief. Delete them.
@@ -2856,8 +2867,9 @@ shed audit -json     # the same, for an assistant to draft the edits
 - **Stale**: a queue label of a kind the fleet uses that no queue has, a
   session of a known machine with no such worker, a `` `shed <command>` ``
   that shed does not have.
-- With `-model`, the reviewer model reads each line against what each
-  setting does, and whether it is on: **a setting does it** (delete it),
+- With `-model`, the reviewer model reads each line (the start-up files
+  too, with `-workers`) against what each setting does, and whether it is
+  on, and for which repositories: **a setting does it** (delete it),
   **a setting is off** (turn it on and delete it, or keep it), and
   **contradicts**. That is the model's reading: check each before you
   delete anything.

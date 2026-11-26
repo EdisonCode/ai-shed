@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/edisoncode/ai-shed/internal/config"
+	"github.com/edisoncode/ai-shed/internal/sources"
 )
 
 const shedSays = "Work one issue at a time. The supervisor names your first issue and each next one, so wait for it before you start anything else in the repository."
@@ -85,10 +86,45 @@ func TestTheModelIsToldWhichSettingsAreOnAndItsAnswerIsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, "repos[].close_finished (on)") || !strings.Contains(prompt, "repos[].issue_quota (off)") || !strings.Contains(prompt, "=== standing_orders\n1: Close the issue") {
+	if !strings.Contains(prompt, "repos[].close_finished (on for org/app only)") || !strings.Contains(prompt, "repos[].issue_quota (off)") || !strings.Contains(prompt, "=== standing_orders\n1: Close the issue") {
 		t.Fatalf("prompt:\n%s", prompt)
 	}
 	if len(found) != 1 || found[0].Kind != SettingDoes || !strings.Contains(found[0].Why, "delete it") {
 		t.Fatalf("found = %+v", found)
+	}
+}
+
+func TestStartupFilesThatRepeatTheOrdersOrEachOtherAreFoundOnce(t *testing.T) {
+	rule := "Never push to the main branch directly; open a pull request and let the required checks run first."
+	memo := "The staging database is reset every night at two, so seed what an eye check needs before you look."
+	c := fleet(rule, "Fix billing bugs.", "Fix search bugs.")
+	claude := sources.Source{Path: "/w/app/CLAUDE.md", Kind: "repository", Tokens: 1500, Text: "# App\n\n" + rule + "\n" + memo}
+	memory := sources.Source{Path: "/home/me/.claude/projects/x/memory/MEMORY.md", Kind: "memory", Tokens: 1200, Text: memo}
+	brief := sources.Source{Path: "/w/app/.shed/BRIEF.md", Kind: "brief", Tokens: 2500, Text: rule}
+	startups := []Startup{
+		{Machine: "box", Worker: "app", Sources: []sources.Source{claude, memory, brief}, Stale: []sources.Stale{{Location: sources.Location{Path: "/w/app/CLAUDE.md", Line: 3}, Ref: "internal/gone.go", Why: "no such file"}}},
+		{Machine: "box", Worker: "api", Sources: []sources.Source{claude, brief}},
+	}
+
+	r := RunWorkers(c, shed, nil, startups)
+
+	if len(r.Workers) != 2 || r.Workers[0].Total != 5200 || r.Workers[1].Total != 4000 {
+		t.Fatalf("workers = %+v", r.Workers)
+	}
+	k := kinds(r)
+	if k[InOrders] != 1 || k[SaidTwice] != 1 || k[Stale] != 1 {
+		t.Fatalf("kinds = %v, findings = %+v", k, r.Findings)
+	}
+	for _, f := range r.Findings {
+		switch f.Kind {
+		case InOrders:
+			if f.Where.Path != "box:/w/app/CLAUDE.md" {
+				t.Fatalf("in orders at %s, want the CLAUDE.md, once for both workers", f.Where.Path)
+			}
+		case SaidTwice:
+			if !strings.HasSuffix(f.Where.Path, "MEMORY.md") || !strings.Contains(f.Why, "box:/w/app/CLAUDE.md") {
+				t.Fatalf("said twice = %+v, want the memory, against the CLAUDE.md loaded before it", f)
+			}
+		}
 	}
 }

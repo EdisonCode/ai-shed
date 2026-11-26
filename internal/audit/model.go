@@ -16,10 +16,13 @@ func ModelPrompt(cfg *config.Config, prose []sources.Source) string {
 	var b strings.Builder
 	b.WriteString("You audit the owner's prose in a fleet file for shed, a supervisor of unattended coding agents. Every worker reads this prose on every turn, so a sentence that a setting already does costs tokens and says nothing.\n\n")
 	b.WriteString("These are the settings, what shed does with each, and whether this fleet file has it on:\n\n")
-	for _, s := range Catalogue {
+	for _, s := range Catalog {
 		state := "off"
 		if s.On(cfg) {
 			state = "on"
+		}
+		if repos := s.Repos(cfg); len(repos) > 0 {
+			state = "on for " + strings.Join(repos, ", ") + " only"
 		}
 		fmt.Fprintf(&b, "- %s (%s): %s\n", s.Name, state, s.Does)
 	}
@@ -30,7 +33,7 @@ func ModelPrompt(cfg *config.Config, prose []sources.Source) string {
 			fmt.Fprintf(&b, "%d: %s\n", n+1, line)
 		}
 	}
-	b.WriteString("\nFind the sentences that: (done) state a rule that a setting which is on already makes shed do; (off) describe something a setting which is off would do, so the owner could turn it on; (contradicts) say something that a setting which is on contradicts. Leave out a sentence that adds something the setting does not say, such as a reason, a repository-specific detail or a stricter rule. Answer with one JSON object per line and nothing else: {\"where\": \"<block name>\", \"line\": <number>, \"text\": \"<the sentence>\", \"setting\": \"<setting name>\", \"verdict\": \"done|off|contradicts\", \"why\": \"<one sentence>\"}. Answer NONE when there are none.\n")
+	b.WriteString("\nFind the sentences that: (done) state a rule that a setting which is on already makes shed do; (off) describe something a setting which is off would do, so the owner could turn it on; (contradicts) say something that a setting which is on contradicts. Leave out a sentence that adds something the setting does not say, such as a reason, a repository-specific detail or a stricter rule. A setting that is on for some repositories only says nothing about a sentence that is about another repository: leave that sentence out. Answer with one JSON object per line and nothing else: {\"where\": \"<block name>\", \"line\": <number>, \"text\": \"<the sentence>\", \"setting\": \"<setting name>\", \"verdict\": \"done|off|contradicts\", \"why\": \"<one sentence>\"}. Answer NONE when there are none.\n")
 	return b.String()
 }
 
