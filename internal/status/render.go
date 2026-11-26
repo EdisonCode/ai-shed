@@ -306,6 +306,9 @@ func renderMachine(w io.Writer, r MachineReport) {
 			if wk.Messages > 0 {
 				reason = fmt.Sprintf("[%d peer message(s) sent in the last hour] %s", wk.Messages, reason)
 			}
+			if len(wk.Refused) > 0 {
+				reason = fmt.Sprintf("[refused today: %s] %s", refusalWords(wk.Refused), reason)
+			}
 			hand := inHand(wk)
 			// The tool's own state has a column only on a machine where
 			// some worker's tool reports one.

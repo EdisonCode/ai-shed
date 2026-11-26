@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,8 +24,8 @@ const maxMarkDetail = 300
 // It never exits 2. To an agent tool, a hook that exits 2 blocks what the
 // hook is about, and a mark must never stop a worker.
 func cmdMark(args []string) int {
-	if len(args) == 0 || (args[0] != "usage" && args[0] != "message" && !runlog.ValidMark(args[0])) {
-		fmt.Fprintf(os.Stderr, "usage: shed mark %s|%s|%s|usage|message [detail]\n", runlog.MarkWorking, runlog.MarkIdle, runlog.MarkWaiting)
+	if len(args) == 0 || (args[0] != "usage" && args[0] != "message" && args[0] != "denied" && !runlog.ValidMark(args[0])) {
+		fmt.Fprintf(os.Stderr, "usage: shed mark %s|%s|%s|usage|message|denied [detail]\n", runlog.MarkWorking, runlog.MarkIdle, runlog.MarkWaiting)
 		return exitAttention
 	}
 	pane := os.Getenv("TMUX_PANE")
@@ -61,6 +62,18 @@ func cmdMark(args []string) int {
 		}
 	}
 	if args[0] == "usage" {
+		return exitOK
+	}
+	if args[0] == "denied" {
+		// PermissionDenied: a call the tool's permission check refused. Its
+		// first words and the tool's reason are kept, never its arguments.
+		kind, issue := runlog.DenialKind(hook.ToolName, json.RawMessage(hook.ToolInput))
+		if kind == "" {
+			return exitOK
+		}
+		if err := runlog.RecordDenial(state, worker, runlog.Denial{Time: time.Now(), Kind: kind, Issue: issue, Reason: runlog.DenialReason(hook.Reason)}); err != nil {
+			return markFailed(err)
+		}
 		return exitOK
 	}
 	if args[0] == "message" {

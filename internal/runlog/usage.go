@@ -81,6 +81,11 @@ type Hook struct {
 	// PostToolUseFailure hook, or a PostToolUse hook whose result says the
 	// session could not be reached. "" when the message went.
 	SendFailed string
+	// ToolInput is the input of the tool call the hook is about, and
+	// Reason why the tool's permission check refused it (PermissionDenied).
+	// It is kept as text so that a Hook stays comparable.
+	ToolInput string
+	Reason    string
 }
 
 // unreachableRE matches a send's result that says the session it was for
@@ -103,6 +108,7 @@ func ParseHook(input io.Reader) Hook {
 		HookEvent      string          `json:"hook_event_name"`
 		Error          string          `json:"error"`
 		ToolResponse   json.RawMessage `json:"tool_response"`
+		Reason         string          `json:"reason"`
 		// The input is decoded on its own: a tool whose input has another
 		// shape must not cost the hook its mark.
 		ToolInput json.RawMessage `json:"tool_input"`
@@ -111,7 +117,7 @@ func ParseHook(input io.Reader) Hook {
 		return Hook{}
 	}
 	h := Hook{Message: raw.Message, SessionID: raw.SessionID, TranscriptPath: raw.TranscriptPath,
-		AgentTranscriptPath: raw.AgentPath, AgentType: raw.AgentType, ToolName: raw.ToolName}
+		AgentTranscriptPath: raw.AgentPath, AgentType: raw.AgentType, ToolName: raw.ToolName, ToolInput: string(raw.ToolInput), Reason: raw.Reason}
 	var send struct {
 		To      string          `json:"to"`
 		Message json.RawMessage `json:"message"`

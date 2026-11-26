@@ -219,6 +219,9 @@ type WorkerStatus struct {
 	// Peers is, for each of its peers, what it sent that peer's session in
 	// the last day: the lines of a graph of who works with whom.
 	Peers []PeerLink `json:"peers,omitempty"`
+	// Refused is what its tool's permission check refused in the last day,
+	// by kind of call.
+	Refused []Refusal `json:"refused,omitempty"`
 	// Unreachable is the error a peer's latest send to this worker's session
 	// returned, while no later message reached it and its session was not
 	// started again, or that its screen says its Remote Control is down; ""
@@ -942,6 +945,7 @@ func assessWorkers(m config.Machine, res probe.Result, report *MachineReport, at
 				st.StateSince = mark.Time
 			}
 		}
+		assessRefusals(&st, res.Denials[w.Name], res.Checkins, res.Now, attend)
 		st.Peers = peerLinks(w, res.Messages[w.Name], res.Now)
 		for _, l := range st.Peers {
 			st.Messages += l.Hour
