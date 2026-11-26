@@ -240,6 +240,10 @@ type Supervisor struct {
 	// busySince is when the machine was first found busy without a break,
 	// and lastShed when it last gave unstarted work to the fleet.
 	busySince, lastShed time.Time
+	// crewBusySince is when every builder here was first found with work in
+	// hand while a goal's slice waited, and lastCrewShed when the machine
+	// last gave such a slice to its crew elsewhere.
+	crewBusySince, lastCrewShed time.Time
 	// lookError is the last failure to read the looks, so that it is logged
 	// once and not at every queue check.
 	lookError string
@@ -607,6 +611,7 @@ func (s *Supervisor) Tick(ctx context.Context) {
 		}
 	}
 	s.shedQueue(ctx, s.Now())
+	s.shedCrewSlices(ctx, s.Now())
 }
 
 // paused reports whether the owner paused the machine. While it is paused
@@ -1967,6 +1972,9 @@ func (s *Supervisor) withBackfill(ctx context.Context, w config.Worker, items []
 				continue
 			case label >= 0:
 				skipped.add(fmt.Sprintf("labelled %s, a queue of the fleet", i.LabelNames()[label]), i.Number)
+				continue
+			case !w.Crew && backlog.ReleasedForCrew(i):
+				skipped.add("released for its goal's crew", i.Number)
 				continue
 			}
 			item := s.item(i, src, checkins)

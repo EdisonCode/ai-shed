@@ -34,7 +34,7 @@ func (s *Supervisor) shedQueue(ctx context.Context, now time.Time) {
 		return
 	}
 	s.lastShed = now
-	issue, remove, ok := s.unstarted(ctx)
+	issue, remove, ok := s.unstarted(ctx, nil)
 	if !ok {
 		return
 	}
@@ -51,8 +51,9 @@ func (s *Supervisor) shedQueue(ctx context.Context, now time.Time) {
 // unstarted returns the first issue of the machine's queues, in queue order,
 // that nobody has started: no worker here was ever handed it, it names no
 // pull request, it was never released before, and the owner did not put it
-// first here. remove are the machine's queue labels on it.
-func (s *Supervisor) unstarted(ctx context.Context) (backlog.Issue, []string, bool) {
+// first here. keep, when set, must take it too. remove are the machine's
+// queue labels on it.
+func (s *Supervisor) unstarted(ctx context.Context, keep func(backlog.Issue) bool) (backlog.Issue, []string, bool) {
 	checkins, err := runlog.ReadCheckins(s.StateDir)
 	if err != nil {
 		s.Logf("release unstarted: %v", err)
@@ -69,7 +70,7 @@ func (s *Supervisor) unstarted(ctx context.Context) (backlog.Issue, []string, bo
 				continue
 			}
 			issue, found, err := backlog.Find(ctx, s.Lister, s.Machine.SourcesFor(w), item.Number)
-			if err != nil || !found || backlog.HandedPR(issue, s.Signals) != 0 || everReleased(issue) {
+			if err != nil || !found || backlog.HandedPR(issue, s.Signals) != 0 || everReleased(issue) || (keep != nil && !keep(issue)) {
 				continue
 			}
 			if remove := s.queueLabelsOn(issue); len(remove) > 0 {
