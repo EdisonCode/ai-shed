@@ -259,6 +259,17 @@ func TestAnAnswerInOtherWordsIsSaidToHaveChangedNothing(t *testing.T) {
 	}
 }
 
+func TestARecommendationIsReadButAnswersNothing(t *testing.T) {
+	issue := Issue{Comments: []Comment{
+		{Body: "## Hand-back\n**PR:** none\n**Decisions needed:** keep the column?"},
+		{Body: "Shed recommends: Owner ruling: keep the column\n\nThe brief says to keep old columns."},
+	}}
+	asks := Asks(issue, config.DefaultSignals())
+	if len(asks) != 1 || asks[0].Recommended != "Owner ruling: keep the column" || !asks[0].Unheeded.IsZero() {
+		t.Fatalf("asks = %+v, want the decision open with the recommendation", asks)
+	}
+}
+
 func TestAWorkersCommentWithAShedPhraseIsNotAnAnswerInOtherWords(t *testing.T) {
 	issue := Issue{Comments: []Comment{
 		{Body: "## Hand-back\n**PR:** none\n**Decisions needed:** keep the column?"},

@@ -623,7 +623,16 @@ type Ask struct {
 	// words: it has none of the phrases, so it changed nothing. Zero when
 	// there is none.
 	Unheeded time.Time `json:"unheeded,omitzero"`
+	// Recommended is the answer a worker recommended for the ask, after
+	// RecommendPhrase: the comment the owner can post to take it. Empty
+	// when none was recommended since the ask.
+	Recommended string `json:"recommended,omitempty"`
 }
+
+// RecommendPhrase begins the line on which a worker recommends the answer
+// to an ask that waits on the owner. The answer follows it on the same
+// line, so its own phrase does not begin a line and answers nothing.
+const RecommendPhrase = "Shed recommends:"
 
 // What names the ask and the pull request it waits on, as in "review #41".
 func (a Ask) What() string {
@@ -672,6 +681,7 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 		ask.Answer, ask.Phrases = answerWords(issue, s, ask, signals)
 		if ask.Phrases != "" {
 			ask.Unheeded = unheeded(issue, s, signals)
+			ask.Recommended = recommended(issue, s)
 		}
 		asks = append(asks, ask)
 	}
@@ -726,6 +736,28 @@ func unheeded(issue Issue, s config.Signal, signals []config.Signal) time.Time {
 		at = c.CreatedAt
 	}
 	return at
+}
+
+// recommended returns the answer recommended since the signal's last ask:
+// the rest of the line after RecommendPhrase in the latest comment that
+// has it. Empty for none.
+func recommended(issue Issue, s config.Signal) string {
+	last := -1
+	for i, c := range issue.Comments {
+		if _, found := asked(strings.ToLower(c.Body), s); found {
+			last = i
+		}
+	}
+	answer := ""
+	if last < 0 {
+		return answer
+	}
+	for _, c := range issue.Comments[last+1:] {
+		if askAt(strings.ToLower(c.Body), strings.ToLower(RecommendPhrase)) >= 0 {
+			answer, _ = noteAfter(c.Body, RecommendPhrase)
+		}
+	}
+	return answer
 }
 
 // mentionsSignal reports whether a comment uses any phrase of the signals:
@@ -956,7 +988,7 @@ func Finished(issue Issue, signals []config.Signal) int {
 
 // shedPhrases begin the comments shed writes itself on an issue. None of
 // them asks a worker for anything.
-var shedPhrases = []string{QueuedPhrase, BatchPhrase, ReleasedPhrase, "Unparked:"}
+var shedPhrases = []string{QueuedPhrase, BatchPhrase, ReleasedPhrase, "Unparked:", RecommendPhrase}
 
 // settled reports whether a comment after a hand-back leaves the work as it
 // was: another hand-back, a verifier's pass, a passed look, or one of shed's

@@ -1318,6 +1318,9 @@ func clearWords(asks []backlog.Ask, now time.Time) string {
 		if !a.Unheeded.IsZero() {
 			words += fmt.Sprintf("; answered %s ago in a comment with none of %s, which changed nothing", Short(now.Sub(a.Unheeded)), a.Phrases)
 		}
+		if a.Recommended != "" {
+			words += fmt.Sprintf("; shed recommends %q", a.Recommended)
+		}
 		parts = append(parts, words)
 	}
 	if len(parts) == 0 {

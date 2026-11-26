@@ -85,20 +85,21 @@ type Labeler interface {
 
 // Action kinds.
 const (
-	ActAccept   = "accept"      // accept the recommendation of a decision
-	ActReady    = "ready"       // say an issue that was not ready is ready now
-	ActEyes     = "eyes"        // say an eye check passed
-	ActUndepend = "undepend"    // end a dependency the issue's text named
-	ActBump     = "bump"        // put a queued issue first in its queue
-	ActUnbump   = "unbump"      // put a bumped issue back in its place
-	ActGoal     = "goal"        // focus on a goal, table it, or clear either
-	ActPause    = "pause"       // pause the machine a card's issue is queued on
-	ActRecycle  = "recycle"     // give the worker on a card a fresh session
-	ActReshape  = "reshape"     // send an issue back to the owner as too big
-	ActCancel   = "cancel"      // take an issue off a machine's queue
-	ActGoalEnd  = "goal-end"    // take a goal's label off its open issues
-	ActRename   = "goal-rename" // rename a goal's label in each repository
-	ActMerge    = "goal-merge"  // move a goal's issues to another goal
+	ActAccept    = "accept"      // accept the recommendation of a decision
+	ActReady     = "ready"       // say an issue that was not ready is ready now
+	ActEyes      = "eyes"        // say an eye check passed
+	ActUndepend  = "undepend"    // end a dependency the issue's text named
+	ActBump      = "bump"        // put a queued issue first in its queue
+	ActUnbump    = "unbump"      // put a bumped issue back in its place
+	ActGoal      = "goal"        // focus on a goal, table it, or clear either
+	ActPause     = "pause"       // pause the machine a card's issue is queued on
+	ActRecycle   = "recycle"     // give the worker on a card a fresh session
+	ActReshape   = "reshape"     // send an issue back to the owner as too big
+	ActCancel    = "cancel"      // take an issue off a machine's queue
+	ActGoalEnd   = "goal-end"    // take a goal's label off its open issues
+	ActRename    = "goal-rename" // rename a goal's label in each repository
+	ActMerge     = "goal-merge"  // move a goal's issues to another goal
+	ActRecommend = "recommend"   // post the answer a worker recommended
 )
 
 // goalLabelActions works out what the owner can do with each goal's label:
@@ -425,6 +426,11 @@ func actionsFor(r status.Report, signals []config.Signal) []Action {
 					add(i, ActEyes, "Looked: it passes", s.AnsweredBy+": passed on staging.", ask.Text)
 				case s.SendsBack && len(s.Accept) > 0:
 					add(i, ActAccept, "Accept the recommendation", s.AnsweredBy+": "+s.Accept[0], ask.Text)
+				}
+				// A recommendation is offered only as the answer it says it
+				// is: one that starts with the ask's own phrase.
+				if s.AnsweredBy != "" && strings.HasPrefix(strings.ToLower(ask.Recommended), strings.ToLower(s.AnsweredBy)) {
+					add(i, ActRecommend, "Accept shed's recommendation", ask.Recommended, ask.Text)
 				}
 			}
 			key := fmt.Sprintf("%s#%d", i.Repo, i.Number)

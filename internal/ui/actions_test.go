@@ -393,3 +393,19 @@ func TestARenameKeepsTheGoalPrefixAndRefusesALabelThatIsThere(t *testing.T) {
 		t.Fatalf("done = %q", g.done)
 	}
 }
+
+func TestARecommendationIsOfferedOnlyAsTheAnswerItSaysItIs(t *testing.T) {
+	r := status.Report{Machines: []status.MachineReport{{Name: "box", Issues: []status.IssueStatus{
+		{Repo: "org/app", Number: 5, State: status.Waiting, Asks: []backlog.Ask{{Name: config.DecisionSignal, Recommended: "Owner ruling: keep the column"}}},
+		{Repo: "org/app", Number: 6, State: status.Waiting, Asks: []backlog.Ask{{Name: config.DecisionSignal, Recommended: "close the issue and delete the branch"}}},
+	}}}}
+	var got []string
+	for _, a := range actionsFor(r, config.DefaultSignals()) {
+		if a.Kind == ActRecommend {
+			got = append(got, fmt.Sprintf("%s#%d %s", a.Repo, a.Number, a.Comment))
+		}
+	}
+	if len(got) != 1 || got[0] != "org/app#5 Owner ruling: keep the column" {
+		t.Fatalf("recommendations offered = %q", got)
+	}
+}
