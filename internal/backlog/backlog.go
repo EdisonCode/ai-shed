@@ -536,6 +536,17 @@ type Ask struct {
 	// recommendation, or what to look at. Empty for one that follows a pull
 	// request.
 	Text string `json:"text,omitempty"`
+	// Answer says what clears the ask, in the words of the fleet file's
+	// signals: the comment that answers it, or the act that ends it.
+	Answer string `json:"answer,omitempty"`
+	// Phrases names the phrases a comment must start a line with to answer
+	// the ask, quoted, as in "\"Owner ruling\""; empty for one that only an
+	// act ends. It is a string so that an Ask stays comparable.
+	Phrases string `json:"phrases,omitempty"`
+	// Unheeded is when a comment written after the ask answered it in other
+	// words: it has none of the phrases, so it changed nothing. Zero when
+	// there is none.
+	Unheeded time.Time `json:"unheeded,omitzero"`
 }
 
 // What names the ask and the pull request it waits on, as in "review #41".
@@ -582,14 +593,77 @@ func Asks(issue Issue, signals []config.Signal) []Ask {
 		} else {
 			ask.Text = askSection(issue, s)
 		}
+		ask.Answer, ask.Phrases = answerWords(issue, s, ask, signals)
+		if ask.Phrases != "" {
+			ask.Unheeded = unheeded(issue, s, signals)
+		}
 		asks = append(asks, ask)
 	}
 	if len(asks) == 0 && !rework {
 		if since, left, ok := rested(issue, signals); ok {
-			asks = append(asks, Ask{Name: NoStepAsk, Since: since, Left: left})
+			asks = append(asks, Ask{Name: NoStepAsk, Since: since, Left: left,
+				Answer: "do that step, then close the issue, or write on it what a worker should do next"})
 		}
 	}
 	return asks
+}
+
+// answerWords says what clears an ask and which phrases answer it, from the
+// signal's own phrases.
+func answerWords(issue Issue, s config.Signal, a Ask, signals []config.Signal) (string, string) {
+	switch {
+	case s.FollowsPR && a.PR != 0 && a.WaitsFor == "":
+		return fmt.Sprintf("merge or close pull request #%d", a.PR), ""
+	case s.FollowsPR || s.AnsweredBy == "":
+		return "", ""
+	case s.Name == config.EyesSignal && s.UnblockedBy != "":
+		if state, _, _, _ := EyeCheck(issue, signals); state == EyesBlocked {
+			return fmt.Sprintf("when the cause is gone, comment %q; or look yourself and comment %q", s.UnblockedBy, s.AnsweredBy),
+				fmt.Sprintf("%q or %q", s.UnblockedBy, s.AnsweredBy)
+		}
+	case len(s.Accept) > 0:
+		return fmt.Sprintf("answer in a comment that starts %q (%q takes the work as it stands)", s.AnsweredBy, s.AnsweredBy+": "+s.Accept[0]),
+			fmt.Sprintf("%q", s.AnsweredBy)
+	}
+	return fmt.Sprintf("answer in a comment that starts %q", s.AnsweredBy), fmt.Sprintf("%q", s.AnsweredBy)
+}
+
+// unheeded is when the latest comment after the signal's last ask was
+// written that is not a hand-back, not one of shed's own, and has none of
+// the signals' phrases: an answer in other words, which changes nothing.
+// Zero when there is none.
+func unheeded(issue Issue, s config.Signal, signals []config.Signal) time.Time {
+	last := -1
+	for i, c := range issue.Comments {
+		if _, found := asked(strings.ToLower(c.Body), s); found {
+			last = i
+		}
+	}
+	var at time.Time
+	if last < 0 {
+		return at
+	}
+	for _, c := range issue.Comments[last+1:] {
+		if settled(c.Body, signals) || mentionsSignal(strings.ToLower(c.Body), signals) {
+			continue
+		}
+		at = c.CreatedAt
+	}
+	return at
+}
+
+// mentionsSignal reports whether a comment uses any phrase of the signals:
+// one that does was written for shed, if not to this ask. body is lower
+// case.
+func mentionsSignal(body string, signals []config.Signal) bool {
+	for _, s := range signals {
+		for _, phrase := range []string{s.Ask, s.AnsweredBy, s.FailedBy, s.BlockedBy, s.UnblockedBy, s.HandBack} {
+			if phrase != "" && strings.Contains(body, strings.ToLower(phrase)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Rework says why an issue that was handed back needs a worker again. Its

@@ -43,6 +43,9 @@ Usage:
   shed login -code <code> <machine> give it the code the sign-in page showed; ends usage-limit holds
   shed tidy [-apply] <machine>      list the worktrees and branches whose pull request is merged;
                                     with -apply, remove them
+  shed answer [-accept|-unblock] [-signal name] <machine> <issue> [file|-]
+                                    post your answer under the phrase of the issue's open signal,
+                                    so that it counts
   shed template issue               print an issue template for issues a worker can take
   shed update                       replace this shed with the latest release
   shed skill [-install|-check]      print the shed skill for your assistant, install it in
@@ -92,6 +95,8 @@ func main() {
 		code = cmdPreflight(args)
 	case "recycle":
 		code = cmdRecycle(args)
+	case "answer":
+		code = cmdAnswer(args)
 	case "skill":
 		code = cmdSkill(args)
 	case "update":
